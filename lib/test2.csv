@@ -1,0 +1,14 @@
+id,name,age,score,active,signup_date,notes
+1,Alice,23,91.5,true,2024-09-01,"Top performer, very consistent"
+2,Bob,,78,false,2024-09-15,"Missing age"
+3,"Charlie, Jr.",19,85,true,2024/10/02,"Name contains comma"
+4,Denise,21,88.0,TRUE,2024-10-18,"Capitalized boolean"
+5,Evan,twenty,72,false,,"Non-numeric age, missing date"
+6,Fran,27,,"yes",2024-11-01,"Empty score, string boolean"
+7,"Gina ""G""",24,95.2,true,2024-11-11,"Embedded ""quotes"""
+8,Henry,30,64.5,false,2024-11-20,"  Leading and trailing spaces  "
+9,Ivy,22,81,true,2024-12-01,"Multi-line note starts here
+and continues on the next line"
+10,Jack,25,0,false,2024-12-05,"Zero score is valid"
+11,Kate,29,89.9,true,2024-12-10,
+12,Liam,31,92.3,true,2024-12-12,"Trailing comma test",

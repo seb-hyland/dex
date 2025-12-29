@@ -1,0 +1,19 @@
+[package]
+name = "lib"
+version = "0.1.0"
+edition = "2024"
+
+[[bench]]
+  name = "bench"
+  harness = false
+
+[dependencies]
+arrow = "57.1.0"
+blake3 = { version = "1.8.2", features = ["rayon"] }
+csv-sniffer = "0.3.1"
+memmap2 = "0.9.9"
+qsv-sniffer = "0.12.2"
+rayon = "1.11.0"
+
+[dev-dependencies]
+criterion = "0.5.1"
