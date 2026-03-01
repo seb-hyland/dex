@@ -1,8 +1,6 @@
 use arrow::{array::RecordBatch, datatypes::DataType, util::display::array_value_to_string};
-use eframe::egui::{Color32, Frame, Label, ScrollArea, Tooltip, Ui};
+use eframe::egui::{Label, ScrollArea, Tooltip, Ui};
 use egui_extras::{Column, TableBuilder};
-
-use crate::theme::Theme;
 
 pub fn draw_record_batch(ui: &mut Ui, data: &RecordBatch) {
     ScrollArea::horizontal()
@@ -30,7 +28,7 @@ pub fn draw_record_batch(ui: &mut Ui, data: &RecordBatch) {
                                     let schema = data.schema();
                                     let data_type = schema.fields()[col_idx].data_type();
                                     let cell_type = display_data_type(data_type);
-                                    format!("<{cell_type}> {label_text}")
+                                    format!("<{cell_type} @ {row_idx}x{col_idx}> {label_text}")
                                 };
                                 label_with_instant_hover(ui, label_text, tooltip);
                             });

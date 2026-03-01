@@ -1,4 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["gui","lib"]
-dependencies = { arrow = "57.1.0", lib = { path = "lib" } }
+
+[workspace.dependencies]
+arrow = "58.0"
+lib = { path = "lib" }

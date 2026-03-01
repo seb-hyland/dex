@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-arrow = { workspace = true }
+arrow = { workspace = true, features = ["pyarrow"] }
 blake3 = { version = "1.8.2", features = ["rayon"] }
 csv-nose = "0.8.0"
 memmap2 = "0.9.9"
+pyo3 = { version = "0.28", features = ["auto-initialize"] }
 rayon = "1.11.0"
