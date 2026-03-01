@@ -11,4 +11,4 @@ id,name,age,score,active,signup_date,notes
 and continues on the next line"
 10,Jack,25,0,false,2024-12-05,"Zero score is valid"
 11,Kate,29,89.9,true,2024-12-10,
-12,Liam,31,92.3,true,2024-12-12,"Trailing comma test",
+12,Liam,31,92.3,true,2024-12-12,"Trailing comma test"
