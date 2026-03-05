@@ -9,6 +9,7 @@ use egui_graphs::{
 use lib::{compute::python::apply_transform, load::load_delimited_file};
 use petgraph::{graph::NodeIndex, prelude::StableGraph};
 use rfd::{FileDialog, MessageDialog};
+use std::f32;
 
 use crate::{
     graph::{DisplayGraph, Node, NodeInner, SharedNode},
@@ -199,14 +200,17 @@ impl eframe::App for DexState {
                 .default_width(500.0)
                 .show(ctx, |ui| {
                     ui.heading("Name");
-                    ui.add(TextEdit::singleline(name));
+                    ui.add(TextEdit::singleline(name).desired_width(f32::INFINITY));
+
                     ui.heading("Transformation");
                     CodeEditor::default()
                         .id_source("TransformationEditor")
                         .with_rows(15)
-                        .with_theme(ColorTheme::GRUVBOX_LIGHT)
+                        .with_fontsize(12.0)
+                        .with_theme(ColorTheme::AYU)
                         .with_syntax(Syntax::python())
                         .show(ui, code);
+
                     ui.add(Button::new("Finished")).clicked()
                 });
             if let Some(InnerResponse {
