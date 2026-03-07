@@ -7,8 +7,9 @@ edition = "2024"
 arrow = { workspace = true }
 lib = { workspace = true }
 eframe = "0.33"
-egui_graphs = "0.29.0"
 petgraph = "0.8.3"
 rfd = "0.17.2"
 egui_extras = "0.33"
 egui_code_editor = "0.2.21"
+subsecond = "0.7.3"
+dioxus-devtools = "0.7.3"
