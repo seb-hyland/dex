@@ -1,8 +1,8 @@
 use arrow::array::RecordBatch;
 use eframe::{
     egui::{
-        self, FontId, Id, Painter, PointerButton, Pos2, Rect, Sense, Shadow, Shape, StrokeKind, Ui,
-        Vec2,
+        self, CursorIcon, FontId, Id, Painter, PointerButton, Pos2, Rect, Sense, Shadow, Shape,
+        StrokeKind, Ui, Vec2,
         containers::{self, menu::MenuConfig},
         menu::context_menu,
     },
@@ -19,7 +19,7 @@ pub type NodeIdx = petgraph::graph::NodeIndex<u32>;
 pub struct Canvas {
     pub graph: StableGraph<Node, (), Directed, u32>,
     pub indices: Vec<NodeIdx>,
-    pub opened_nodes: Vec<NodeIdx>,
+    pub opened_nodes: Vec<(NodeIdx, Option<Pos2>)>,
     pub view_state: ViewState,
     pub newly_added_node: Option<NodeIdx>,
 }
@@ -197,7 +197,7 @@ impl Canvas {
                 node_dragged = true;
             }
             if node_resp.clicked() && !is_new_node {
-                self.opened_nodes.push(cur_idx);
+                self.opened_nodes.push((cur_idx, None));
             }
 
             if node_resp.hovered() {
@@ -211,6 +211,7 @@ impl Canvas {
 
             if node_resp.hovered() && ui.input(|input| input.pointer.primary_down()) || is_new_node
             {
+                ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
                 node.payload
                     .draw_node_dragged(ui, &painter, node_rect, self.view_state.scale);
             } else {
@@ -235,6 +236,7 @@ impl Canvas {
         }
 
         if response.hovered() {
+            ui.ctx().set_cursor_icon(CursorIcon::AllScroll);
             let zoom_delta = ui.input(|i| i.smooth_scroll_delta.y);
             if zoom_delta != 0.0 {
                 let zoom_factor = (zoom_delta / 200.0).exp();
