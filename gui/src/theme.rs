@@ -1,6 +1,5 @@
-use std::sync::LazyLock;
-
 use eframe::egui::{Color32, Context, Shadow, Stroke, Visuals};
+use std::sync::LazyLock;
 
 pub static LIGHT_THEME: LazyLock<Visuals> = LazyLock::new(|| {
     let mut vis = Visuals::light();
