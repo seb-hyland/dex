@@ -1,3 +1,12 @@
+use crate::{
+    canvas::{Canvas, NodeIdx, ViewState},
+    modal::{CanvasModal, ErrorModal},
+    node::NodePayload,
+    table::{display_data_type, draw_record_batch},
+    theme::LIGHT_THEME,
+};
+use lib::{compute::python::apply_transform, load::load_delimited_file};
+
 use eframe::{
     egui::{
         self, Align, Context, CursorIcon, FontData, FontFamily, Id, Layout, Modal, ModalResponse,
@@ -6,18 +15,8 @@ use eframe::{
     epaint::text::{FontInsert, FontPriority, InsertFontFamily},
 };
 use egui_code_editor::{CodeEditor, ColorTheme, Syntax};
-use lib::{compute::python::apply_transform, load::load_delimited_file};
 use petgraph::{graph::NodeIndex, prelude::StableGraph};
 use rfd::{FileDialog, MessageDialog};
-use std::f32;
-
-use crate::{
-    canvas::{Canvas, NodeIdx, ViewState},
-    modal::{CanvasModal, ErrorModal},
-    node::NodePayload,
-    table::{display_data_type, draw_record_batch},
-    theme::LIGHT_THEME,
-};
 
 mod canvas;
 mod modal;

@@ -1,3 +1,11 @@
+use crate::{
+    modal::{CanvasModal, RenameModal},
+    node::{Node, NodePayload},
+    theme::Theme,
+};
+
+use std::path::PathBuf;
+
 use arrow::array::RecordBatch;
 use eframe::{
     egui::{self, CursorIcon, Id, PointerButton, Pos2, Rect, Sense, Shape, Ui, Vec2},
@@ -5,13 +13,6 @@ use eframe::{
     epaint::CircleShape,
 };
 use petgraph::{Directed, stable_graph::StableGraph};
-use std::path::PathBuf;
-
-use crate::{
-    modal::{CanvasModal, RenameModal},
-    node::{Node, NodePayload},
-    theme::Theme,
-};
 
 pub type NodeIdx = petgraph::graph::NodeIndex<u32>;
 pub type CanvasGraph = StableGraph<Node, (), Directed, u32>;

@@ -1,10 +1,11 @@
+use crate::theme::Theme;
+
+use std::{path::PathBuf, sync::Arc};
+
 use arrow::array::RecordBatch;
 use eframe::egui::{
     Align, FontId, Galley, Painter, Pos2, Rect, StrokeKind, Ui, Vec2, text::LayoutJob,
 };
-use std::{path::PathBuf, sync::Arc};
-
-use crate::theme::Theme;
 
 pub struct Node {
     pub location: Pos2,

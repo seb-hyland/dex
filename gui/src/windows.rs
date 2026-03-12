@@ -1,6 +1,6 @@
-use eframe::egui::{self, Align, CursorIcon, Layout, Rect, Sense, TextStyle, Ui, Vec2};
-
 use crate::{canvas::Canvas, node::NodePayload, table::draw_record_batch};
+
+use eframe::egui::{self, Align, CursorIcon, Layout, Rect, Sense, TextStyle, Ui, Vec2};
 
 impl Canvas {
     pub fn draw_windows(&mut self, ui: &mut Ui) {

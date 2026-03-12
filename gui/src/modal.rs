@@ -1,9 +1,9 @@
-use eframe::egui::{Align, Context, Id, Layout, Modal, ModalResponse, TextEdit};
-
 use crate::{
     canvas::{Canvas, CanvasGraph, NodeIdx},
     node::NodePayload,
 };
+
+use eframe::egui::{Context, Id, Modal, ModalResponse, TextEdit};
 
 pub enum CanvasModal {
     Error(ErrorModal),
