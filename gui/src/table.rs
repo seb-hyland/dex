@@ -1,41 +1,65 @@
+use std::sync::Arc;
+
 use arrow::{array::RecordBatch, datatypes::DataType, util::display::array_value_to_string};
-use eframe::egui::{Label, ScrollArea, Tooltip, Ui};
+use eframe::egui::{
+    Align, FontId, FontSelection, Label, RichText, ScrollArea, Style, TextFormat, Tooltip, Ui,
+    WidgetText, text::LayoutJob,
+};
 use egui_extras::{Column, TableBuilder};
 
-pub fn draw_record_batch(ui: &mut Ui, data: &RecordBatch) {
-    ScrollArea::horizontal()
-        .auto_shrink([false; 2])
-        .show(ui, |ui| {
-            TableBuilder::new(ui)
-                .striped(true)
-                .columns(Column::auto(), data.num_columns())
-                .header(20.0, |mut header_row| {
-                    for field in data.schema().fields() {
-                        header_row.col(|ui| {
-                            ui.heading(field.name());
+pub fn draw_record_batch(ui: &mut Ui, data: &RecordBatch, height: f32) {
+    ScrollArea::horizontal().show(ui, |ui| {
+        let (widths, headers): (Vec<_>, Vec<_>) = data
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| {
+                let text = Arc::new(RichText::new(field.name()).heading());
+                let widget_text: WidgetText = Arc::clone(&text).into();
+                let job =
+                    widget_text.into_layout_job(ui.style(), FontSelection::Default, Align::Min);
+                let width = ui.fonts_mut(|fonts| {
+                    let galley = fonts.layout_job(Arc::try_unwrap(job).unwrap());
+                    galley.rect.width()
+                });
+                (width.min(500.0), text)
+            })
+            .collect();
+
+        let mut table = TableBuilder::new(ui)
+            .min_scrolled_height(height - 20.0)
+            .striped(true);
+
+        for width in widths {
+            table = table.column(Column::initial(width).resizable(true));
+        }
+        table
+            .header(20.0, |mut header_row| {
+                for header in headers {
+                    header_row.col(|ui| {
+                        ui.add(Label::new(header).truncate());
+                    });
+                }
+            })
+            .body(|body| {
+                body.rows(18.0, data.num_rows(), |mut row| {
+                    let row_idx = row.index();
+                    for col_idx in 0..data.num_columns() {
+                        row.col(|ui| {
+                            let label_text = array_value_to_string(data.column(col_idx), row_idx)
+                                .unwrap_or_else(|_| "FORMAT_ERR".to_string());
+                            let tooltip = {
+                                let schema = data.schema();
+                                let data_type = schema.fields()[col_idx].data_type();
+                                let cell_type = display_data_type(data_type);
+                                format!("<{cell_type} @ {row_idx}x{col_idx}> {label_text}")
+                            };
+                            label_with_instant_hover(ui, label_text, tooltip);
                         });
                     }
-                })
-                .body(|body| {
-                    body.rows(18.0, data.num_rows(), |mut row| {
-                        let row_idx = row.index();
-                        for col_idx in 0..data.num_columns() {
-                            row.col(|ui| {
-                                let label_text =
-                                    array_value_to_string(data.column(col_idx), row_idx)
-                                        .unwrap_or_else(|_| "FORMAT_ERR".to_string());
-                                let tooltip = {
-                                    let schema = data.schema();
-                                    let data_type = schema.fields()[col_idx].data_type();
-                                    let cell_type = display_data_type(data_type);
-                                    format!("<{cell_type} @ {row_idx}x{col_idx}> {label_text}")
-                                };
-                                label_with_instant_hover(ui, label_text, tooltip);
-                            });
-                        }
-                    });
                 });
-        });
+            });
+    });
 }
 
 pub fn display_data_type(ty: &DataType) -> &'static str {

@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use eframe::egui::{Color32, Context, Shadow, Stroke, Visuals};
+use eframe::egui::{Color32, Context, CornerRadius, Shadow, Stroke, Visuals};
 
 pub static LIGHT_THEME: LazyLock<Visuals> = LazyLock::new(|| {
     let mut vis = Visuals::light();
@@ -16,6 +16,7 @@ pub static LIGHT_THEME: LazyLock<Visuals> = LazyLock::new(|| {
         spread: 10,
         color: vis.window_stroke.color.gamma_multiply(0.6),
     };
+    vis.window_corner_radius = CornerRadius::same(2);
 
     vis
 });
@@ -26,6 +27,7 @@ pub struct Theme {
     pub border: Stroke,
     pub faint_background: Color32,
     pub shadow: Shadow,
+    pub corner_radius: CornerRadius,
 }
 
 impl From<&Visuals> for Theme {
@@ -36,6 +38,7 @@ impl From<&Visuals> for Theme {
             border: vis.window_stroke,
             faint_background: vis.faint_bg_color,
             shadow: vis.window_shadow,
+            corner_radius: vis.window_corner_radius,
         }
     }
 }
