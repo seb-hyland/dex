@@ -1,20 +1,16 @@
+use crate::drawer::Drawer;
 use crate::prelude::*;
 use crate::registry::Registry;
-use crate::{
-    canvas::{Canvas, ViewState},
-    theme::LIGHT_THEME,
-};
+use crate::theme::LIGHT_THEME;
 use lib::{compute::python::apply_transform, load::load_delimited_file};
 
 use eframe::{
     egui::{self, FontData, FontFamily},
     epaint::text::{FontInsert, FontPriority, InsertFontFamily},
 };
-use egui_code_editor::{CodeEditor, ColorTheme, Syntax};
-use petgraph::{graph::NodeIndex, prelude::StableGraph};
-use rfd::{FileDialog, MessageDialog};
 
 mod canvas;
+mod drawer;
 mod node;
 mod prelude;
 mod registry;
@@ -23,6 +19,7 @@ mod theme;
 
 fn main() {
     dioxus_devtools::connect_subsecond();
+    env_logger::init();
 
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
@@ -48,27 +45,41 @@ fn main() {
 
 struct DexState {
     registry: Registry,
-    canvas: Canvas,
+    canvas: canvas::Canvas,
+    drawer: Drawer,
+    show_debug: bool,
 }
 
 impl DexState {
     fn new() -> Self {
         Self {
             registry: Registry::default(),
-            canvas: Canvas {
-                graph: StableGraph::new(),
-                view_state: ViewState::new(Rect::ZERO),
+            canvas: canvas::Canvas {
+                graph: canvas::CanvasGraph::new(),
+                view_state: canvas::ViewState::new(Rect::ZERO),
                 placing_node: None,
-                indices: Vec::new(),
+                connecting_nodes: canvas::NodeConnectionState::None,
+                indices_by_depth: Vec::new(),
             },
+            drawer: Drawer {
+                visible: true,
+                items: Vec::new(),
+            },
+            show_debug: false,
         }
     }
 }
 
 impl eframe::App for DexState {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         subsecond::call(|| {
-            egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+            // if self.drawer.visible {
+            //     egui::Panel::left("drawer")
+            //         .resizable(false)
+            //         .show_inside(ui, |ui| {});
+            // }
+
+            egui::Panel::top("toolbar").show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     if ui.button("Add data").clicked()
                         && let Some(path) = rfd::FileDialog::new().pick_file()
@@ -79,10 +90,29 @@ impl eframe::App for DexState {
                             Err(e) => {}
                         }
                     }
+                    if ui.button("Toggle drawer").clicked() {
+                        self.drawer.visible = !self.drawer.visible;
+                    }
+                    if ui.button("Add edge").clicked() {
+                        if let canvas::NodeConnectionState::None = self.canvas.connecting_nodes {
+                            self.canvas.connecting_nodes = canvas::NodeConnectionState::Searching;
+                        } else {
+                            // Do something eventually
+                        }
+                    }
+                    if ui.button("Open debug menu").clicked() {
+                        self.show_debug = true;
+                    }
+                    let ctx = ui.ctx().clone();
+                    egui::Window::new("Debug Inspector")
+                        .open(&mut self.show_debug)
+                        .show(&ctx, |ui| {
+                            ctx.settings_ui(ui);
+                        });
                 });
             });
 
-            egui::CentralPanel::default().show(ctx, |ui| {
+            egui::CentralPanel::default().show_inside(ui, |ui| {
                 self.canvas.draw(ui, &mut self.registry);
             });
         });

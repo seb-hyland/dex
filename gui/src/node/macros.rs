@@ -2,7 +2,7 @@
 macro_rules! impl_NodeDynamics {
     (for $type_name:ty where variants = { $($variant:ident),+ }) => {
         impl NodeDynamics for $type_name {
-            fn draw(&mut self, ctx: &mut DrawContext<'_>) -> DrawInteraction {
+            fn draw(&mut self, ctx: &mut DrawContext<'_>) {
                 match self {
                     $(
                         Self::$variant(inner) => inner.draw(ctx),

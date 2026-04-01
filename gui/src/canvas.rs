@@ -1,22 +1,19 @@
+use crate::node::view::{DataframeView, ViewNode};
+use crate::prelude::*;
 use crate::{
-    node::{
-        DrawContext, DrawInteraction, Node, NodeDynamics, NodeVariant,
-        data::{DataPayload, DataframePayload},
-    },
+    node::{DrawContext, Node, NodeDynamics, NodeVariant, command::CanvasCommand},
     registry::{Registry, RegistryItem, RegistryItemInner},
-    theme::Theme,
 };
 
-use std::{path::PathBuf, ptr::NonNull};
+use std::path::PathBuf;
 
-use arrow::array::RecordBatch;
+use eframe::egui::{Color32, Key, Modifiers, Response, Stroke, StrokeKind, UiBuilder};
 use eframe::{
-    egui::{
-        self, Context, CursorIcon, Id, Painter, PointerButton, Pos2, Rect, Sense, Shape, Ui, Vec2,
-    },
+    egui::{Id, Sense, Shape},
     emath::RectTransform,
     epaint::CircleShape,
 };
+use petgraph::visit::EdgeRef;
 use petgraph::{Directed, stable_graph::StableGraph};
 
 pub type NodeIdx = petgraph::graph::NodeIndex<u32>;
@@ -24,9 +21,10 @@ pub type CanvasGraph = StableGraph<Node, (), Directed, u32>;
 
 pub struct Canvas {
     pub graph: CanvasGraph,
-    pub indices: Vec<NodeIdx>,
+    pub indices_by_depth: Vec<NodeIdx>,
     pub view_state: ViewState,
     pub placing_node: Option<NodeIdx>,
+    pub connecting_nodes: NodeConnectionState,
 }
 
 pub struct ViewState {
@@ -34,6 +32,13 @@ pub struct ViewState {
     offset: Vec2,
     scale: f32,
     transform: RectTransform,
+}
+
+#[derive(Copy, Clone, PartialEq)]
+pub enum NodeConnectionState {
+    None,
+    Searching,
+    One(NodeIdx),
 }
 
 impl Canvas {
@@ -46,9 +51,21 @@ impl Canvas {
 
         self.draw_background(canvas_rect, &painter, &theme);
 
-        let mut dragged_node = None;
-        let self_ptr = NonNull::from_mut(self);
-        for cur_idx in self.indices.iter().copied() {
+        let mut command_queue = Vec::new();
+        for cur_idx in self.indices_by_depth.iter().copied() {
+            for outgoing_edge in self.graph.edges(cur_idx) {
+                let source_node = self.graph.node_weight(cur_idx).unwrap();
+                let source_location = source_node.location;
+
+                let target_node = self.graph.node_weight(outgoing_edge.target()).unwrap();
+                let target_location = target_node.location;
+
+                let source_screen = self.view_state.world_to_screen(source_location);
+                let target_screen = self.view_state.world_to_screen(target_location);
+
+                painter.line_segment([source_screen, target_screen], theme.border);
+            }
+
             let node = self.graph.node_weight_mut(cur_idx).unwrap();
             let node_id = Id::new("canvas_node").with(cur_idx);
 
@@ -57,42 +74,87 @@ impl Canvas {
                 index: cur_idx,
                 id: node_id,
                 screen_location: node_location,
-                canvas: self_ptr,
+                command_queue: &mut command_queue,
+                view_state: &self.view_state,
                 registry,
                 ui,
-                painter: &painter,
                 theme: &theme,
-                placing: false,
+                noninteractive: false,
             };
 
             // At least part of the node is visible
             let node_size = node.variant.size(&mut draw_context);
             let node_rect = Rect::from_center_size(node_location, node_size);
             if canvas_rect.contains(node_location) || canvas_rect.intersects(node_rect) {
+                let is_placing_node = matches!(self.placing_node, Some(idx) if idx == cur_idx);
                 // If we are currently adding a new node and it is this one
-                if let Some(placing_idx) = self.placing_node
-                    && placing_idx == cur_idx
+                if is_placing_node
+                    || matches!(
+                        self.connecting_nodes,
+                        NodeConnectionState::Searching | NodeConnectionState::One(_)
+                    )
                 {
-                    draw_context.placing = true;
-                };
+                    draw_context.noninteractive = true;
+                }
 
-                // Draw yourself, I COMMAND YOU
+                // Draw yourself, I COMMAND you
                 node.variant.draw(&mut draw_context);
 
-                if draw_context.placing {
+                if draw_context.noninteractive {
                     // Steal interaction and sense placement
-                    let resp = draw_context.ui.interact(node_rect, node_id, Sense::click());
-                    if let Some(cursor_screen_pos) =
-                        draw_context.ui.ctx().input(|i| i.pointer.latest_pos())
-                    {
-                        // Sync its location with the pointer
-                        let cursor_world_pos =
-                            draw_context.view_state().screen_to_world(cursor_screen_pos);
-                        node.location = cursor_world_pos;
+                    let resp = draw_context
+                        .ui
+                        .interact_visible(node_rect, node_id, Sense::click());
+
+                    if is_placing_node {
+                        if let Some(cursor_screen_pos) =
+                            draw_context.ui.ctx().input(|i| i.pointer.latest_pos())
+                        {
+                            // Sync its location with the pointer
+                            let cursor_world_pos =
+                                self.view_state.screen_to_world(cursor_screen_pos);
+                            node.location = cursor_world_pos;
+                        }
+                        if resp.clicked()
+                            || ui.input_mut(|input_state| {
+                                input_state.consume_key(Modifiers::NONE, Key::Escape)
+                            })
+                        {
+                            self.placing_node = None;
+                        }
+                    } else {
+                        // Looking for edge
+                        if resp.clicked() {
+                            match self.connecting_nodes {
+                                NodeConnectionState::Searching => {
+                                    self.connecting_nodes = NodeConnectionState::One(cur_idx)
+                                }
+                                NodeConnectionState::One(origin_idx) => {
+                                    draw_context.command_queue.push(CanvasCommand::AddEdge {
+                                        start: origin_idx,
+                                        end: cur_idx,
+                                    })
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
                     }
-                    if resp.clicked() {
-                        self.placing_node = None;
-                    }
+                }
+            }
+        }
+
+        let mut dragged_node = None;
+        for command in command_queue {
+            match command {
+                CanvasCommand::AddNode { node } => {
+                    self.add_node(node);
+                }
+                CanvasCommand::MoveNode { idx, delta } => {
+                    dragged_node = Some(idx);
+                    self.graph.node_weight_mut(idx).unwrap().location += delta;
+                }
+                CanvasCommand::AddEdge { start, end } => {
+                    self.graph.add_edge(start, end, ());
                 }
             }
         }
@@ -100,28 +162,22 @@ impl Canvas {
         // Move dragged node to front
         if let Some(dragged_idx) = dragged_node {
             let pos = self
-                .indices
+                .indices_by_depth
                 .iter()
                 .position(|&idx| idx == dragged_idx)
                 .unwrap();
-            self.indices.remove(pos);
-            self.indices.push(dragged_idx);
+            self.indices_by_depth.remove(pos);
+            self.indices_by_depth.push(dragged_idx);
         }
 
-        // if response.dragged_by(PointerButton::Primary) && self.placing_node.is_none() {
-        if response.dragged_by(PointerButton::Primary) {
-            self.view_state
-                .update_offset(-response.drag_delta() / self.view_state.scale());
-        }
-
-        if response.hovered() {
-            ui.ctx().set_cursor_icon(CursorIcon::AllScroll);
-            let zoom_delta = ui.input(|i| i.smooth_scroll_delta.y);
-            if zoom_delta != 0.0 {
-                let zoom_factor = (zoom_delta / 200.0).exp();
-                self.view_state.update_scale(zoom_factor);
-                self.view_state.scale *= zoom_factor;
+        match DrawInteraction::from(response) {
+            DrawInteraction::Hovered => cursor_icon!(ui, PointingHand),
+            DrawInteraction::Dragged(drag_delta) => {
+                cursor_icon!(ui, Grabbing);
+                self.view_state
+                    .update_offset(-drag_delta / self.view_state.scale());
             }
+            _ => {}
         }
     }
 
@@ -152,27 +208,32 @@ impl Canvas {
     }
 
     pub fn add_dataframe(&mut self, registry: &mut Registry, path: PathBuf, df: RecordBatch) {
-        let data_idx = registry.insert(RegistryItem {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let data_ref = registry.insert(RegistryItem {
             backing_file: Some(path.clone()),
-            inner: RegistryItemInner::Dataframe(df),
+            inner: RegistryItemInner::Dataframe {
+                table_name: name,
+                data: df,
+            },
         });
 
         let node = Node {
             location: Pos2::ZERO,
-            variant: NodeVariant::Data(DataPayload::Dataframe(DataframePayload {
-                name: path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().to_string())
-                    .unwrap_or_default(),
-                data_idx,
-            })),
+            variant: NodeVariant::Dataframe(DataframeView {
+                data_ref,
+                view: ViewNode::default(),
+            }),
         };
         self.add_node(node);
     }
 
     pub fn add_node(&mut self, node: Node) {
         let idx = self.graph.add_node(node);
-        self.indices.push(idx);
+        self.indices_by_depth.push(idx);
         self.placing_node = Some(idx);
     }
 }
@@ -201,15 +262,18 @@ impl ViewState {
         self.transform = Self::_make_transform(self.offset, self.scale, self.draw_surface);
     }
 
+    #[inline(always)]
     pub fn update_surface(&mut self, draw_surface: Rect) {
         self.draw_surface = draw_surface;
         self.update_transform();
     }
 
+    #[inline(always)]
     pub fn offset(&self) -> Vec2 {
         self.offset
     }
 
+    #[inline(always)]
     pub fn update_offset(&mut self, delta: Vec2) {
         self.offset += delta;
         self.update_transform();
@@ -219,16 +283,46 @@ impl ViewState {
         self.scale
     }
 
+    #[inline(always)]
     pub fn update_scale(&mut self, zoom_factor: f32) {
         self.scale *= zoom_factor;
         self.update_transform();
     }
 
+    #[inline(always)]
     pub fn world_to_screen(&self, pos: Pos2) -> Pos2 {
         self.transform.transform_pos(pos)
     }
 
+    #[inline(always)]
     pub fn screen_to_world(&self, pos: Pos2) -> Pos2 {
         self.transform.inverse().transform_pos(pos)
+    }
+}
+
+pub trait InteractExtension {
+    fn interact_visible(&mut self, rect: Rect, id: Id, sense: Sense) -> Response;
+}
+
+impl InteractExtension for Ui {
+    fn interact_visible(&mut self, rect: Rect, id: Id, sense: Sense) -> Response {
+        let resp = self.interact(rect, id, sense);
+        let interaction_str = match DrawInteraction::from(resp.clone()) {
+            DrawInteraction::None => "",
+            DrawInteraction::Clicked => "Clicked",
+            DrawInteraction::Hovered => "Hovered",
+            DrawInteraction::Dragged(_) => "Dragged",
+        };
+        self.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
+            ui.painter().rect(
+                rect,
+                0.0,
+                Color32::GREEN.gamma_multiply(0.3),
+                Stroke::NONE,
+                StrokeKind::Middle,
+            );
+            ui.label(interaction_str);
+        });
+        resp
     }
 }

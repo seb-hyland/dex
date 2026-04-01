@@ -1,4 +1,4 @@
-pub use crate::theme::Theme;
+pub use crate::{cursor_icon, theme::Theme};
 
 pub use arrow::array::RecordBatch;
 pub use eframe::{
@@ -6,4 +6,33 @@ pub use eframe::{
     egui::{Painter, Pos2, Rect, Ui, Vec2},
 };
 
-pub use std::sync::Arc;
+#[macro_export]
+macro_rules! cursor_icon {
+    ($ui:expr, $icon:ident) => {
+        $ui.ctx().set_cursor_icon(::eframe::egui::CursorIcon::$icon)
+    };
+}
+
+#[derive(Default, Clone, Copy)]
+pub enum DrawInteraction {
+    #[default]
+    None,
+
+    Hovered,
+    Dragged(Vec2),
+    Clicked,
+}
+
+impl From<eframe::egui::Response> for DrawInteraction {
+    fn from(resp: eframe::egui::Response) -> Self {
+        if resp.clicked() {
+            DrawInteraction::Clicked
+        } else if resp.dragged() {
+            DrawInteraction::Dragged(resp.drag_delta())
+        } else if resp.hovered() {
+            DrawInteraction::Hovered
+        } else {
+            DrawInteraction::None
+        }
+    }
+}

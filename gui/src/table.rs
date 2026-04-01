@@ -1,13 +1,12 @@
+use crate::prelude::*;
+
 use std::sync::Arc;
 
-use arrow::{array::RecordBatch, datatypes::DataType, util::display::array_value_to_string};
-use eframe::egui::{
-    Align, FontId, FontSelection, Label, RichText, ScrollArea, Style, TextFormat, Tooltip, Ui,
-    WidgetText, text::LayoutJob,
-};
+use arrow::{datatypes::DataType, util::display::array_value_to_string};
+use eframe::egui::{Align, FontSelection, Label, RichText, ScrollArea, Tooltip, WidgetText};
 use egui_extras::{Column, TableBuilder};
 
-pub fn draw_record_batch(ui: &mut Ui, data: &RecordBatch, height: f32) {
+pub fn draw_record_batch(ui: &mut Ui, data: &RecordBatch) {
     ScrollArea::horizontal().show(ui, |ui| {
         let (widths, headers): (Vec<_>, Vec<_>) = data
             .schema()
@@ -22,22 +21,26 @@ pub fn draw_record_batch(ui: &mut Ui, data: &RecordBatch, height: f32) {
                     let galley = fonts.layout_job(Arc::try_unwrap(job).unwrap());
                     galley.rect.width()
                 });
-                (width.min(500.0), text)
+                (width.clamp(25.0, 100.0), text)
             })
             .collect();
 
+        let available_height = ui.available_height();
+        let id = ui.id().with("table");
         let mut table = TableBuilder::new(ui)
-            .min_scrolled_height(height - 20.0)
+            .id_salt(id)
+            .min_scrolled_height(0.0)
+            .max_scroll_height(available_height)
             .striped(true);
 
         for width in widths {
-            table = table.column(Column::initial(width).resizable(true));
+            table = table.column(Column::auto_with_initial_suggestion(width).resizable(true));
         }
         table
             .header(20.0, |mut header_row| {
                 for header in headers {
                     header_row.col(|ui| {
-                        ui.add(Label::new(header).truncate());
+                        label_with_instant_hover(ui, header.clone(), header);
                     });
                 }
             })
@@ -82,7 +85,11 @@ pub fn display_data_type(ty: &DataType) -> &'static str {
     }
 }
 
-pub fn label_with_instant_hover(ui: &mut Ui, label_text: String, tooltip: String) {
+pub fn label_with_instant_hover(
+    ui: &mut Ui,
+    label_text: impl Into<WidgetText>,
+    tooltip: impl Into<WidgetText>,
+) {
     let resp = ui.add(
         Label::new(label_text)
             .truncate()

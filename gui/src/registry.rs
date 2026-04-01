@@ -15,7 +15,10 @@ pub struct RegistryItem {
 }
 
 pub enum RegistryItemInner {
-    Dataframe(RecordBatch),
+    Dataframe {
+        table_name: String,
+        data: RecordBatch,
+    },
 }
 
 pub type RegistryHandle = usize;
