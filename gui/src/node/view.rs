@@ -1,13 +1,8 @@
 use crate::prelude::*;
-use crate::{
-    node::{DrawContext, NodeDynamics, command::CanvasCommand},
-    registry::{RegistryHandle, RegistryItemInner},
-    table::draw_record_batch,
-};
+use crate::{canvas::CanvasCommand, node::DrawContext};
 
 use eframe::egui::{
-    Align, Color32, Frame, Label, Layout, RichText, Sense, StrokeKind, TextEdit, TextStyle,
-    UiBuilder,
+    Align, Color32, Frame, Layout, Sense, StrokeKind, TextEdit, TextStyle, UiBuilder,
 };
 
 pub struct ViewNode {
@@ -25,35 +20,17 @@ impl Default for ViewNode {
 }
 
 impl ViewNode {
-    /// Returns (header_size, bounding_size, padding)
-    fn sizes(&self, ui: &mut Ui) -> (Vec2, Vec2, f32) {
+    /// Returns (header_rect, bounding_rect, padding)
+    pub fn rects(&self, ui: &mut Ui, location: Pos2) -> (Rect, Rect, f32) {
         let padding = 10.0;
+
         let header_text_height = ui.text_style_height(&TextStyle::Heading);
         let header_size = Vec2 {
             x: self.size.x,
             y: header_text_height + 2.0 * padding,
         };
+        let header_rect = Rect::from_center_size(location, header_size);
 
-        let bounding_size = if self.collapsed {
-            header_size
-        } else {
-            let mut size = header_size;
-            size.y += self.size.y;
-            size
-        };
-
-        (header_size, bounding_size, padding)
-    }
-
-    fn show(
-        &mut self,
-        ctx: &mut DrawContext<'_>,
-        header_text: &mut String,
-        add_main: impl FnOnce(&mut Ui),
-    ) {
-        let (header_size, _bounding_size, padding) = self.sizes(ctx.ui);
-
-        let header_rect = Rect::from_center_size(ctx.screen_location, header_size);
         let bounding_rect = if self.collapsed {
             header_rect
         } else {
@@ -61,6 +38,17 @@ impl ViewNode {
             rect.max.y += self.size.y;
             rect
         };
+
+        (header_rect, bounding_rect, padding)
+    }
+
+    pub fn show(
+        &mut self,
+        ctx: &mut DrawContext<'_>,
+        header_text: &mut String,
+        add_main: impl FnOnce(&mut Ui),
+    ) {
+        let (header_rect, bounding_rect, padding) = self.rects(ctx.ui, ctx.screen_location);
 
         ctx.ui.painter().rect(
             bounding_rect,
@@ -205,34 +193,5 @@ impl ViewNode {
                     add_main(ui);
                 });
         }
-    }
-}
-
-pub struct DataframeView {
-    pub data_ref: RegistryHandle,
-    pub view: ViewNode,
-}
-
-impl NodeDynamics for DataframeView {
-    fn draw(&mut self, ctx: &mut DrawContext<'_>) {
-        let item = ctx.registry.get(self.data_ref).unwrap();
-        let mut item_borrow = item.borrow_mut();
-
-        if let RegistryItemInner::Dataframe {
-            ref mut table_name,
-            ref data,
-        } = item_borrow.inner
-        {
-            self.view.show(ctx, table_name, |ui| {
-                draw_record_batch(ui, data);
-            });
-        } else {
-            unreachable!("Data table view for non-df registry item")
-        }
-    }
-
-    #[inline(always)]
-    fn size(&self, ctx: &mut DrawContext<'_>) -> Vec2 {
-        self.view.sizes(ctx.ui).1
     }
 }

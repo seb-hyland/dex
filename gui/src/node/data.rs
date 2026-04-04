@@ -17,7 +17,7 @@ impl NodeDynamics for TransformPayload {
         ctx.ui.scope_builder(UiBuilder::new(), |ui| {});
     }
 
-    fn size(&self, ctx: &mut DrawContext<'_>) -> Vec2 {
+    fn rect(&self, ctx: &mut DrawContext<'_>) -> Rect {
         todo!()
     }
 }

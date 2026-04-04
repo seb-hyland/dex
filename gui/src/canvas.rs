@@ -1,7 +1,8 @@
-use crate::node::view::{DataframeView, ViewNode};
+use crate::node::dataframe::DataframeView;
+use crate::node::view::ViewNode;
 use crate::prelude::*;
 use crate::{
-    node::{DrawContext, Node, NodeDynamics, NodeVariant, command::CanvasCommand},
+    node::{DrawContext, Node, NodeDynamics, NodeVariant},
     registry::{Registry, RegistryItem, RegistryItemInner},
 };
 
@@ -39,6 +40,12 @@ pub enum NodeConnectionState {
     None,
     Searching,
     One(NodeIdx),
+}
+
+pub enum CanvasCommand {
+    AddNode { node: Node },
+    MoveNode { idx: NodeIdx, delta: Vec2 },
+    AddEdge { start: NodeIdx, end: NodeIdx },
 }
 
 impl Canvas {
@@ -83,8 +90,7 @@ impl Canvas {
             };
 
             // At least part of the node is visible
-            let node_size = node.variant.size(&mut draw_context);
-            let node_rect = Rect::from_center_size(node_location, node_size);
+            let node_rect = node.variant.rect(&mut draw_context);
             if canvas_rect.contains(node_location) || canvas_rect.intersects(node_rect) {
                 let is_placing_node = matches!(self.placing_node, Some(idx) if idx == cur_idx);
                 // If we are currently adding a new node and it is this one
@@ -129,13 +135,14 @@ impl Canvas {
                         if resp.clicked() {
                             match self.connecting_nodes {
                                 NodeConnectionState::Searching => {
-                                    self.connecting_nodes = NodeConnectionState::One(cur_idx)
+                                    self.connecting_nodes = NodeConnectionState::One(cur_idx);
                                 }
                                 NodeConnectionState::One(origin_idx) => {
                                     draw_context.command_queue.push(CanvasCommand::AddEdge {
                                         start: origin_idx,
                                         end: cur_idx,
-                                    })
+                                    });
+                                    self.connecting_nodes = NodeConnectionState::None;
                                 }
                                 _ => unreachable!(),
                             }

@@ -1,18 +1,16 @@
 use eframe::egui::Id;
 
-use crate::node::data::TransformPayload;
-use crate::node::view::DataframeView;
 use crate::prelude::*;
 use crate::{
-    canvas::{NodeIdx, ViewState},
+    canvas::{CanvasCommand, NodeIdx, ViewState},
     impl_NodeDynamics,
-    node::command::CanvasCommand,
+    node::{data::TransformPayload, dataframe::DataframeView},
     registry::Registry,
     theme::Theme,
 };
 
-pub mod command;
 pub mod data;
+pub mod dataframe;
 mod macros;
 pub mod view;
 
@@ -23,17 +21,16 @@ pub struct Node {
 
 pub trait NodeDynamics {
     fn draw(&mut self, ctx: &mut DrawContext<'_>);
-    fn size(&self, ctx: &mut DrawContext<'_>) -> Vec2;
+    fn rect(&self, ctx: &mut DrawContext<'_>) -> Rect;
     fn nearest_boundary_point(&self, dir: Vec2, ctx: &mut DrawContext<'_>) -> Pos2 {
-        let size = self.size(ctx);
-        let half_size = size / 2.0;
+        let bounds = self.rect(ctx);
+        let half_size = bounds.size() / 2.0;
 
         let x_ratio = half_size.x / dir.x.abs();
         let y_ratio = half_size.y / dir.y.abs();
         let scale = x_ratio.min(y_ratio);
 
-        let location = ctx.screen_location;
-        location + dir * scale
+        bounds.center() + dir * scale
     }
 }
 
@@ -41,8 +38,22 @@ pub enum NodeVariant {
     Transform(TransformPayload),
     Dataframe(DataframeView),
 }
-
 impl_NodeDynamics!(for NodeVariant where variants = { Transform, Dataframe });
+
+#[macro_export]
+macro_rules! impl_NodeDynamics {
+    (for $type_name:ty where variants = { $($variant:ident),+ }) => {
+        impl NodeDynamics for $type_name {
+            fn draw(&mut self, ctx: &mut DrawContext<'_>) {
+                match self { $(Self::$variant(inner) => inner.draw(ctx),)* }
+            }
+
+            fn rect(&self, ctx: &mut DrawContext<'_>) -> Rect {
+                match self { $(Self::$variant(inner) => inner.rect(ctx),)* }
+            }
+        }
+    };
+}
 
 pub struct DrawContext<'ctx> {
     pub index: NodeIdx,
