@@ -1,12 +1,11 @@
 //! Don't end up on the list!
+use crate::prelude::*;
 
-use std::{path::PathBuf, sync::Arc};
-
-use arrow::array::RecordBatch;
+use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 #[derive(Default)]
 pub struct Registry {
-    items: Vec<Arc<RegistryItem>>,
+    items: Vec<Rc<RefCell<RegistryItem>>>,
 }
 
 pub struct RegistryItem {
@@ -26,11 +25,11 @@ pub type RegistryHandle = usize;
 impl Registry {
     pub fn insert(&mut self, item: RegistryItem) -> RegistryHandle {
         let index = self.items.len();
-        self.items.push(Arc::new(item));
+        self.items.push(Rc::new(RefCell::new(item)));
         index
     }
 
-    pub fn get(&self, index: RegistryHandle) -> Option<Arc<RegistryItem>> {
+    pub fn get(&self, index: RegistryHandle) -> Option<Rc<RefCell<RegistryItem>>> {
         self.items.get(index).cloned()
     }
 }

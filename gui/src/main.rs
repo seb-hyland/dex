@@ -62,7 +62,7 @@ impl DexState {
                 indices_by_depth: Vec::new(),
             },
             drawer: Drawer {
-                visible: true,
+                visible: false,
                 items: Vec::new(),
             },
             show_debug: false,
@@ -73,11 +73,11 @@ impl DexState {
 impl eframe::App for DexState {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         subsecond::call(|| {
-            // if self.drawer.visible {
-            //     egui::Panel::left("drawer")
-            //         .resizable(false)
-            //         .show_inside(ui, |ui| {});
-            // }
+            if self.drawer.visible {
+                egui::Panel::left("drawer")
+                    .resizable(false)
+                    .show_inside(ui, |ui| {});
+            }
 
             egui::Panel::top("toolbar").show_inside(ui, |ui| {
                 ui.horizontal(|ui| {

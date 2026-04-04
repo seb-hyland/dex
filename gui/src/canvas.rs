@@ -102,9 +102,11 @@ impl Canvas {
 
                 if draw_context.noninteractive {
                     // Steal interaction and sense placement
-                    let resp = draw_context
-                        .ui
-                        .interact_visible(node_rect, node_id, Sense::click());
+                    let resp = draw_context.ui.interact_visible(
+                        node_rect,
+                        node_id.with("noninteractive_steal"),
+                        Sense::click(),
+                    );
 
                     if is_placing_node {
                         if let Some(cursor_screen_pos) =

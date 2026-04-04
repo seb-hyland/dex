@@ -5,7 +5,10 @@ use crate::{
     table::draw_record_batch,
 };
 
-use eframe::egui::{Align, Label, Layout, RichText, Sense, StrokeKind, TextStyle, UiBuilder};
+use eframe::egui::{
+    Align, Color32, Frame, Label, Layout, RichText, Sense, StrokeKind, TextEdit, TextStyle,
+    UiBuilder,
+};
 
 pub struct ViewNode {
     size: Vec2,
@@ -45,7 +48,7 @@ impl ViewNode {
     fn show(
         &mut self,
         ctx: &mut DrawContext<'_>,
-        header_text: &str,
+        header_text: &mut String,
         add_main: impl FnOnce(&mut Ui),
     ) {
         let (header_size, _bounding_size, padding) = self.sizes(ctx.ui);
@@ -81,11 +84,10 @@ impl ViewNode {
                     .id(ctx.id)
                     .max_rect(header_rect.shrink(padding)),
             );
-            let header_area = ui.interact(
-                header_rect,
-                ui.id().with("header_bar"),
-                Sense::drag() | Sense::hover(),
-            );
+            let header_area = ui.interact(header_rect, ui.id().with("header_bar"), Sense::all());
+            if header_area.clicked() {
+                println!("Clicked!");
+            }
 
             let edge_width = 6.0;
 
@@ -163,20 +165,17 @@ impl ViewNode {
 
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
-                    ui.add(Label::new(RichText::new(header_text).heading()).truncate());
+                    TextEdit::singleline(header_text)
+                        .background_color(Color32::TRANSPARENT)
+                        .font(TextStyle::Heading)
+                        .clip_text(true)
+                        .frame(Frame::NONE)
+                        .show(ui);
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    match self.collapsed {
-                        false => {
-                            if ui.button("v").clicked() {
-                                self.collapsed = true;
-                            }
-                        }
-                        true => {
-                            if ui.button("<").clicked() {
-                                self.collapsed = false;
-                            }
-                        }
+                    let symbol = if self.collapsed { "<" } else { "v" };
+                    if ui.button(symbol).clicked() {
+                        self.collapsed = !self.collapsed;
                     }
                 });
             });
@@ -217,14 +216,19 @@ pub struct DataframeView {
 impl NodeDynamics for DataframeView {
     fn draw(&mut self, ctx: &mut DrawContext<'_>) {
         let item = ctx.registry.get(self.data_ref).unwrap();
-        let (name, df) = if let RegistryItemInner::Dataframe { table_name, data } = &item.inner {
-            (table_name, data)
+        let mut item_borrow = item.borrow_mut();
+
+        if let RegistryItemInner::Dataframe {
+            ref mut table_name,
+            ref data,
+        } = item_borrow.inner
+        {
+            self.view.show(ctx, table_name, |ui| {
+                draw_record_batch(ui, data);
+            });
         } else {
             unreachable!("Data table view for non-df registry item")
-        };
-        self.view.show(ctx, name, |ui| {
-            draw_record_batch(ui, df);
-        });
+        }
     }
 
     #[inline(always)]
