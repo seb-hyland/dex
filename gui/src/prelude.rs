@@ -1,9 +1,9 @@
-pub use crate::{cursor_icon, theme::Theme};
+pub use crate::{canvas::NodeIdx, cursor_icon, theme::Theme};
 
 pub use arrow::array::RecordBatch;
 pub use eframe::{
     egui,
-    egui::{Painter, Pos2, Rect, Ui, Vec2},
+    egui::{Color32, Painter, Pos2, Rect, Ui, Vec2},
 };
 
 #[macro_export]

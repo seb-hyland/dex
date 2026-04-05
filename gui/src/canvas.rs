@@ -1,8 +1,9 @@
-use crate::node::dataframe::DataframeView;
-use crate::node::view::ViewNode;
 use crate::prelude::*;
 use crate::{
-    node::{DrawContext, Node, NodeDynamics, NodeVariant},
+    node::{
+        DrawContext, Node, NodeDynamics, NodeVariant, dataframe::DataframePayload,
+        transform::TransformArgPayload, view::Window,
+    },
     registry::{Registry, RegistryItem, RegistryItemInner},
 };
 
@@ -43,9 +44,36 @@ pub enum NodeConnectionState {
 }
 
 pub enum CanvasCommand {
-    AddNode { node: Node },
+    AddTransformArg { origin: NodeIdx },
     MoveNode { idx: NodeIdx, delta: Vec2 },
     AddEdge { start: NodeIdx, end: NodeIdx },
+}
+
+impl CanvasCommand {
+    fn exe(self, canvas: &mut Canvas, dragged_node: &mut Option<NodeIdx>) {
+        match self {
+            CanvasCommand::AddTransformArg { origin } => {
+                let new_idx = canvas.add_node_noplacing(Node {
+                    location: Pos2::ZERO,
+                    variant: NodeVariant::TransformArg(TransformArgPayload),
+                });
+                if let NodeVariant::Transform(ref mut t) =
+                    canvas.graph.node_weight_mut(origin).unwrap().variant
+                {
+                    t.args.last_mut().unwrap().node = Some(new_idx);
+                } else {
+                    unreachable!("AddTransformArg called by non-transform node");
+                }
+            }
+            CanvasCommand::MoveNode { idx, delta } => {
+                *dragged_node = Some(idx);
+                canvas.graph.node_weight_mut(idx).unwrap().location += delta;
+            }
+            CanvasCommand::AddEdge { start, end } => {
+                canvas.graph.add_edge(start, end, ());
+            }
+        }
+    }
 }
 
 impl Canvas {
@@ -59,7 +87,7 @@ impl Canvas {
         self.draw_background(canvas_rect, &painter, &theme);
 
         let mut command_queue = Vec::new();
-        for cur_idx in self.indices_by_depth.iter().copied() {
+        'node_loop: for cur_idx in self.indices_by_depth.iter().copied() {
             for outgoing_edge in self.graph.edges(cur_idx) {
                 let source_node = self.graph.node_weight(cur_idx).unwrap();
                 let source_location = source_node.location;
@@ -76,6 +104,10 @@ impl Canvas {
             let node = self.graph.node_weight_mut(cur_idx).unwrap();
             let node_id = Id::new("canvas_node").with(cur_idx);
 
+            if matches!(node.variant, NodeVariant::TransformArg(_)) {
+                continue 'node_loop;
+            }
+
             let node_location = self.view_state.world_to_screen(node.location);
             let mut draw_context = DrawContext {
                 index: cur_idx,
@@ -91,7 +123,7 @@ impl Canvas {
 
             // At least part of the node is visible
             let node_rect = node.variant.rect(&mut draw_context);
-            if canvas_rect.contains(node_location) || canvas_rect.intersects(node_rect) {
+            if (canvas_rect.contains(node_location) || canvas_rect.intersects(node_rect)) {
                 let is_placing_node = matches!(self.placing_node, Some(idx) if idx == cur_idx);
                 // If we are currently adding a new node and it is this one
                 if is_placing_node
@@ -130,22 +162,20 @@ impl Canvas {
                         {
                             self.placing_node = None;
                         }
-                    } else {
+                    } else if resp.clicked() {
                         // Looking for edge
-                        if resp.clicked() {
-                            match self.connecting_nodes {
-                                NodeConnectionState::Searching => {
-                                    self.connecting_nodes = NodeConnectionState::One(cur_idx);
-                                }
-                                NodeConnectionState::One(origin_idx) => {
-                                    draw_context.command_queue.push(CanvasCommand::AddEdge {
-                                        start: origin_idx,
-                                        end: cur_idx,
-                                    });
-                                    self.connecting_nodes = NodeConnectionState::None;
-                                }
-                                _ => unreachable!(),
+                        match self.connecting_nodes {
+                            NodeConnectionState::Searching => {
+                                self.connecting_nodes = NodeConnectionState::One(cur_idx);
                             }
+                            NodeConnectionState::One(origin_idx) => {
+                                draw_context.command_queue.push(CanvasCommand::AddEdge {
+                                    start: origin_idx,
+                                    end: cur_idx,
+                                });
+                                self.connecting_nodes = NodeConnectionState::None;
+                            }
+                            _ => unreachable!(),
                         }
                     }
                 }
@@ -154,18 +184,7 @@ impl Canvas {
 
         let mut dragged_node = None;
         for command in command_queue {
-            match command {
-                CanvasCommand::AddNode { node } => {
-                    self.add_node(node);
-                }
-                CanvasCommand::MoveNode { idx, delta } => {
-                    dragged_node = Some(idx);
-                    self.graph.node_weight_mut(idx).unwrap().location += delta;
-                }
-                CanvasCommand::AddEdge { start, end } => {
-                    self.graph.add_edge(start, end, ());
-                }
-            }
+            command.exe(self, &mut dragged_node);
         }
 
         // Move dragged node to front
@@ -232,18 +251,23 @@ impl Canvas {
 
         let node = Node {
             location: Pos2::ZERO,
-            variant: NodeVariant::Dataframe(DataframeView {
+            variant: NodeVariant::Dataframe(DataframePayload {
                 data_ref,
-                view: ViewNode::default(),
+                view: Window::default(),
             }),
         };
         self.add_node(node);
     }
 
     pub fn add_node(&mut self, node: Node) {
+        let idx = self.add_node_noplacing(node);
+        self.placing_node = Some(idx);
+    }
+
+    pub fn add_node_noplacing(&mut self, node: Node) -> NodeIdx {
         let idx = self.graph.add_node(node);
         self.indices_by_depth.push(idx);
-        self.placing_node = Some(idx);
+        idx
     }
 }
 

@@ -1,17 +1,22 @@
-use eframe::egui::Id;
-
+use crate::node::primitives::{NumericPayload, TextPayload};
 use crate::prelude::*;
 use crate::{
-    canvas::{CanvasCommand, NodeIdx, ViewState},
+    canvas::{CanvasCommand, ViewState},
     impl_NodeDynamics,
-    node::{data::TransformPayload, dataframe::DataframeView},
+    node::{
+        dataframe::DataframePayload,
+        transform::{TransformArgPayload, TransformPayload},
+    },
     registry::Registry,
     theme::Theme,
 };
 
-pub mod data;
+use eframe::egui::Id;
+
 pub mod dataframe;
 mod macros;
+pub mod primitives;
+pub mod transform;
 pub mod view;
 
 pub struct Node {
@@ -35,21 +40,32 @@ pub trait NodeDynamics {
 }
 
 pub enum NodeVariant {
+    Dataframe(DataframePayload),
     Transform(TransformPayload),
-    Dataframe(DataframeView),
+    TransformArg(TransformArgPayload),
+    Text(TextPayload),
+    Integer(NumericPayload<i32>),
+    Float(NumericPayload<f32>),
 }
-impl_NodeDynamics!(for NodeVariant where variants = { Transform, Dataframe });
+impl_NodeDynamics!(for NodeVariant {
+    Dataframe,
+    Transform,
+    TransformArg,
+    Text,
+    Integer,
+    Float,
+});
 
 #[macro_export]
 macro_rules! impl_NodeDynamics {
-    (for $type_name:ty where variants = { $($variant:ident),+ }) => {
+    (for $type_name:ty { $($variant:ident),+ $(,)? }) => {
         impl NodeDynamics for $type_name {
             fn draw(&mut self, ctx: &mut DrawContext<'_>) {
-                match self { $(Self::$variant(inner) => inner.draw(ctx),)* }
+                match self { $(Self::$variant(inner) => NodeDynamics::draw(inner, ctx),)* }
             }
 
             fn rect(&self, ctx: &mut DrawContext<'_>) -> Rect {
-                match self { $(Self::$variant(inner) => inner.rect(ctx),)* }
+                match self { $(Self::$variant(inner) => NodeDynamics::rect(inner, ctx),)* }
             }
         }
     };

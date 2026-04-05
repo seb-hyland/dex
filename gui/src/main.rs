@@ -1,7 +1,10 @@
-use crate::drawer::Drawer;
+use crate::node::NodeVariant;
+use crate::node::primitives::{NumericPayload, TextPayload};
+use crate::node::transform::TransformPayload;
 use crate::prelude::*;
 use crate::registry::Registry;
 use crate::theme::LIGHT_THEME;
+use crate::{drawer::Drawer, node::Node};
 use lib::{compute::python::apply_transform, load::load_delimited_file};
 
 use eframe::{
@@ -99,6 +102,30 @@ impl eframe::App for DexState {
                         } else {
                             // Do something eventually
                         }
+                    }
+                    if ui.button("Add transform").clicked() {
+                        self.canvas.add_node(Node {
+                            location: Pos2::ZERO,
+                            variant: NodeVariant::Transform(TransformPayload::default()),
+                        });
+                    }
+                    if ui.button("Add text").clicked() {
+                        self.canvas.add_node(Node {
+                            location: Pos2::ZERO,
+                            variant: NodeVariant::Text(TextPayload::default()),
+                        });
+                    }
+                    if ui.button("Add integer").clicked() {
+                        self.canvas.add_node(Node {
+                            location: Pos2::ZERO,
+                            variant: NodeVariant::Integer(NumericPayload::default()),
+                        });
+                    }
+                    if ui.button("Add float").clicked() {
+                        self.canvas.add_node(Node {
+                            location: Pos2::ZERO,
+                            variant: NodeVariant::Float(NumericPayload::default()),
+                        });
                     }
                     if ui.button("Open debug menu").clicked() {
                         self.show_debug = true;
