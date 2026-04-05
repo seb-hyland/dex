@@ -9,14 +9,12 @@ use crate::{
 
 use std::path::PathBuf;
 
-use eframe::egui::{Color32, Key, Modifiers, Response, Stroke, StrokeKind, UiBuilder};
 use eframe::{
-    egui::{Id, Sense, Shape},
+    egui::{Color32, Id, Response, Sense, Shape, Stroke, StrokeKind, UiBuilder},
     emath::RectTransform,
     epaint::CircleShape,
 };
-use petgraph::visit::EdgeRef;
-use petgraph::{Directed, stable_graph::StableGraph};
+use petgraph::{Directed, stable_graph::StableGraph, visit::EdgeRef};
 
 pub type NodeIdx = petgraph::graph::NodeIndex<u32>;
 pub type CanvasGraph = StableGraph<Node, (), Directed, u32>;
@@ -53,10 +51,8 @@ impl CanvasCommand {
     fn exe(self, canvas: &mut Canvas, dragged_node: &mut Option<NodeIdx>) {
         match self {
             CanvasCommand::AddTransformArg { origin } => {
-                let new_idx = canvas.add_node_noplacing(Node {
-                    location: Pos2::ZERO,
-                    variant: NodeVariant::TransformArg(TransformArgPayload),
-                });
+                let new_idx =
+                    canvas.add_node_noplacing(NodeVariant::TransformArg(TransformArgPayload));
                 if let NodeVariant::Transform(ref mut t) =
                     canvas.graph.node_weight_mut(origin).unwrap().variant
                 {
@@ -140,7 +136,7 @@ impl Canvas {
 
                 if draw_context.noninteractive {
                     // Steal interaction and sense placement
-                    let resp = draw_context.ui.interact_visible(
+                    let resp = draw_context.ui.interact(
                         node_rect,
                         node_id.with("noninteractive_steal"),
                         Sense::click(),
@@ -154,13 +150,6 @@ impl Canvas {
                             let cursor_world_pos =
                                 self.view_state.screen_to_world(cursor_screen_pos);
                             node.location = cursor_world_pos;
-                        }
-                        if resp.clicked()
-                            || ui.input_mut(|input_state| {
-                                input_state.consume_key(Modifiers::NONE, Key::Escape)
-                            })
-                        {
-                            self.placing_node = None;
                         }
                     } else if resp.clicked() {
                         // Looking for edge
@@ -182,6 +171,15 @@ impl Canvas {
             }
         }
 
+        if self.placing_node.is_some() {
+            cursor_icon!(ui, Copy);
+            if ui
+                .interact(canvas_rect, Id::new("canvas_placement"), Sense::click())
+                .clicked()
+            {
+                self.placing_node = None;
+            }
+        }
         let mut dragged_node = None;
         for command in command_queue {
             command.exe(self, &mut dragged_node);
@@ -249,23 +247,23 @@ impl Canvas {
             },
         });
 
-        let node = Node {
-            location: Pos2::ZERO,
-            variant: NodeVariant::Dataframe(DataframePayload {
-                data_ref,
-                view: Window::default(),
-            }),
-        };
+        let node = NodeVariant::Dataframe(DataframePayload {
+            data_ref,
+            view: Window::default(),
+        });
         self.add_node(node);
     }
 
-    pub fn add_node(&mut self, node: Node) {
+    pub fn add_node(&mut self, node: NodeVariant) {
         let idx = self.add_node_noplacing(node);
         self.placing_node = Some(idx);
     }
 
-    pub fn add_node_noplacing(&mut self, node: Node) -> NodeIdx {
-        let idx = self.graph.add_node(node);
+    pub fn add_node_noplacing(&mut self, node: NodeVariant) -> NodeIdx {
+        let idx = self.graph.add_node(Node {
+            location: Pos2::ZERO,
+            variant: node,
+        });
         self.indices_by_depth.push(idx);
         idx
     }

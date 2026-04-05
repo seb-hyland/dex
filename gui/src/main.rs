@@ -104,28 +104,20 @@ impl eframe::App for DexState {
                         }
                     }
                     if ui.button("Add transform").clicked() {
-                        self.canvas.add_node(Node {
-                            location: Pos2::ZERO,
-                            variant: NodeVariant::Transform(TransformPayload::default()),
-                        });
+                        self.canvas
+                            .add_node(NodeVariant::Transform(TransformPayload::default()));
                     }
                     if ui.button("Add text").clicked() {
-                        self.canvas.add_node(Node {
-                            location: Pos2::ZERO,
-                            variant: NodeVariant::Text(TextPayload::default()),
-                        });
+                        self.canvas
+                            .add_node(NodeVariant::Text(TextPayload::default()));
                     }
                     if ui.button("Add integer").clicked() {
-                        self.canvas.add_node(Node {
-                            location: Pos2::ZERO,
-                            variant: NodeVariant::Integer(NumericPayload::default()),
-                        });
+                        self.canvas
+                            .add_node(NodeVariant::Integer(NumericPayload::default()));
                     }
                     if ui.button("Add float").clicked() {
-                        self.canvas.add_node(Node {
-                            location: Pos2::ZERO,
-                            variant: NodeVariant::Float(NumericPayload::default()),
-                        });
+                        self.canvas
+                            .add_node(NodeVariant::Float(NumericPayload::default()));
                     }
                     if ui.button("Open debug menu").clicked() {
                         self.show_debug = true;
