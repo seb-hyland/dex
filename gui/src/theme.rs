@@ -1,50 +1,75 @@
-use std::sync::LazyLock;
+use crate::prelude::*;
+use eframe::egui::{CornerRadius, Shadow, Stroke, Visuals};
 
-use eframe::egui::{Color32, Context, CornerRadius, Shadow, Stroke, Visuals};
-
-pub static LIGHT_THEME: LazyLock<Visuals> = LazyLock::new(|| {
-    let mut vis = Visuals::light();
-    vis.override_text_color = Some(Color32::BLACK);
-    vis.faint_bg_color = Color32::LIGHT_GRAY;
-    vis.window_stroke = Stroke {
-        width: 2.0,
+pub static LIGHT_THEME: Theme = Theme {
+    text: Color32::BLACK,
+    faint_background: Color32::LIGHT_GRAY,
+    background: Color32::WHITE,
+    border: Stroke {
+        width: 1.0,
         color: Color32::GRAY,
-    };
-    vis.window_shadow = Shadow {
+    },
+    hover_overlay: Theme::const_gamma_multiply(Color32::LIGHT_BLUE, 0.3),
+    shadow: Shadow {
         offset: [8; 2],
         blur: 20,
         spread: 10,
-        color: vis.window_stroke.color.gamma_multiply(0.6),
-    };
-    vis.window_corner_radius = CornerRadius::same(2);
+        color: Theme::const_gamma_multiply(Color32::GRAY, 0.6),
+    },
+    corner_radius: CornerRadius::same(2),
+};
 
-    vis
-});
-
+#[derive(Clone, Copy)]
 pub struct Theme {
     pub text: Color32,
+    pub faint_background: Color32,
     pub background: Color32,
     pub border: Stroke,
-    pub faint_background: Color32,
+    pub hover_overlay: Color32,
     pub shadow: Shadow,
     pub corner_radius: CornerRadius,
 }
 
-impl From<&Visuals> for Theme {
-    fn from(vis: &Visuals) -> Self {
-        Self {
-            text: vis.override_text_color.unwrap(),
-            background: vis.window_fill,
-            border: vis.window_stroke,
-            faint_background: vis.faint_bg_color,
-            shadow: vis.window_shadow,
-            corner_radius: vis.window_corner_radius,
-        }
+impl Theme {
+    pub const COLOR_PALETTE: [Color32; 6] = [
+        Color32::GREEN,
+        Color32::MAGENTA,
+        Color32::YELLOW,
+        Color32::BLUE,
+        Color32::BROWN,
+        Color32::RED,
+    ];
+
+    pub fn palette_next(current_color: Color32) -> Color32 {
+        let palette = Self::COLOR_PALETTE;
+        let idx = palette
+            .into_iter()
+            .position(|c| c == current_color)
+            .unwrap();
+        palette[(idx + 1) % palette.len()]
+    }
+
+    pub const fn const_gamma_multiply(color: Color32, factor: f32) -> Color32 {
+        let [r, g, b, a] = color.to_array();
+        Color32::from_rgba_premultiplied(
+            (r as f32 * factor + 0.5) as u8,
+            (g as f32 * factor + 0.5) as u8,
+            (b as f32 * factor + 0.5) as u8,
+            (a as f32 * factor + 0.5) as u8,
+        )
     }
 }
 
-impl From<&Context> for Theme {
-    fn from(ctx: &Context) -> Self {
-        Self::from(&ctx.style().visuals)
+impl From<Theme> for Visuals {
+    fn from(theme: Theme) -> Self {
+        Self {
+            override_text_color: Some(theme.text),
+            faint_bg_color: theme.faint_background,
+            window_fill: theme.background,
+            window_stroke: theme.border,
+            window_shadow: theme.shadow,
+            window_corner_radius: theme.corner_radius,
+            ..Visuals::light()
+        }
     }
 }

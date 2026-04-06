@@ -36,7 +36,7 @@ impl NodeDynamics for DataframePayload {
                         ))
                         .frame(Frame::NONE)
                         .show(ui);
-                    editor.text_clip_rect
+                    (editor.text_clip_rect, None)
                 },
                 |ui| {
                     draw_record_batch(ui, data);

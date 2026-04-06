@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::theme::Theme;
 use crate::{
     node::{
         DrawContext, Node, NodeDynamics, NodeVariant, dataframe::DataframePayload,
@@ -8,12 +9,15 @@ use crate::{
 };
 
 use std::path::PathBuf;
+use std::ptr::NonNull;
 
+use eframe::egui::Stroke;
 use eframe::{
-    egui::{Color32, Id, Response, Sense, Shape, Stroke, StrokeKind, UiBuilder},
+    egui::{Id, Sense, Shape},
     emath::RectTransform,
     epaint::CircleShape,
 };
+use petgraph::stable_graph::EdgeReference;
 use petgraph::{Directed, stable_graph::StableGraph, visit::EdgeRef};
 
 pub type NodeIdx = petgraph::graph::NodeIndex<u32>;
@@ -34,69 +38,150 @@ pub struct ViewState {
     transform: RectTransform,
 }
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum NodeConnectionState {
     None,
     Searching,
-    One(NodeIdx),
-}
-
-pub enum CanvasCommand {
-    AddTransformArg { origin: NodeIdx },
-    MoveNode { idx: NodeIdx, delta: Vec2 },
-    AddEdge { start: NodeIdx, end: NodeIdx },
-}
-
-impl CanvasCommand {
-    fn exe(self, canvas: &mut Canvas, dragged_node: &mut Option<NodeIdx>) {
-        match self {
-            CanvasCommand::AddTransformArg { origin } => {
-                let new_idx =
-                    canvas.add_node_noplacing(NodeVariant::TransformArg(TransformArgPayload));
-                if let NodeVariant::Transform(ref mut t) =
-                    canvas.graph.node_weight_mut(origin).unwrap().variant
-                {
-                    t.args.last_mut().unwrap().node = Some(new_idx);
-                } else {
-                    unreachable!("AddTransformArg called by non-transform node");
-                }
-            }
-            CanvasCommand::MoveNode { idx, delta } => {
-                *dragged_node = Some(idx);
-                canvas.graph.node_weight_mut(idx).unwrap().location += delta;
-            }
-            CanvasCommand::AddEdge { start, end } => {
-                canvas.graph.add_edge(start, end, ());
-            }
-        }
-    }
+    One(NodeIdx, Option<NodeIdx>),
 }
 
 impl Canvas {
     pub fn draw(&mut self, ui: &mut Ui, registry: &mut Registry) {
-        let (response, painter) =
-            ui.allocate_painter(ui.available_size_before_wrap(), Sense::drag());
+        let (response, painter) = ui.allocate_painter(ui.available_size_before_wrap(), Sense::DRAG);
         let canvas_rect = response.rect;
-        let theme: Theme = ui.ctx().into();
+        let theme = LIGHT_THEME;
         self.view_state.update_surface(canvas_rect);
 
         self.draw_background(canvas_rect, &painter, &theme);
 
         let mut command_queue = Vec::new();
-        'node_loop: for cur_idx in self.indices_by_depth.iter().copied() {
+        let graph_ref = DisjointGraphRef::new(&self.graph);
+
+        // Draw all connections between nodes
+        for cur_idx in self.graph.node_indices() {
+            let source_node = self.graph.node_weight(cur_idx).unwrap();
+
+            let source_location = source_node.location;
+            let source_location_screen = self.view_state.world_to_screen(source_location);
+
+            let id = Id::new("canvas_edge").with(cur_idx);
+            let mut draw_context = DrawContext {
+                index: cur_idx,
+                screen_location: source_location_screen,
+                id,
+                command_queue: &mut command_queue,
+                view_state: &self.view_state,
+                registry,
+                graph_ref,
+                ui,
+                theme: &theme,
+            };
+            let source_rect = source_node.variant.rect(&mut draw_context);
+
+            // For each origin, draw connections to all targets
             for outgoing_edge in self.graph.edges(cur_idx) {
-                let source_node = self.graph.node_weight(cur_idx).unwrap();
-                let source_location = source_node.location;
+                let target_idx = outgoing_edge.target();
+                let target_node = self.graph.node_weight(target_idx).unwrap();
 
-                let target_node = self.graph.node_weight(outgoing_edge.target()).unwrap();
+                if matches!(target_node.variant, NodeVariant::TransformArg(_)) {
+                    unreachable!(
+                        "Connections to `TransformArg` should always be from the arg to the target"
+                    );
+                }
+
                 let target_location = target_node.location;
+                let target_location_screen = self.view_state.world_to_screen(target_location);
 
-                let source_screen = self.view_state.world_to_screen(source_location);
-                let target_screen = self.view_state.world_to_screen(target_location);
+                draw_context.index = target_idx;
+                draw_context.screen_location = target_location_screen;
+                let target_rect = target_node.variant.rect(&mut draw_context);
 
-                painter.line_segment([source_screen, target_screen], theme.border);
+                let (source_pos, target_pos) =
+                    Node::nearest_boundary_point(source_rect, target_rect);
+                painter.line_segment(
+                    [source_pos, target_pos],
+                    Stroke {
+                        color: target_node
+                            .variant
+                            .override_edge_color()
+                            .or(source_node.variant.override_edge_color())
+                            .unwrap_or(theme.border.color),
+                        ..theme.border
+                    },
+                );
             }
+        }
 
+        // Draw current edge
+        match self.connecting_nodes {
+            NodeConnectionState::None => {}
+            NodeConnectionState::Searching => {}
+            NodeConnectionState::One(origin, ref mut current_target) => {
+                let origin_node = self.graph.node_weight(origin).unwrap();
+                let origin_location = origin_node.location;
+                let origin_location_screen = self.view_state.world_to_screen(origin_location);
+
+                let id = Id::new("canvas_connecting_edge");
+                let mut draw_context = DrawContext {
+                    index: origin,
+                    screen_location: origin_location_screen,
+                    id,
+                    command_queue: &mut command_queue,
+                    view_state: &self.view_state,
+                    registry,
+                    graph_ref,
+                    ui,
+                    theme: &theme,
+                };
+                let origin_pos = origin_node.variant.rect(&mut draw_context).center();
+
+                let stroke = Stroke {
+                    color: origin_node
+                        .variant
+                        .override_edge_color()
+                        .unwrap_or(theme.border.color),
+                    ..theme.border
+                };
+
+                match *current_target {
+                    None => {
+                        if let Some(last_cursor_pos) = draw_context
+                            .ui
+                            .ctx()
+                            .input(|input| input.pointer.latest_pos())
+                        {
+                            painter.line_segment([origin_pos, last_cursor_pos], stroke);
+                        }
+                    }
+                    Some(target) => {
+                        let target_node = self.graph.node_weight(target).unwrap();
+                        let target_location = target_node.location;
+                        let target_location_screen =
+                            self.view_state.world_to_screen(target_location);
+
+                        draw_context.index = target;
+                        draw_context.screen_location = target_location_screen;
+                        let target_pos = target_node.variant.rect(&mut draw_context).center();
+                        painter.line_segment(
+                            [origin_pos, target_pos],
+                            Stroke {
+                                color: target_node
+                                    .variant
+                                    .override_edge_color()
+                                    .unwrap_or(stroke.color),
+                                ..stroke
+                            },
+                        );
+                    }
+                }
+
+                // Set to None to find new target
+                *current_target = None;
+            }
+        }
+
+        // Draw all nodes
+        'node_loop: for cur_idx in self.indices_by_depth.iter().copied() {
             let node = self.graph.node_weight_mut(cur_idx).unwrap();
             let node_id = Id::new("canvas_node").with(cur_idx);
 
@@ -112,61 +197,51 @@ impl Canvas {
                 command_queue: &mut command_queue,
                 view_state: &self.view_state,
                 registry,
+                graph_ref,
                 ui,
                 theme: &theme,
-                noninteractive: false,
             };
 
-            // At least part of the node is visible
             let node_rect = node.variant.rect(&mut draw_context);
-            if (canvas_rect.contains(node_location) || canvas_rect.intersects(node_rect)) {
-                let is_placing_node = matches!(self.placing_node, Some(idx) if idx == cur_idx);
-                // If we are currently adding a new node and it is this one
-                if is_placing_node
-                    || matches!(
-                        self.connecting_nodes,
-                        NodeConnectionState::Searching | NodeConnectionState::One(_)
-                    )
-                {
-                    draw_context.noninteractive = true;
-                }
-
+            // At least part of the node is visible
+            if canvas_rect.contains(node_location) || canvas_rect.intersects(node_rect) {
                 // Draw yourself, I COMMAND you
                 node.variant.draw(&mut draw_context);
 
-                if draw_context.noninteractive {
-                    // Steal interaction and sense placement
-                    let resp = draw_context.ui.interact(
-                        node_rect,
-                        node_id.with("noninteractive_steal"),
-                        Sense::click(),
-                    );
-
-                    if is_placing_node {
-                        if let Some(cursor_screen_pos) =
-                            draw_context.ui.ctx().input(|i| i.pointer.latest_pos())
-                        {
-                            // Sync its location with the pointer
-                            let cursor_world_pos =
-                                self.view_state.screen_to_world(cursor_screen_pos);
-                            node.location = cursor_world_pos;
+                // Handle creating node connections
+                match self.connecting_nodes {
+                    NodeConnectionState::None => {}
+                    NodeConnectionState::Searching => {
+                        if let Some((idx, true)) = node.variant.edge_target(&mut draw_context) {
+                            self.connecting_nodes = NodeConnectionState::One(idx, None)
                         }
-                    } else if resp.clicked() {
-                        // Looking for edge
-                        match self.connecting_nodes {
-                            NodeConnectionState::Searching => {
-                                self.connecting_nodes = NodeConnectionState::One(cur_idx);
+                    }
+                    NodeConnectionState::One(origin_idx, _) => {
+                        match node.variant.edge_target(&mut draw_context) {
+                            None => {}
+                            Some((idx, false)) => {
+                                self.connecting_nodes =
+                                    NodeConnectionState::One(origin_idx, Some(idx))
                             }
-                            NodeConnectionState::One(origin_idx) => {
+                            Some((idx, true)) => {
                                 draw_context.command_queue.push(CanvasCommand::AddEdge {
                                     start: origin_idx,
-                                    end: cur_idx,
+                                    end: idx,
                                 });
                                 self.connecting_nodes = NodeConnectionState::None;
                             }
-                            _ => unreachable!(),
                         }
                     }
+                }
+
+                if let Some(placing_idx) = self.placing_node
+                    && placing_idx == cur_idx
+                    && let Some(cursor_screen_pos) =
+                        draw_context.ui.ctx().input(|i| i.pointer.latest_pos())
+                {
+                    // Sync its location with the pointer
+                    let cursor_world_pos = self.view_state.screen_to_world(cursor_screen_pos);
+                    node.location = cursor_world_pos;
                 }
             }
         }
@@ -174,28 +249,29 @@ impl Canvas {
         if self.placing_node.is_some() {
             cursor_icon!(ui, Copy);
             if ui
-                .interact(canvas_rect, Id::new("canvas_placement"), Sense::click())
+                .interact(canvas_rect, Id::new("canvas_placement"), Sense::CLICK)
                 .clicked()
             {
                 self.placing_node = None;
             }
         }
-        let mut dragged_node = None;
+        let mut interacted_node = None;
         for command in command_queue {
-            command.exe(self, &mut dragged_node);
+            command.exe(self, registry, &mut interacted_node);
         }
 
         // Move dragged node to front
-        if let Some(dragged_idx) = dragged_node {
+        if let Some(interacted_idx) = interacted_node {
             let pos = self
                 .indices_by_depth
                 .iter()
-                .position(|&idx| idx == dragged_idx)
+                .position(|&idx| idx == interacted_idx)
                 .unwrap();
             self.indices_by_depth.remove(pos);
-            self.indices_by_depth.push(dragged_idx);
+            self.indices_by_depth.push(interacted_idx);
         }
 
+        // If Canvas background was dragged
         match DrawInteraction::from(response) {
             DrawInteraction::Hovered => cursor_icon!(ui, PointingHand),
             DrawInteraction::Dragged(drag_delta) => {
@@ -233,14 +309,15 @@ impl Canvas {
         }
     }
 
-    pub fn add_dataframe(&mut self, registry: &mut Registry, path: PathBuf, df: RecordBatch) {
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_default();
-
+    pub fn add_dataframe(
+        &mut self,
+        df: RecordBatch,
+        registry: &mut Registry,
+        name: String,
+        path: Option<PathBuf>,
+    ) -> NodeIdx {
         let data_ref = registry.insert(RegistryItem {
-            backing_file: Some(path.clone()),
+            backing_file: path,
             inner: RegistryItemInner::Dataframe {
                 table_name: name,
                 data: df,
@@ -251,12 +328,13 @@ impl Canvas {
             data_ref,
             view: Window::default(),
         });
-        self.add_node(node);
+        self.add_node(node)
     }
 
-    pub fn add_node(&mut self, node: NodeVariant) {
+    pub fn add_node(&mut self, node: NodeVariant) -> NodeIdx {
         let idx = self.add_node_noplacing(node);
         self.placing_node = Some(idx);
+        idx
     }
 
     pub fn add_node_noplacing(&mut self, node: NodeVariant) -> NodeIdx {
@@ -331,29 +409,126 @@ impl ViewState {
     }
 }
 
-pub trait InteractExtension {
-    fn interact_visible(&mut self, rect: Rect, id: Id, sense: Sense) -> Response;
+#[derive(Clone, Copy)]
+pub struct DisjointGraphRef {
+    canvas_ref: NonNull<CanvasGraph>,
 }
 
-impl InteractExtension for Ui {
-    fn interact_visible(&mut self, rect: Rect, id: Id, sense: Sense) -> Response {
-        let resp = self.interact(rect, id, sense);
-        let interaction_str = match DrawInteraction::from(resp.clone()) {
-            DrawInteraction::None => "",
-            DrawInteraction::Clicked => "Clicked",
-            DrawInteraction::Hovered => "Hovered",
-            DrawInteraction::Dragged(_) => "Dragged",
-        };
-        self.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
-            ui.painter().rect(
-                rect,
-                0.0,
-                Color32::GREEN.gamma_multiply(0.3),
-                Stroke::NONE,
-                StrokeKind::Middle,
-            );
-            ui.label(interaction_str);
-        });
-        resp
+impl DisjointGraphRef {
+    pub fn new(graph: &CanvasGraph) -> Self {
+        Self {
+            canvas_ref: NonNull::from_ref(graph),
+        }
+    }
+
+    pub fn get(&self, idx: NodeIdx) -> Option<&Node> {
+        unsafe { self.canvas_ref.as_ref().node_weight(idx) }
+    }
+
+    pub fn edge_count(&self, idx: NodeIdx) -> usize {
+        unsafe { self.canvas_ref.as_ref().edges(idx).count() }
+    }
+
+    pub fn get_edge(&self, idx: NodeIdx) -> Option<EdgeReference<'_, ()>> {
+        unsafe { self.canvas_ref.as_ref().edges(idx).next() }
+    }
+}
+
+pub enum CanvasCommand {
+    MoveNode {
+        idx: NodeIdx,
+        delta: Vec2,
+    },
+    AddNode {
+        origin: NodeIdx,
+        node: NodeVariant,
+    },
+    AddDataframe {
+        origin: NodeIdx,
+        df: RecordBatch,
+        name: String,
+    },
+    SetInteracted {
+        idx: NodeIdx,
+    },
+    AddEdge {
+        start: NodeIdx,
+        end: NodeIdx,
+    },
+    AddTransformArg {
+        origin: NodeIdx,
+    },
+    UpdateTransformArgLocation {
+        idx: NodeIdx,
+        new_rect: Rect,
+    },
+}
+
+impl CanvasCommand {
+    fn exe(
+        self,
+        canvas: &mut Canvas,
+        registry: &mut Registry,
+        interacted_node: &mut Option<NodeIdx>,
+    ) {
+        match self {
+            Self::MoveNode { idx, delta } => {
+                *interacted_node = Some(idx);
+                canvas.graph.node_weight_mut(idx).unwrap().location += delta;
+            }
+            Self::AddNode { origin, node } => {
+                let idx = canvas.add_node(node);
+                canvas.graph.add_edge(origin, idx, ());
+            }
+            Self::AddDataframe { origin, df, name } => {
+                let idx = canvas.add_dataframe(df, registry, name, None);
+                canvas.graph.add_edge(origin, idx, ());
+            }
+            Self::SetInteracted { idx } => {
+                *interacted_node = Some(idx);
+            }
+            Self::AddEdge { start, end } => {
+                match canvas.graph.node_weight(end).unwrap().variant {
+                    NodeVariant::TransformArg(_) => canvas.graph.add_edge(end, start, ()),
+                    _ => canvas.graph.add_edge(start, end, ()),
+                };
+            }
+            Self::AddTransformArg { origin } => {
+                let next_color = if let NodeVariant::Transform(ref mut t) =
+                    canvas.graph.node_weight_mut(origin).unwrap().variant
+                {
+                    let next_color = t
+                        .last_color
+                        .map(Theme::palette_next)
+                        .unwrap_or(Theme::COLOR_PALETTE[0]);
+                    t.last_color = Some(next_color);
+                    next_color
+                } else {
+                    unreachable!("AddTransformArg called by non transform node");
+                };
+
+                let new_idx =
+                    canvas.add_node_noplacing(NodeVariant::TransformArg(TransformArgPayload {
+                        cached_rect: Rect::ZERO,
+                        color: next_color,
+                    }));
+
+                if let NodeVariant::Transform(ref mut t) =
+                    canvas.graph.node_weight_mut(origin).unwrap().variant
+                {
+                    t.args.last_mut().unwrap().node = Some(new_idx);
+                } else {
+                    unreachable!("AddTransformArg called by non transform node");
+                }
+            }
+            Self::UpdateTransformArgLocation { idx, new_rect } => {
+                let node = canvas.graph.node_weight_mut(idx).unwrap();
+                if let NodeVariant::TransformArg(t) = &mut node.variant {
+                    t.cached_rect = new_rect;
+                } else {
+                    unreachable!("UpdateTransformArgLocation called on non transform-arg node")
+                }
+            }
+        }
     }
 }

@@ -1,14 +1,19 @@
-use crate::node::NodeVariant;
-use crate::node::primitives::{NumericPayload, TextPayload};
-use crate::node::transform::TransformPayload;
 use crate::prelude::*;
-use crate::registry::Registry;
-use crate::theme::LIGHT_THEME;
-use crate::{drawer::Drawer, node::Node};
-use lib::{compute::python::apply_transform, load::load_delimited_file};
+use crate::{
+    drawer::Drawer,
+    node::{
+        NodeVariant,
+        primitives::{NumericPayload, TextPayload},
+        transform::TransformPayload,
+    },
+    registry::Registry,
+    theme::LIGHT_THEME,
+};
+
+use lib::load::load_delimited_file;
 
 use eframe::{
-    egui::{self, FontData, FontFamily},
+    egui::{FontData, FontFamily, Visuals},
     epaint::text::{FontInsert, FontPriority, InsertFontFamily},
 };
 
@@ -29,7 +34,7 @@ fn main() {
         "dex",
         native_options,
         Box::new(|cc| {
-            cc.egui_ctx.set_visuals(LIGHT_THEME.clone());
+            cc.egui_ctx.set_visuals(Visuals::from(LIGHT_THEME));
 
             let inter_bytes = include_bytes!("../assets/inter.ttf");
             cc.egui_ctx.add_font(FontInsert::new(
@@ -89,9 +94,18 @@ impl eframe::App for DexState {
                     {
                         let df_result = load_delimited_file(&path);
                         match df_result {
-                            Ok(df) => self.canvas.add_dataframe(&mut self.registry, path, df),
-                            Err(e) => {}
-                        }
+                            Ok(df) => {
+                                self.canvas.add_dataframe(
+                                    df,
+                                    &mut self.registry,
+                                    path.file_name()
+                                        .map(|name| name.to_string_lossy().to_string())
+                                        .unwrap_or_else(|| "Unnamed dataframe".to_owned()),
+                                    Some(path),
+                                );
+                            }
+                            Err(_e) => {}
+                        };
                     }
                     if ui.button("Toggle drawer").clicked() {
                         self.drawer.visible = !self.drawer.visible;
@@ -100,7 +114,7 @@ impl eframe::App for DexState {
                         if let canvas::NodeConnectionState::None = self.canvas.connecting_nodes {
                             self.canvas.connecting_nodes = canvas::NodeConnectionState::Searching;
                         } else {
-                            // Do something eventually
+                            // Eventually add cancel
                         }
                     }
                     if ui.button("Add transform").clicked() {

@@ -1,4 +1,4 @@
-pub use crate::{canvas::NodeIdx, cursor_icon, theme::Theme};
+pub use crate::{canvas::NodeIdx, cursor_icon, theme::LIGHT_THEME};
 
 pub use arrow::array::RecordBatch;
 pub use eframe::{

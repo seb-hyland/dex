@@ -1,9 +1,23 @@
 use std::ffi::CString;
 
+use arrow::array::RecordBatch;
 use pyo3::PyErr;
 
 pub mod hash;
 pub mod python;
+
+pub struct TransformArgument {
+    pub name: String,
+    pub value: TransformValue,
+}
+
+#[derive(Debug)]
+pub enum TransformValue {
+    Dataframe(RecordBatch),
+    String(String),
+    Int(i32),
+    Float(f64),
+}
 
 pub(crate) type TransformResult<T> = Result<T, TransformErr>;
 
