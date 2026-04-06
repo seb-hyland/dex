@@ -6,7 +6,7 @@ use std::f64;
 
 use eframe::egui::{Frame, TextEdit, TextStyle};
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct TextPayload {
     view: HeadlessWindow,
     pub text: String,
@@ -79,6 +79,7 @@ impl Numeric for i32 {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct NumericPayload<N: Numeric> {
     view: HeadlessWindow,
     str: String,

@@ -136,6 +136,16 @@ impl eframe::App for DexState {
                     if ui.button("Open debug menu").clicked() {
                         self.show_debug = true;
                     }
+                    if ui.button("Save").clicked() {
+                        self.canvas.serialize_to_paths(std::path::Path::new(
+                            "/Users/seb-hyland/Downloads/dex_serial/test",
+                        ));
+                    }
+                    if ui.button("Load").clicked()
+                        && let Some(path) = rfd::FileDialog::new().pick_file()
+                    {
+                        self.canvas.load_from_path(path);
+                    }
                     let ctx = ui.ctx().clone();
                     egui::Window::new("Debug Inspector")
                         .open(&mut self.show_debug)

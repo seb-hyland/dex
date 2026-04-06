@@ -1,10 +1,8 @@
 pub use crate::{canvas::NodeIdx, cursor_icon, theme::LIGHT_THEME};
 
 pub use arrow::array::RecordBatch;
-pub use eframe::{
-    egui,
-    egui::{Color32, Painter, Pos2, Rect, Ui, Vec2},
-};
+pub use egui::{self, Color32, Painter, Pos2, Rect, Ui, Vec2};
+pub use serde::{Deserialize, Serialize};
 
 #[macro_export]
 macro_rules! cursor_icon {

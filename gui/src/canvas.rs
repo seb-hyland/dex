@@ -8,6 +8,7 @@ use crate::{
     registry::{Registry, RegistryItem, RegistryItemInner},
 };
 
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::ptr::NonNull;
 
@@ -19,18 +20,22 @@ use eframe::{
 };
 use petgraph::stable_graph::EdgeReference;
 use petgraph::{Directed, stable_graph::StableGraph, visit::EdgeRef};
+use serde::{Deserialize, Serialize};
 
 pub type NodeIdx = petgraph::graph::NodeIndex<u32>;
 pub type CanvasGraph = StableGraph<Node, (), Directed, u32>;
 
+#[derive(Serialize, Deserialize)]
 pub struct Canvas {
     pub graph: CanvasGraph,
     pub indices_by_depth: Vec<NodeIdx>,
     pub view_state: ViewState,
     pub placing_node: Option<NodeIdx>,
+    #[serde(skip)]
     pub connecting_nodes: NodeConnectionState,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct ViewState {
     draw_surface: Rect,
     offset: Vec2,
@@ -38,8 +43,9 @@ pub struct ViewState {
     transform: RectTransform,
 }
 
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, Default, PartialEq, Debug)]
 pub enum NodeConnectionState {
+    #[default]
     None,
     Searching,
     One(NodeIdx, Option<NodeIdx>),
@@ -344,6 +350,29 @@ impl Canvas {
         });
         self.indices_by_depth.push(idx);
         idx
+    }
+
+    pub fn serialize_to_paths(&self, prefix: &std::path::Path) {
+        let file_txt = std::fs::File::create(prefix.with_added_extension("dext")).unwrap();
+        serde_json::to_writer(file_txt, self).unwrap();
+
+        let mut file_bin = std::fs::File::create(prefix.with_added_extension("dex")).unwrap();
+        let bytes = postcard::to_stdvec(self).unwrap();
+        file_bin.write_all(&bytes).unwrap();
+    }
+
+    pub fn load_from_path(&mut self, path: PathBuf) {
+        let mut file = std::fs::File::open(&path).unwrap();
+        let mut bytes = Vec::new();
+        let data = match path.extension().and_then(|ext| ext.to_str()) {
+            Some("dext") => serde_json::from_reader(file).unwrap(),
+            Some("dex") => {
+                file.read_to_end(&mut bytes);
+                postcard::from_bytes(&bytes).unwrap()
+            }
+            _ => unimplemented!(),
+        };
+        *self = data
     }
 }
 

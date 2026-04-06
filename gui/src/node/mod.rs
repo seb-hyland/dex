@@ -18,6 +18,7 @@ pub mod primitives;
 pub mod transform;
 pub mod view;
 
+#[derive(Serialize, Deserialize)]
 pub struct Node {
     pub location: Pos2,
     pub variant: NodeVariant,
@@ -80,6 +81,7 @@ impl Node {
 }
 
 #[enum_dispatch(NodeDynamics)]
+#[derive(Serialize, Deserialize)]
 pub enum NodeVariant {
     Dataframe(DataframePayload),
     Transform(TransformPayload),

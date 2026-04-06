@@ -18,10 +18,12 @@ use std::collections::HashSet;
 use eframe::egui::{Button, ComboBox, Frame, Sense, Stroke, StrokeKind, TextEdit, TextStyle};
 use egui_code_editor::{CodeEditor, ColorTheme, Completer, Syntax};
 
+#[derive(Serialize, Deserialize)]
 pub struct TransformPayload {
     pub args: Vec<TransformArg>,
     pub last_color: Option<Color32>,
     active_lang: TransformLang,
+    #[serde(skip, default = "default_completer")]
     completer: Completer,
     python: String,
     view: Window,
@@ -48,17 +50,19 @@ def transform():
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct TransformArg {
     label: String,
     arg_name: String,
     pub node: Option<NodeIdx>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 enum TransformLang {
     Python,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct TransformArgPayload {
     pub cached_rect: Rect,
     pub color: Color32,
@@ -346,4 +350,8 @@ fn command_from_transform(arg: compute::TransformValue, origin: NodeIdx) -> Canv
             node: NodeVariant::Text(TextPayload::new(s)),
         },
     }
+}
+
+fn default_completer() -> Completer {
+    Completer::new_with_syntax(&Syntax::python())
 }

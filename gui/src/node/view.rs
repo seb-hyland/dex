@@ -6,6 +6,7 @@ use std::sync::Arc;
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{Align, Galley, Layout, Sense, StrokeKind, TextBuffer, TextStyle, UiBuilder};
 
+#[derive(Serialize, Deserialize)]
 pub struct Window {
     size: Vec2,
     cached_header_height: f32,
@@ -233,6 +234,7 @@ impl Window {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct HeadlessWindow {
     cached_height: f32,
     width: f32,

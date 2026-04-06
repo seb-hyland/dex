@@ -7,6 +7,7 @@ use crate::{
 
 use eframe::egui::{Frame, TextEdit, TextStyle};
 
+#[derive(Serialize, Deserialize)]
 pub struct DataframePayload {
     pub data_ref: RegistryHandle,
     pub view: Window,
