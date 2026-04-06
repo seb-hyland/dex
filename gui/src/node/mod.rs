@@ -1,3 +1,4 @@
+use crate::node::typst::TypstPayload;
 use crate::prelude::*;
 use crate::{
     canvas::{CanvasCommand, DisjointGraphRef, ViewState},
@@ -16,12 +17,38 @@ use enum_dispatch::enum_dispatch;
 pub mod dataframe;
 pub mod primitives;
 pub mod transform;
+pub mod typst;
 pub mod view;
+pub mod webview;
 
 #[derive(Serialize, Deserialize)]
 pub struct Node {
     pub location: Pos2,
     pub variant: NodeVariant,
+}
+
+#[enum_dispatch(NodeDynamics)]
+#[derive(Serialize, Deserialize)]
+pub enum NodeVariant {
+    Dataframe(DataframePayload),
+    Transform(TransformPayload),
+    TransformArg(TransformArgPayload),
+    Text(TextPayload),
+    Integer(NumericPayload<i32>),
+    Float(NumericPayload<f64>),
+    Typst(TypstPayload),
+}
+
+pub struct DrawContext<'ctx> {
+    pub index: NodeIdx,
+    pub id: Id,
+    pub screen_location: Pos2,
+    pub command_queue: &'ctx mut Vec<CanvasCommand>,
+    pub view_state: &'ctx ViewState,
+    pub registry: &'ctx Registry,
+    pub graph_ref: DisjointGraphRef,
+    pub ui: &'ctx mut Ui,
+    pub theme: &'ctx Theme,
 }
 
 #[enum_dispatch]
@@ -78,27 +105,4 @@ impl Node {
 
         (pos_o, pos_d)
     }
-}
-
-#[enum_dispatch(NodeDynamics)]
-#[derive(Serialize, Deserialize)]
-pub enum NodeVariant {
-    Dataframe(DataframePayload),
-    Transform(TransformPayload),
-    TransformArg(TransformArgPayload),
-    Text(TextPayload),
-    Integer(NumericPayload<i32>),
-    Float(NumericPayload<f64>),
-}
-
-pub struct DrawContext<'ctx> {
-    pub index: NodeIdx,
-    pub id: Id,
-    pub screen_location: Pos2,
-    pub command_queue: &'ctx mut Vec<CanvasCommand>,
-    pub view_state: &'ctx ViewState,
-    pub registry: &'ctx Registry,
-    pub graph_ref: DisjointGraphRef,
-    pub ui: &'ctx mut Ui,
-    pub theme: &'ctx Theme,
 }

@@ -5,11 +5,13 @@ use crate::{
         NodeVariant,
         primitives::{NumericPayload, TextPayload},
         transform::TransformPayload,
+        typst::TypstPayload,
     },
     registry::Registry,
     theme::LIGHT_THEME,
 };
 
+use egui_extras::install_image_loaders;
 use lib::load::load_delimited_file;
 
 use std::hash::Hash;
@@ -38,9 +40,10 @@ fn main() {
         "dex",
         native_options,
         Box::new(|cc| {
+            install_image_loaders(&cc.egui_ctx);
             cc.egui_ctx.set_visuals(Visuals::from(LIGHT_THEME));
 
-            let inter_bytes = include_bytes!("../assets/inter.ttf");
+            let inter_bytes = include_bytes!("../assets/Inter.ttf");
             cc.egui_ctx.add_font(FontInsert::new(
                 "inter",
                 FontData::from_static(inter_bytes),
@@ -253,6 +256,10 @@ impl eframe::App for DexState {
                     if ui.button("Add float").clicked() {
                         self.active_canvas()
                             .add_node(NodeVariant::Float(NumericPayload::default()));
+                    }
+                    if ui.button("Add typst").clicked() {
+                        self.active_canvas()
+                            .add_node(NodeVariant::Typst(TypstPayload::default()));
                     }
                     if ui.button("Open debug menu").clicked() {
                         self.show_debug = true;
