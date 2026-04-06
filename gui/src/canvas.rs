@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 pub type NodeIdx = petgraph::graph::NodeIndex<u32>;
 pub type CanvasGraph = StableGraph<Node, (), Directed, u32>;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct Canvas {
     pub graph: CanvasGraph,
     pub indices_by_depth: Vec<NodeIdx>,
@@ -376,8 +376,9 @@ impl Canvas {
     }
 }
 
-impl ViewState {
-    pub fn new(draw_surface: Rect) -> Self {
+impl Default for ViewState {
+    fn default() -> Self {
+        let draw_surface = Rect::ZERO;
         let offset = Vec2::ZERO;
         let scale = 1.0;
         let transform = Self::_make_transform(offset, scale, draw_surface);
@@ -388,7 +389,9 @@ impl ViewState {
             transform,
         }
     }
+}
 
+impl ViewState {
     #[inline(always)]
     fn _make_transform(offset: Vec2, scale: f32, draw_surface: Rect) -> RectTransform {
         let world_rect = Rect::from_center_size(offset.to_pos2(), draw_surface.size() / scale);

@@ -12,10 +12,14 @@ use crate::{
 
 use lib::load::load_delimited_file;
 
-use eframe::{
-    egui::{FontData, FontFamily, Visuals},
-    epaint::text::{FontInsert, FontPriority, InsertFontFamily},
+use std::hash::Hash;
+
+use eframe::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
+use egui::{
+    FontData, FontFamily, Frame, TextEdit, Visuals,
+    text::{CCursor, CCursorRange},
 };
+use egui_dnd::utils::shift_vec;
 
 mod canvas;
 mod drawer;
@@ -53,28 +57,59 @@ fn main() {
 
 struct DexState {
     registry: Registry,
-    canvas: canvas::Canvas,
+    tabs: Vec<Tab>,
+    active_tab: usize,
+    renaming_tab: RenamingTab,
     drawer: Drawer,
     show_debug: bool,
+}
+
+struct Tab {
+    name: String,
+    canvas: canvas::Canvas,
+    add_index: usize,
+}
+
+impl Hash for Tab {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.add_index.hash(state);
+    }
+}
+
+enum RenamingTab {
+    None,
+    Newly(usize),
+    Some(usize),
 }
 
 impl DexState {
     fn new() -> Self {
         Self {
             registry: Registry::default(),
-            canvas: canvas::Canvas {
-                graph: canvas::CanvasGraph::new(),
-                view_state: canvas::ViewState::new(Rect::ZERO),
-                placing_node: None,
-                connecting_nodes: canvas::NodeConnectionState::None,
-                indices_by_depth: Vec::new(),
-            },
+            tabs: vec![Tab {
+                name: "Unnamed tab 0".to_owned(),
+                canvas: canvas::Canvas::default(),
+                add_index: 0,
+            }],
+            active_tab: 0,
+            renaming_tab: RenamingTab::None,
             drawer: Drawer {
                 visible: false,
                 items: Vec::new(),
             },
             show_debug: false,
         }
+    }
+
+    fn active_canvas(&mut self) -> &mut canvas::Canvas {
+        self.active_canvas_and_registry_disjoint().0
+    }
+
+    fn active_canvas_and_registry_disjoint(&mut self) -> (&mut canvas::Canvas, &mut Registry) {
+        (
+            &mut self.tabs.get_mut(self.active_tab).unwrap().canvas,
+            &mut self.registry,
+        )
     }
 }
 
@@ -87,6 +122,87 @@ impl eframe::App for DexState {
                     .show_inside(ui, |ui| {});
             }
 
+            egui::Panel::top("tab_bar").show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let response = egui_dnd::dnd(ui, "tabs_dnd").show_vec(
+                        &mut self.tabs,
+                        |ui, tab, handle, state| {
+                            let idx = state.index;
+                            if state.dragged {
+                                self.active_tab = idx;
+                            }
+                            let is_active = idx == self.active_tab;
+
+                            ui.horizontal(|ui| {
+                                handle.ui(ui, |ui| {
+                                    if let RenamingTab::Newly(idx) | RenamingTab::Some(idx) =
+                                        self.renaming_tab
+                                    {
+                                        if idx == state.index {
+                                            let output = TextEdit::singleline(&mut tab.name)
+                                                .clip_text(false)
+                                                .desired_width(0.0)
+                                                .frame(Frame::NONE)
+                                                .show(ui);
+
+                                            if matches!(self.renaming_tab, RenamingTab::Newly(_)) {
+                                                output.response.request_focus();
+                                                let mut state = TextEdit::load_state(
+                                                    ui.ctx(),
+                                                    output.response.id,
+                                                )
+                                                .unwrap_or_default();
+                                                state.cursor.set_char_range(Some(
+                                                    CCursorRange::two(
+                                                        CCursor::new(0),
+                                                        CCursor::new(tab.name.chars().count()),
+                                                    ),
+                                                ));
+                                                state.store(ui.ctx(), output.response.id);
+
+                                                self.renaming_tab = RenamingTab::Some(idx);
+                                            }
+
+                                            if output.response.lost_focus()
+                                                || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                            {
+                                                self.renaming_tab = RenamingTab::None;
+                                            }
+                                        } else {
+                                            let _ = ui.selectable_label(is_active, &tab.name);
+                                        }
+                                    } else {
+                                        let label_res = ui.selectable_label(is_active, &tab.name);
+
+                                        if label_res.clicked() {
+                                            self.active_tab = idx;
+                                        }
+                                        if label_res.double_clicked() {
+                                            self.renaming_tab = RenamingTab::Newly(idx);
+                                        }
+                                    }
+                                });
+                            });
+                        },
+                    );
+
+                    if let Some(update) = response.update {
+                        shift_vec(update.from, update.to, &mut self.tabs);
+                    }
+
+                    if ui.button("+").clicked() {
+                        let new_tab_idx = self.tabs.len();
+                        self.tabs.push(Tab {
+                            name: "New tab".to_owned(),
+                            canvas: canvas::Canvas::default(),
+                            add_index: new_tab_idx,
+                        });
+                        self.active_tab = new_tab_idx;
+                        self.renaming_tab = RenamingTab::Newly(self.active_tab);
+                    }
+                });
+            });
+
             egui::Panel::top("toolbar").show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     if ui.button("Add data").clicked()
@@ -95,9 +211,11 @@ impl eframe::App for DexState {
                         let df_result = load_delimited_file(&path);
                         match df_result {
                             Ok(df) => {
-                                self.canvas.add_dataframe(
+                                let (active_canvas, registry) =
+                                    self.active_canvas_and_registry_disjoint();
+                                active_canvas.add_dataframe(
                                     df,
-                                    &mut self.registry,
+                                    registry,
                                     path.file_name()
                                         .map(|name| name.to_string_lossy().to_string())
                                         .unwrap_or_else(|| "Unnamed dataframe".to_owned()),
@@ -111,40 +229,44 @@ impl eframe::App for DexState {
                         self.drawer.visible = !self.drawer.visible;
                     }
                     if ui.button("Add edge").clicked() {
-                        if let canvas::NodeConnectionState::None = self.canvas.connecting_nodes {
-                            self.canvas.connecting_nodes = canvas::NodeConnectionState::Searching;
+                        if let canvas::NodeConnectionState::None =
+                            self.active_canvas().connecting_nodes
+                        {
+                            self.active_canvas().connecting_nodes =
+                                canvas::NodeConnectionState::Searching;
                         } else {
                             // Eventually add cancel
                         }
                     }
                     if ui.button("Add transform").clicked() {
-                        self.canvas
+                        self.active_canvas()
                             .add_node(NodeVariant::Transform(TransformPayload::default()));
                     }
                     if ui.button("Add text").clicked() {
-                        self.canvas
+                        self.active_canvas()
                             .add_node(NodeVariant::Text(TextPayload::default()));
                     }
                     if ui.button("Add integer").clicked() {
-                        self.canvas
+                        self.active_canvas()
                             .add_node(NodeVariant::Integer(NumericPayload::default()));
                     }
                     if ui.button("Add float").clicked() {
-                        self.canvas
+                        self.active_canvas()
                             .add_node(NodeVariant::Float(NumericPayload::default()));
                     }
                     if ui.button("Open debug menu").clicked() {
                         self.show_debug = true;
                     }
                     if ui.button("Save").clicked() {
-                        self.canvas.serialize_to_paths(std::path::Path::new(
-                            "/Users/seb-hyland/Downloads/dex_serial/test",
-                        ));
+                        self.active_canvas()
+                            .serialize_to_paths(std::path::Path::new(
+                                "/Users/seb-hyland/Downloads/dex_serial/test",
+                            ));
                     }
                     if ui.button("Load").clicked()
                         && let Some(path) = rfd::FileDialog::new().pick_file()
                     {
-                        self.canvas.load_from_path(path);
+                        self.active_canvas().load_from_path(path);
                     }
                     let ctx = ui.ctx().clone();
                     egui::Window::new("Debug Inspector")
@@ -156,7 +278,8 @@ impl eframe::App for DexState {
             });
 
             egui::CentralPanel::default().show_inside(ui, |ui| {
-                self.canvas.draw(ui, &mut self.registry);
+                let (active_canvas, registry) = self.active_canvas_and_registry_disjoint();
+                active_canvas.draw(ui, registry);
             });
         });
     }
