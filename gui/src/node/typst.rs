@@ -27,8 +27,8 @@ fn fonts() -> Vec<Font> {
     let mut all_fonts = Vec::new();
 
     let all_font_data: [&'static [u8]; _] = [
-        include_bytes!("../../assets/Inter.ttf"),
-        include_bytes!("../../assets/LibertinusMath-Regular.ttf"),
+        include_bytes!("../../assets/Inter_Regular.ttf"),
+        include_bytes!("../../assets/LibertinusMath.ttf"),
     ];
 
     for font_data in all_font_data {
@@ -61,7 +61,7 @@ impl IncrementalTypstWorld {
 
     pub fn render(&mut self, code: &str) -> Result<String, EcoVec<SourceDiagnostic>> {
         let header = r#"
-    #set page(width: auto, height: auto, margin: 10pt)
+    #set page(fill: none, width: auto, height: auto)
     #set text(font: "Inter")
     #show math.equation: set text(font: "Libertinus Math")
             "#;
@@ -146,9 +146,9 @@ impl NodeDynamics for TypstPayload {
                             .fit_to_original_size(ui.ctx().pixels_per_point()),
                         );
                     });
-                    (image.response.rect, None)
+                    image.response.rect
                 } else {
-                    (Rect::ZERO, None)
+                    Rect::ZERO
                 }
             },
             |ui| {

@@ -11,14 +11,14 @@ use crate::{
     theme::LIGHT_THEME,
 };
 
+use egui::FontData;
 use egui_extras::install_image_loaders;
 use lib::load::load_delimited_file;
 
 use std::hash::Hash;
 
-use eframe::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
 use egui::{
-    FontData, FontFamily, Frame, TextEdit, Visuals,
+    FontFamily, Frame, TextEdit, Visuals,
     text::{CCursor, CCursorRange},
 };
 use egui_dnd::utils::shift_vec;
@@ -28,7 +28,6 @@ mod drawer;
 mod node;
 mod prelude;
 mod registry;
-mod table;
 mod theme;
 
 fn main() {
@@ -43,15 +42,33 @@ fn main() {
             install_image_loaders(&cc.egui_ctx);
             cc.egui_ctx.set_visuals(Visuals::from(LIGHT_THEME));
 
-            let inter_bytes = include_bytes!("../assets/Inter.ttf");
-            cc.egui_ctx.add_font(FontInsert::new(
-                "inter",
-                FontData::from_static(inter_bytes),
-                vec![InsertFontFamily {
-                    family: FontFamily::Proportional,
-                    priority: FontPriority::Highest,
-                }],
-            ));
+            let mut fonts = egui::FontDefinitions::default();
+
+            let mut add_font = |name: &'static str, data: &'static [u8]| {
+                fonts
+                    .font_data
+                    .insert(name.to_owned(), FontData::from_static(data).into());
+                fonts
+                    .families
+                    .insert(FontFamily::Name(name.into()), vec![name.to_owned()]);
+            };
+
+            add_font("inter", include_bytes!("../assets/Inter_Regular.ttf"));
+            add_font("inter_italic", include_bytes!("../assets/Inter_Italic.ttf"));
+            add_font("inter_bold", include_bytes!("../assets/Inter_Bold.ttf"));
+            add_font(
+                "inter_bold_italic",
+                include_bytes!("../assets/Inter_BoldItalic.ttf"),
+            );
+
+            fonts
+                .families
+                .get_mut(&FontFamily::Proportional)
+                .unwrap()
+                .insert(0, "inter".to_owned());
+
+            cc.egui_ctx.set_fonts(fonts);
+
             Ok(Box::new(DexState::new()))
         }),
     )

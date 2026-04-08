@@ -5,11 +5,29 @@ use crate::prelude::*;
 use std::f64;
 
 use eframe::egui::{Frame, TextEdit, TextStyle};
+use egui::{Align, FontFamily, FontId, Layout};
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct TextPayload {
     view: HeadlessWindow,
     pub text: String,
+    bold: bool,
+    italic: bool,
+    alignment: Align,
+    size: f32,
+}
+
+impl Default for TextPayload {
+    fn default() -> Self {
+        Self {
+            view: HeadlessWindow::default(),
+            text: String::new(),
+            bold: false,
+            italic: false,
+            alignment: Align::Min,
+            size: 16.0,
+        }
+    }
 }
 
 impl TextPayload {
@@ -24,20 +42,53 @@ impl TextPayload {
 impl NodeDynamics for TextPayload {
     fn draw(&mut self, ctx: &mut DrawContext<'_>) {
         self.view.show(ctx, |ui| {
-            TextEdit::singleline(&mut self.text)
-                .background_color(Color32::TRANSPARENT)
-                .font(TextStyle::Heading)
-                .frame(Frame::NONE)
-                .clip_text(false)
-                .desired_width(0.0)
-                .hint_text("...")
-                .layouter(&mut Window::wrapping_layouter(
-                    ctx.theme.text,
-                    ui.available_width(),
-                    "",
-                ))
-                .show(ui)
-                .text_clip_rect
+            let font = {
+                let font_name = match (self.bold, self.italic) {
+                    (false, false) => "inter",
+                    (true, false) => "inter_bold",
+                    (false, true) => "inter_italic",
+                    (true, true) => "inter_bold_italic",
+                };
+                FontId::new(self.size, FontFamily::Name(font_name.into()))
+            };
+
+            let alignment = self.alignment;
+            let inner = |ui: &mut Ui| {
+                let editor = TextEdit::singleline(&mut self.text)
+                    .background_color(Color32::TRANSPARENT)
+                    .frame(Frame::NONE)
+                    .clip_text(false)
+                    .desired_width(0.0)
+                    .hint_text("...")
+                    .layouter(&mut Window::wrapping_layouter(
+                        Some(font),
+                        ctx.theme.text,
+                        self.alignment,
+                        ui.available_width(),
+                    ))
+                    .show(ui);
+
+                editor.response.context_menu(|ui| {
+                    ui.label("Text Settings");
+                    ui.separator();
+
+                    ui.horizontal(|ui| {
+                        ui.label("Align:");
+                        ui.selectable_value(&mut self.alignment, Align::Min, "Left");
+                        ui.selectable_value(&mut self.alignment, Align::Center, "Center");
+                        ui.selectable_value(&mut self.alignment, Align::Max, "Right");
+                    });
+                    ui.checkbox(&mut self.bold, "Bold");
+                    ui.checkbox(&mut self.italic, "Italic");
+                    ui.horizontal(|ui| {
+                        ui.label("Size:");
+                        ui.add(egui::Slider::new(&mut self.size, 4.0..=300.0).suffix("pt"));
+                    });
+                });
+                editor.text_clip_rect
+            };
+
+            ui.with_layout(Layout::top_down(alignment), inner).inner
         });
     }
 

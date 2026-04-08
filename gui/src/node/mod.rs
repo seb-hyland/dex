@@ -1,3 +1,4 @@
+use crate::node::dataframe::plot::DataframePlotPayload;
 use crate::node::typst::TypstPayload;
 use crate::prelude::*;
 use crate::{
@@ -11,6 +12,7 @@ use crate::{
     theme::Theme,
 };
 
+use derive_more::Unwrap;
 use eframe::egui::{Id, Sense, Stroke, StrokeKind};
 use enum_dispatch::enum_dispatch;
 
@@ -27,15 +29,20 @@ pub struct Node {
     pub variant: NodeVariant,
 }
 
+#[derive(Unwrap, Serialize, Deserialize)]
+#[unwrap(ref, ref_mut)]
 #[enum_dispatch(NodeDynamics)]
-#[derive(Serialize, Deserialize)]
 pub enum NodeVariant {
     Dataframe(DataframePayload),
+    DataframePlot(DataframePlotPayload),
+
     Transform(TransformPayload),
     TransformArg(TransformArgPayload),
+
     Text(TextPayload),
     Integer(NumericPayload<i32>),
     Float(NumericPayload<f64>),
+
     Typst(TypstPayload),
 }
 

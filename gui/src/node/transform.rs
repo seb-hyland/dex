@@ -10,6 +10,7 @@ use crate::{
     registry::{Registry, RegistryItemInner},
 };
 
+use egui::Align;
 use lib::compute::{self, TransformValue, python};
 use petgraph::visit::EdgeRef;
 
@@ -116,13 +117,13 @@ impl NodeDynamics for TransformPayload {
             .reduce(|item1, item2| item1 + "\n" + &item2);
 
         let mut execute = false;
+        let mut commands = Vec::new();
         self.view.show(
             ctx,
             |ui| {
                 let response = ui.allocate_ui(ui.available_size(), |ui| {
                     let hovered = ui.rect_contains_pointer(self_rect);
                     let default_x_spacing = ui.spacing().item_spacing.x;
-                    let mut commands = Vec::new();
 
                     self.args.retain_mut(|arg| {
                         TextEdit::singleline(&mut arg.label)
@@ -132,11 +133,13 @@ impl NodeDynamics for TransformPayload {
                             .clip_text(false)
                             .desired_width(0.0)
                             .layouter(&mut Window::wrapping_layouter(
+                                None,
                                 ctx.theme.text,
+                                Align::Min,
                                 ui.available_width(),
-                                ":",
                             ))
                             .show(ui);
+                        ui.label(":");
 
                         ui.spacing_mut().item_spacing.x = 0.0;
                         let arg_node_idx = arg.node.unwrap();
@@ -162,9 +165,10 @@ impl NodeDynamics for TransformPayload {
                             .clip_text(false)
                             .desired_width(0.0)
                             .layouter(&mut Window::wrapping_layouter(
+                                None,
                                 ctx.theme.text,
+                                Align::Min,
                                 ui.available_width(),
-                                "",
                             ))
                             .show(ui);
                         let retained = !ui.add_visible(hovered, Button::new("x")).clicked();
@@ -186,10 +190,8 @@ impl NodeDynamics for TransformPayload {
                         });
                         commands.push(CanvasCommand::AddTransformArg { origin: cur_index });
                     }
-
-                    commands
                 });
-                (response.response.rect, Some(response.inner))
+                response.response.rect
             },
             |ui| {
                 ComboBox::from_id_salt(ui.id().with("transform_language"))
@@ -239,6 +241,7 @@ impl NodeDynamics for TransformPayload {
             },
         );
 
+        ctx.command_queue.extend(commands);
         if execute {
             let transform_result = python::apply_transform(
                 &self.python,

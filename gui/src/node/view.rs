@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{Align, Galley, Layout, Sense, StrokeKind, TextBuffer, TextStyle, UiBuilder};
+use egui::{FontId, Stroke};
+use typst::text::FontStyle;
 
 #[derive(Serialize, Deserialize)]
 pub struct Window {
@@ -56,7 +58,7 @@ impl Window {
     pub fn show(
         &mut self,
         ctx: &mut DrawContext<'_>,
-        add_header: impl FnOnce(&mut Ui) -> (Rect, Option<Vec<CanvasCommand>>),
+        add_header: impl FnOnce(&mut Ui) -> Rect,
         add_main: impl FnOnce(&mut Ui),
     ) {
         let (header_rect, bounding_rect, padding) = self.rects(ctx.screen_location);
@@ -166,11 +168,8 @@ impl Window {
                     ui.with_layout(
                         Layout::left_to_right(Align::Center).with_main_wrap(true),
                         |ui| {
-                            let (header_rect, commands) = add_header(ui);
+                            let header_rect = add_header(ui);
                             self.cached_header_height = header_rect.height();
-                            if let Some(command_vec) = commands {
-                                ctx.command_queue.extend(command_vec);
-                            }
                         },
                     );
 
@@ -215,20 +214,20 @@ impl Window {
     }
 
     pub fn wrapping_layouter(
+        font: Option<FontId>,
         text_color: Color32,
+        alignment: Align,
         wrap_width: f32,
-        suffix: &str,
     ) -> impl FnMut(&Ui, &dyn TextBuffer, f32) -> Arc<Galley> {
         move |ui, buffer, _wrap| {
-            let mut output_string = buffer.as_str().to_string();
-            output_string.push_str(suffix);
-
-            let layout_job = LayoutJob::simple(
-                output_string,
-                TextStyle::Heading.resolve(ui.style()),
+            let mut layout_job = LayoutJob::simple(
+                buffer.as_str().to_string(),
+                font.clone()
+                    .unwrap_or_else(|| TextStyle::Body.resolve(ui.style())),
                 text_color,
                 wrap_width,
             );
+            layout_job.halign = alignment;
             ui.fonts_mut(|f| f.layout_job(layout_job))
         }
     }
@@ -277,11 +276,16 @@ impl HeadlessWindow {
     pub fn show(&mut self, ctx: &mut DrawContext<'_>, add_body: impl FnOnce(&mut Ui) -> Rect) {
         let (bounding_rect, padding) = self.rect(ctx);
 
+        let border = if ctx.ui.rect_contains_pointer(bounding_rect.expand(2.0)) {
+            ctx.theme.border
+        } else {
+            Stroke::NONE
+        };
         ctx.ui.painter().rect(
             bounding_rect,
             ctx.theme.corner_radius,
-            ctx.theme.background,
-            ctx.theme.border,
+            Color32::TRANSPARENT,
+            border,
             StrokeKind::Inside,
         );
 

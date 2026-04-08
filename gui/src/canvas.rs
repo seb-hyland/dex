@@ -261,9 +261,12 @@ impl Canvas {
                 self.placing_node = None;
             }
         }
+
         let mut interacted_node = None;
+        let frame_time = ui.input(|i| i.time);
+
         for command in command_queue {
-            command.exe(self, registry, &mut interacted_node);
+            command.exe(self, registry, &mut interacted_node, frame_time);
         }
 
         // Move dragged node to front
@@ -332,6 +335,8 @@ impl Canvas {
 
         let node = NodeVariant::Dataframe(DataframePayload {
             data_ref,
+            scroll_to: None,
+            highlighted_row: None,
             view: Window::default(),
         });
         self.add_node(node)
@@ -487,6 +492,10 @@ pub enum CanvasCommand {
         start: NodeIdx,
         end: NodeIdx,
     },
+    ScrollTable {
+        table_node: NodeIdx,
+        row: usize,
+    },
     AddTransformArg {
         origin: NodeIdx,
     },
@@ -502,6 +511,7 @@ impl CanvasCommand {
         canvas: &mut Canvas,
         registry: &mut Registry,
         interacted_node: &mut Option<NodeIdx>,
+        frame_time: f64,
     ) {
         match self {
             Self::MoveNode { idx, delta } => {
@@ -524,6 +534,16 @@ impl CanvasCommand {
                     NodeVariant::TransformArg(_) => canvas.graph.add_edge(end, start, ()),
                     _ => canvas.graph.add_edge(start, end, ()),
                 };
+            }
+            Self::ScrollTable { table_node, row } => {
+                let df_node = canvas
+                    .graph
+                    .node_weight_mut(table_node)
+                    .unwrap()
+                    .variant
+                    .unwrap_dataframe_mut();
+                df_node.scroll_to = Some(row);
+                df_node.highlighted_row = Some((row, frame_time));
             }
             Self::AddTransformArg { origin } => {
                 let next_color = if let NodeVariant::Transform(ref mut t) =
