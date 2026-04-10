@@ -1,12 +1,11 @@
-use crate::node::dataframe::plot::DataframePlotPayload;
-use crate::node::typst::TypstPayload;
 use crate::prelude::*;
 use crate::{
     canvas::{CanvasCommand, DisjointGraphRef, ViewState},
     node::{
-        dataframe::DataframePayload,
+        dataframe::{DataframePayload, plot::DataframePlotPayload},
         primitives::{NumericPayload, TextPayload},
         transform::{TransformArgPayload, TransformPayload},
+        typst::TypstPayload,
     },
     registry::Registry,
     theme::Theme,

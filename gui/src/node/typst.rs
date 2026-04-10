@@ -61,7 +61,7 @@ impl IncrementalTypstWorld {
 
     pub fn render(&mut self, code: &str) -> Result<String, EcoVec<SourceDiagnostic>> {
         let header = r#"
-    #set page(fill: none, width: auto, height: auto)
+    #set page(fill: none, width: auto, height: auto, margin: 10pt)
     #set text(font: "Inter")
     #show math.equation: set text(font: "Libertinus Math")
             "#;
@@ -135,7 +135,6 @@ impl NodeDynamics for TypstPayload {
                     let uri = format!("bytes://typst_{}.svg", node_id);
                     // Evict cache
                     ui.ctx().forget_image(&uri);
-
                     let image = ui.vertical_centered(|ui| {
                         ui.add(
                             Image::new(ImageSource::Bytes {
@@ -143,7 +142,7 @@ impl NodeDynamics for TypstPayload {
                                 bytes: image.into(),
                             })
                             .texture_options(TextureOptions::NEAREST)
-                            .fit_to_original_size(ui.ctx().pixels_per_point()),
+                            .fit_to_original_size(1.5),
                         );
                     });
                     image.response.rect
