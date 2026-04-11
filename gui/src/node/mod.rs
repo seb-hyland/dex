@@ -1,3 +1,4 @@
+use crate::node::webview::WebviewPayload;
 use crate::prelude::*;
 use crate::{
     canvas::{CanvasCommand, DisjointGraphRef, ViewState},
@@ -43,6 +44,7 @@ pub enum NodeVariant {
     Float(NumericPayload<f64>),
 
     Typst(TypstPayload),
+    Webview(WebviewPayload),
 }
 
 pub struct DrawContext<'ctx> {

@@ -1,3 +1,4 @@
+use crate::node::webview::WebviewPayload;
 use crate::prelude::*;
 use crate::{
     drawer::Drawer,
@@ -11,17 +12,16 @@ use crate::{
     theme::LIGHT_THEME,
 };
 
-use egui::FontData;
-use egui_extras::install_image_loaders;
 use lib::load::load_delimited_file;
 
 use std::hash::Hash;
 
 use egui::{
-    FontFamily, Frame, TextEdit, Visuals,
+    FontData, FontFamily, Frame, TextEdit, Visuals,
     text::{CCursor, CCursorRange},
 };
 use egui_dnd::utils::shift_vec;
+use egui_extras::install_image_loaders;
 
 mod canvas;
 mod drawer;
@@ -33,6 +33,9 @@ mod theme;
 fn main() {
     dioxus_devtools::connect_subsecond();
     env_logger::init();
+
+    #[cfg(target_os = "linux")]
+    gtk::init().unwrap();
 
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
@@ -81,7 +84,6 @@ struct DexState {
     active_tab: usize,
     renaming_tab: RenamingTab,
     drawer: Drawer,
-    show_debug: bool,
 }
 
 struct Tab {
@@ -117,7 +119,6 @@ impl DexState {
                 visible: false,
                 items: Vec::new(),
             },
-            show_debug: false,
         }
     }
 
@@ -134,8 +135,11 @@ impl DexState {
 }
 
 impl eframe::App for DexState {
-    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         subsecond::call(|| {
+            #[cfg(target_os = "linux")]
+            gtk::main_iteration_do(false);
+
             if self.drawer.visible {
                 egui::Panel::left("drawer")
                     .resizable(false)
@@ -278,8 +282,9 @@ impl eframe::App for DexState {
                         self.active_canvas()
                             .add_node(NodeVariant::Typst(TypstPayload::default()));
                     }
-                    if ui.button("Open debug menu").clicked() {
-                        self.show_debug = true;
+                    if ui.button("Add webview").clicked() {
+                        self.active_canvas()
+                            .add_node(NodeVariant::Webview(WebviewPayload::new(frame).unwrap()));
                     }
                     if ui.button("Save").clicked() {
                         self.active_canvas()
@@ -292,18 +297,12 @@ impl eframe::App for DexState {
                     {
                         self.active_canvas().load_from_path(path);
                     }
-                    let ctx = ui.ctx().clone();
-                    egui::Window::new("Debug Inspector")
-                        .open(&mut self.show_debug)
-                        .show(&ctx, |ui| {
-                            ctx.settings_ui(ui);
-                        });
                 });
             });
 
             egui::CentralPanel::default().show_inside(ui, |ui| {
                 let (active_canvas, registry) = self.active_canvas_and_registry_disjoint();
-                active_canvas.draw(ui, registry);
+                active_canvas.draw(ui, registry, frame);
             });
         });
     }

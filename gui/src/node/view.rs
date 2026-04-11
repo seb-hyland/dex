@@ -6,7 +6,6 @@ use std::sync::Arc;
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{Align, Galley, Layout, Sense, StrokeKind, TextBuffer, TextStyle, UiBuilder};
 use egui::{FontId, Stroke};
-use typst::text::FontStyle;
 
 #[derive(Serialize, Deserialize)]
 pub struct Window {

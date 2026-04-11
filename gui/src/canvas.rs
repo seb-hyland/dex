@@ -12,6 +12,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::ptr::NonNull;
 
+use eframe::Frame;
 use eframe::egui::Stroke;
 use eframe::{
     egui::{Id, Sense, Shape},
@@ -52,7 +53,7 @@ pub enum NodeConnectionState {
 }
 
 impl Canvas {
-    pub fn draw(&mut self, ui: &mut Ui, registry: &mut Registry) {
+    pub fn draw(&mut self, ui: &mut Ui, registry: &mut Registry, frame: &mut Frame) {
         let (response, painter) = ui.allocate_painter(ui.available_size_before_wrap(), Sense::DRAG);
         let canvas_rect = response.rect;
         let theme = LIGHT_THEME;
