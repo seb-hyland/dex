@@ -68,6 +68,46 @@ pub fn apply_transform(
                 .map(|s| s.to_string())
                 .as_deref()
             {
+                Ok("pandas.DataFrame") => {
+                    let pa = py.import("pyarrow")?;
+                    let table = pa
+                        .getattr("Table")?
+                        .call_method1("from_pandas", (result,))?;
+
+                    table
+                        .call_method0("combine_chunks")
+                        .and_then(|table| table.call_method0("to_batches"))
+                        .and_then(|list| {
+                            list.extract::<Bound<'_, PyList>>().map_err(|_| {
+                                PyTypeError::new_err(
+                                    "Expected Table to RecordBatch conversion to yield a list",
+                                )
+                            })
+                        })
+                        .and_then(|list| list.get_item(0))
+                        .map_err(TransformErr::from)
+                }
+                Ok("pandas.Series") => {
+                    let result = result.call_method0("to_frame")?;
+
+                    let pa = py.import("pyarrow")?;
+                    let table = pa
+                        .getattr("Table")?
+                        .call_method1("from_pandas", (result,))?;
+
+                    table
+                        .call_method0("combine_chunks")
+                        .and_then(|table| table.call_method0("to_batches"))
+                        .and_then(|list| {
+                            list.extract::<Bound<'_, PyList>>().map_err(|_| {
+                                PyTypeError::new_err(
+                                    "Expected Table to RecordBatch conversion to yield a list",
+                                )
+                            })
+                        })
+                        .and_then(|list| list.get_item(0))
+                        .map_err(TransformErr::from)
+                }
                 Ok("polars.dataframe.frame.DataFrame") => result
                     .call_method0("to_arrow")
                     .and_then(|table| table.call_method0("combine_chunks"))
@@ -94,7 +134,10 @@ pub fn apply_transform(
                     .and_then(|list| list.get_item(0))
                     .map_err(TransformErr::from),
                 Ok("pyarrow.lib.RecordBatch") => Ok(result),
-                _ => Err(TransformErr::OutputNotUnderstood),
+                other => {
+                    println!("{:?}", other);
+                    Err(TransformErr::OutputNotUnderstood)
+                }
             }?;
             let batch = RecordBatch::from_pyarrow_bound(&arrow_result)?;
             Ok(TransformValue::Dataframe(batch))

@@ -12,6 +12,7 @@ use crate::{
     theme::LIGHT_THEME,
 };
 
+use egui::{Button, Id};
 use lib::load::load_delimited_file;
 
 use std::hash::Hash;
@@ -140,12 +141,6 @@ impl eframe::App for DexState {
             #[cfg(target_os = "linux")]
             gtk::main_iteration_do(false);
 
-            if self.drawer.visible {
-                egui::Panel::left("drawer")
-                    .resizable(false)
-                    .show_inside(ui, |ui| {});
-            }
-
             egui::Panel::top("tab_bar").show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     let response = egui_dnd::dnd(ui, "tabs_dnd").show_vec(
@@ -227,6 +222,13 @@ impl eframe::App for DexState {
                 });
             });
 
+            if self.drawer.visible {
+                egui::Panel::left("drawer")
+                    .exact_size(Drawer::SIZE)
+                    .resizable(false)
+                    .show_inside(ui, |ui| {});
+            }
+
             egui::Panel::top("toolbar").show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     if ui.button("Add data").clicked()
@@ -304,6 +306,22 @@ impl eframe::App for DexState {
                 let (active_canvas, registry) = self.active_canvas_and_registry_disjoint();
                 active_canvas.draw(ui, registry, frame);
             });
+
+            let drawer_button_text = if self.drawer.visible { "⏴" } else { "⏵" };
+            egui::Area::new(Id::new("drawer_handle"))
+                .fixed_pos(Pos2 {
+                    x: if self.drawer.visible {
+                        Drawer::SIZE
+                    } else {
+                        0.0
+                    },
+                    y: ui.max_rect().height() / 2.0,
+                })
+                .show(ui.ctx(), |ui| {
+                    if ui.button(drawer_button_text).clicked() {
+                        self.drawer.visible = !self.drawer.visible;
+                    }
+                });
         });
     }
 }

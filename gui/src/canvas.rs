@@ -240,20 +240,15 @@ impl Canvas {
                         }
                     }
                 }
-
-                if let Some(placing_idx) = self.placing_node
-                    && placing_idx == cur_idx
-                    && let Some(cursor_screen_pos) =
-                        draw_context.ui.ctx().input(|i| i.pointer.latest_pos())
-                {
-                    // Sync its location with the pointer
-                    let cursor_world_pos = self.view_state.screen_to_world(cursor_screen_pos);
-                    node.location = cursor_world_pos;
-                }
             }
         }
 
-        if self.placing_node.is_some() {
+        if let Some(placing_idx) = self.placing_node {
+            if let Some(cursor_screen_pos) = ui.input(|i| i.pointer.latest_pos()) {
+                // Sync its location with the pointer
+                let cursor_world_pos = self.view_state.screen_to_world(cursor_screen_pos);
+                self.graph.node_weight_mut(placing_idx).unwrap().location = cursor_world_pos;
+            }
             cursor_icon!(ui, Copy);
             if ui
                 .interact(canvas_rect, Id::new("canvas_placement"), Sense::CLICK)

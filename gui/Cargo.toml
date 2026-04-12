@@ -26,4 +26,6 @@ time = { version = "0.3.47", features = ["local-offset"] }
 egui_plot = "0.35.0"
 derive_more = { version = "2.1.1", features = ["try_into", "unwrap"] }
 wry = "0.55.0"
+
+[target.'cfg(linux)'.dependencies]
 gtk = "0.18.2"
