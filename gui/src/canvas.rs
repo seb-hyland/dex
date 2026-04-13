@@ -12,7 +12,6 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::ptr::NonNull;
 
-use eframe::Frame;
 use eframe::egui::Stroke;
 use eframe::{
     egui::{Id, Sense, Shape},
@@ -53,14 +52,16 @@ pub enum NodeConnectionState {
 }
 
 impl Canvas {
-    pub fn draw(&mut self, ui: &mut Ui, registry: &mut Registry, frame: &mut Frame) {
+    pub fn draw(&mut self, ui: &mut Ui, registry: &mut Registry, background_visible: bool) {
         let (response, painter) =
             ui.allocate_painter(ui.available_size_before_wrap(), Sense::DRAG | Sense::CLICK);
         let canvas_rect = response.rect;
         let theme = LIGHT_THEME;
         self.view_state.update_surface(canvas_rect);
 
-        self.draw_background(canvas_rect, &painter, &theme);
+        if background_visible {
+            self.draw_background(canvas_rect, &painter, &theme);
+        }
 
         let mut command_queue = Vec::new();
         let graph_ref = DisjointGraphRef::new(&self.graph);
@@ -421,6 +422,12 @@ impl ViewState {
     #[inline(always)]
     pub fn update_offset(&mut self, delta: Vec2) {
         self.offset += delta;
+        self.update_transform();
+    }
+
+    #[inline(always)]
+    pub fn reset_offset(&mut self) {
+        self.offset = Vec2::ZERO;
         self.update_transform();
     }
 

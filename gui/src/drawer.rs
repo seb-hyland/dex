@@ -6,7 +6,7 @@ use crate::registry::{Registry, RegistryItemInner};
 
 use std::mem;
 
-use egui::Button;
+use egui::{Align, Button, Layout};
 use strum::VariantArray;
 
 #[derive(Default)]
@@ -36,7 +36,14 @@ impl Drawer {
         unsafe { mem::transmute(arr) }
     };
 
-    pub fn draw(&mut self, ui: &mut Ui, canvas: &mut Canvas, registry: &mut Registry) {
+    pub fn draw(
+        &mut self,
+        ui: &mut Ui,
+        canvas: &mut Canvas,
+        registry: &mut Registry,
+        background_visible: &mut bool,
+        want_center: &mut bool,
+    ) {
         ui.add_space(10.0);
         ui.label("Blueprints");
         ui.separator();
@@ -95,6 +102,16 @@ impl Drawer {
                 }
             }
         });
+
+        ui.allocate_ui_with_layout(
+            ui.available_size(),
+            Layout::bottom_up(Align::Center),
+            |ui| {
+                ui.add_space(30.0);
+                *want_center = ui.button("Center active canvas").clicked();
+                ui.checkbox(background_visible, "Background visible");
+            },
+        );
     }
 }
 

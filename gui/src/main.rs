@@ -71,6 +71,7 @@ struct DexState {
     tabs: Vec<Tab>,
     active_tab: usize,
     renaming_tab: RenamingTab,
+    background_visible: bool,
     drawer: Drawer,
 }
 
@@ -107,6 +108,7 @@ impl DexState {
             }],
             active_tab: 0,
             renaming_tab: RenamingTab::None,
+            background_visible: true,
             drawer: Drawer {
                 visible: true,
                 data_items: Vec::new(),
@@ -226,23 +228,31 @@ impl eframe::App for DexState {
             });
 
             if self.drawer.visible {
+                let mut want_center = false;
+                let active_canvas = Self::active_canvas(&mut self.tabs, self.active_tab);
                 egui::Panel::left("drawer")
                     .exact_size(Drawer::SIZE)
                     .resizable(false)
                     .show_inside(ui, |ui| {
                         self.drawer.draw(
                             ui,
-                            Self::active_canvas(&mut self.tabs, self.active_tab),
+                            active_canvas,
                             &mut self.registry,
+                            &mut self.background_visible,
+                            &mut want_center,
                         );
                     });
+
+                if want_center {
+                    active_canvas.view_state.reset_offset();
+                }
             }
 
             egui::CentralPanel::default().show_inside(ui, |ui| {
                 Self::active_canvas(&mut self.tabs, self.active_tab).draw(
                     ui,
                     &mut self.registry,
-                    frame,
+                    self.background_visible,
                 );
             });
 

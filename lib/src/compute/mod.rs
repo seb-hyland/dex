@@ -1,4 +1,4 @@
-use std::ffi::CString;
+use std::{ffi::CString, fmt::Display};
 
 use arrow::array::RecordBatch;
 use pyo3::PyErr;
@@ -24,8 +24,20 @@ pub(crate) type TransformResult<T> = Result<T, TransformErr>;
 #[derive(Debug)]
 pub enum TransformErr {
     MissingTransformFunction,
-    PyErr(PyErr),
     OutputNotUnderstood,
+    PyErr(PyErr),
+}
+
+impl Display for TransformErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingTransformFunction => write!(f, "Could not find a transform function"),
+            Self::OutputNotUnderstood => {
+                write!(f, "Output value could not be converted into a node")
+            }
+            Self::PyErr(e) => write!(f, "Python error:\n{e}"),
+        }
+    }
 }
 
 impl From<PyErr> for TransformErr {

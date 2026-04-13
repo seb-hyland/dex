@@ -10,17 +10,17 @@ use crate::{
     registry::{Registry, RegistryItemInner},
 };
 
-use egui::Align;
+use eframe::egui::{Button, ComboBox, Frame, Sense, Stroke, StrokeKind, TextEdit, TextStyle};
+use egui::{Align, Layout};
+use egui_code_editor::{CodeEditor, ColorTheme, Completer, Syntax};
 use lib::compute::{self, TransformValue, python};
 use petgraph::visit::EdgeRef;
 
 use std::collections::HashSet;
 
-use eframe::egui::{Button, ComboBox, Frame, Sense, Stroke, StrokeKind, TextEdit, TextStyle};
-use egui_code_editor::{CodeEditor, ColorTheme, Completer, Syntax};
-
 #[derive(Serialize, Deserialize)]
 pub struct TransformPayload {
+    unit_arg_name: String,
     pub args: Vec<TransformArg>,
     pub last_color: Option<Color32>,
     active_lang: TransformLang,
@@ -35,6 +35,7 @@ pub struct TransformPayload {
 impl Default for TransformPayload {
     fn default() -> Self {
         Self {
+            unit_arg_name: "My Transform".to_owned(),
             args: Vec::new(),
             active_lang: TransformLang::Python,
             completer: Completer::new_with_syntax(&Syntax::python()),
@@ -122,76 +123,104 @@ impl NodeDynamics for TransformPayload {
             ctx,
             ctx.theme.background,
             |ui| {
-                let response = ui.allocate_ui(ui.available_size(), |ui| {
-                    let hovered = ui.rect_contains_pointer(self_rect);
-                    let default_x_spacing = ui.spacing().item_spacing.x;
+                let response = ui.allocate_ui_with_layout(
+                    ui.available_size(),
+                    Layout::left_to_right(Align::Center),
+                    |ui| {
+                        let hovered = ui.rect_contains_pointer(self_rect);
+                        let default_x_spacing = ui.spacing().item_spacing.x;
 
-                    self.args.retain_mut(|arg| {
-                        TextEdit::singleline(&mut arg.label)
-                            .background_color(Color32::TRANSPARENT)
-                            .font(TextStyle::Heading)
-                            .frame(Frame::NONE)
-                            .clip_text(false)
-                            .desired_width(0.0)
-                            .layouter(&mut Window::wrapping_layouter(
-                                None,
-                                ctx.theme.text,
-                                Align::Min,
-                                ui.available_width(),
-                            ))
-                            .show(ui);
-                        ui.label(":");
+                        if self.args.is_empty() {
+                            TextEdit::singleline(&mut self.unit_arg_name)
+                                .background_color(Color32::TRANSPARENT)
+                                .frame(Frame::NONE)
+                                .clip_text(false)
+                                .desired_width(0.0)
+                                // .layouter(&mut Window::wrapping_layouter(
+                                //     None,
+                                //     ctx.theme.text,
+                                //     Align::Min,
+                                //     ui.available_width(),
+                                // ))
+                                .show(ui);
+                        } else {
+                            self.args.retain_mut(|arg| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                TextEdit::singleline(&mut arg.label)
+                                    .background_color(Color32::TRANSPARENT)
+                                    .frame(Frame::NONE)
+                                    .clip_text(false)
+                                    .desired_width(0.0)
+                                    // .layouter(&mut Window::wrapping_layouter(
+                                    //     None,
+                                    //     ctx.theme.text,
+                                    //     Align::Min,
+                                    //     ui.available_width(),
+                                    // ))
+                                    .show(ui);
 
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        let arg_node_idx = arg.node.unwrap();
-                        let is_connected = graph.edge_count(arg_node_idx) != 0;
-                        let arg_resp = TextEdit::singleline(&mut arg.arg_name)
-                            .background_color(Color32::TRANSPARENT)
-                            .font(TextStyle::Heading)
-                            .frame(Frame::new().corner_radius(ctx.theme.corner_radius).stroke(
-                                Stroke {
-                                    color: if is_connected {
-                                        graph
-                                            .get(arg.node.unwrap())
-                                            .unwrap()
-                                            .variant
-                                            .override_edge_color()
-                                            .unwrap()
-                                    } else {
-                                        default_border.color
-                                    },
-                                    ..default_border
-                                },
-                            ))
-                            .clip_text(false)
-                            .desired_width(0.0)
-                            .layouter(&mut Window::wrapping_layouter(
-                                None,
-                                ctx.theme.text,
-                                Align::Min,
-                                ui.available_width(),
-                            ))
-                            .show(ui);
-                        let retained = !ui.add_visible(hovered, Button::new("x")).clicked();
+                                ui.spacing_mut().item_spacing.x = default_x_spacing;
+                                ui.label(":");
 
-                        commands.push(CanvasCommand::UpdateTransformArgLocation {
-                            idx: arg.node.unwrap(),
-                            new_rect: arg_resp.response.rect,
-                        });
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                let arg_node_idx = arg.node.unwrap();
+                                let is_connected = graph.edge_count(arg_node_idx) != 0;
+                                let arg_resp = TextEdit::singleline(&mut arg.arg_name)
+                                    .background_color(Color32::TRANSPARENT)
+                                    .frame(
+                                        Frame::new().corner_radius(ctx.theme.corner_radius).stroke(
+                                            Stroke {
+                                                color: if is_connected {
+                                                    graph
+                                                        .get(arg.node.unwrap())
+                                                        .unwrap()
+                                                        .variant
+                                                        .override_edge_color()
+                                                        .unwrap()
+                                                } else {
+                                                    default_border.color
+                                                },
+                                                ..default_border
+                                            },
+                                        ),
+                                    )
+                                    .clip_text(false)
+                                    .desired_width(0.0)
+                                    // .layouter(&mut Window::wrapping_layouter(
+                                    //     None,
+                                    //     ctx.theme.text,
+                                    //     Align::Min,
+                                    //     ui.available_width(),
+                                    // ))
+                                    .show(ui);
 
-                        ui.spacing_mut().item_spacing.x = default_x_spacing;
-                        retained
-                    });
+                                ui.spacing_mut().item_spacing.x = default_x_spacing;
+                                let retained = !ui.add_visible(hovered, Button::new("x")).clicked();
 
-                    if ui.add_visible(hovered, Button::new("+")).clicked() {
-                        self.args.push(TransformArg {
-                            label: "Action on".to_owned(),
-                            arg_name: "myArg".to_owned(),
-                            node: None,
-                        });
-                        commands.push(CanvasCommand::AddTransformArg { origin: cur_index });
-                    }
-                });
+                                commands.push(CanvasCommand::UpdateTransformArgLocation {
+                                    idx: arg.node.unwrap(),
+                                    new_rect: arg_resp.response.rect,
+                                });
+
+                                retained
+                            });
+                        }
+
+                        if ui.add_visible(hovered, Button::new("+")).clicked() {
+                            let label = if self.args.is_empty() {
+                                self.unit_arg_name.clone()
+                            } else {
+                                "Action on".to_owned()
+                            };
+                            self.args.push(TransformArg {
+                                label,
+                                arg_name: "thisValue".to_owned(),
+                                node: None,
+                            });
+                            commands.push(CanvasCommand::AddTransformArg { origin: cur_index });
+                        }
+                    },
+                );
                 response.response.rect
             },
             |ui| {
@@ -228,7 +257,7 @@ impl NodeDynamics for TransformPayload {
 
                 let footer_height = ui
                     .vertical(|ui| {
-                        ui.colored_label(Color32::YELLOW, warnings_text.unwrap_or_default());
+                        ui.colored_label(Color32::BROWN, warnings_text.unwrap_or_default());
                         ui.colored_label(Color32::RED, &self.error);
                         if ui.button("Execute transform").clicked() {
                             execute = true;

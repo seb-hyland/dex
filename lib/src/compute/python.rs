@@ -3,11 +3,11 @@ use arrow::{
     pyarrow::{FromPyArrow, ToPyArrow},
 };
 use pyo3::{
-    Bound, PyAny, PyErr, PyResult, Python,
+    Bound, PyAny, PyResult, Python,
     exceptions::PyTypeError,
     types::{
         PyAnyMethods, PyFloat, PyInt, PyList, PyListMethods, PyModule, PyModuleMethods, PyString,
-        PyTuple, PyTypeMethods,
+        PyTypeMethods,
     },
 };
 
