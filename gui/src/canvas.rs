@@ -54,7 +54,8 @@ pub enum NodeConnectionState {
 
 impl Canvas {
     pub fn draw(&mut self, ui: &mut Ui, registry: &mut Registry, frame: &mut Frame) {
-        let (response, painter) = ui.allocate_painter(ui.available_size_before_wrap(), Sense::DRAG);
+        let (response, painter) =
+            ui.allocate_painter(ui.available_size_before_wrap(), Sense::DRAG | Sense::CLICK);
         let canvas_rect = response.rect;
         let theme = LIGHT_THEME;
         self.view_state.update_surface(canvas_rect);
@@ -276,13 +277,15 @@ impl Canvas {
             self.indices_by_depth.push(interacted_idx);
         }
 
-        // If Canvas background was dragged
+        // If Canvas background was interacted
         match DrawInteraction::from(response) {
-            DrawInteraction::Hovered => cursor_icon!(ui, PointingHand),
             DrawInteraction::Dragged(drag_delta) => {
                 cursor_icon!(ui, Grabbing);
                 self.view_state
                     .update_offset(-drag_delta / self.view_state.scale());
+            }
+            DrawInteraction::Clicked => {
+                self.connecting_nodes = NodeConnectionState::None;
             }
             _ => {}
         }
@@ -537,7 +540,8 @@ impl CanvasCommand {
                     .node_weight_mut(table_node)
                     .unwrap()
                     .variant
-                    .unwrap_dataframe_mut();
+                    .try_as_dataframe_mut()
+                    .unwrap();
                 df_node.scroll_to = Some(row);
                 df_node.highlighted_row = Some((row, frame_time));
             }

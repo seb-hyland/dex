@@ -39,6 +39,7 @@ impl NodeDynamics for WebviewPayload {
     fn draw(&mut self, ctx: &mut DrawContext<'_>) {
         self.view.show(
             ctx,
+            ctx.theme.background,
             |ui| {
                 let pos = ui.next_widget_position();
                 let width = ui.available_width();

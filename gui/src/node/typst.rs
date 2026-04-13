@@ -113,14 +113,30 @@ impl typst::World for IncrementalTypstWorld {
     }
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct TypstPayload {
     code: String,
     #[serde(skip)]
     world: IncrementalTypstWorld,
-    image: Option<Vec<u8>>,
+    image: Vec<u8>,
     view: Window,
     cached_height: f32,
+}
+
+impl Default for TypstPayload {
+    fn default() -> Self {
+        let mut world = IncrementalTypstWorld::default();
+        let code = String::new();
+        let image = world.render(&code).unwrap().as_bytes().into();
+
+        Self {
+            code,
+            world,
+            image,
+            view: Window::default(),
+            cached_height: 0.0,
+        }
+    }
 }
 
 impl NodeDynamics for TypstPayload {
@@ -130,25 +146,22 @@ impl NodeDynamics for TypstPayload {
 
         self.view.show(
             ctx,
+            Color32::TRANSPARENT,
             |ui| {
-                if let Some(image) = image {
-                    let uri = format!("bytes://typst_{}.svg", node_id);
-                    // Evict cache
-                    ui.ctx().forget_image(&uri);
-                    let image = ui.vertical_centered(|ui| {
-                        ui.add(
-                            Image::new(ImageSource::Bytes {
-                                uri: uri.into(),
-                                bytes: image.into(),
-                            })
-                            .texture_options(TextureOptions::NEAREST)
-                            .fit_to_original_size(1.5),
-                        );
-                    });
-                    image.response.rect
-                } else {
-                    Rect::ZERO
-                }
+                let uri = format!("bytes://typst_{}.svg", node_id);
+                // Evict cache
+                ui.ctx().forget_image(&uri);
+                let image = ui.vertical_centered(|ui| {
+                    ui.add(
+                        Image::new(ImageSource::Bytes {
+                            uri: uri.into(),
+                            bytes: image.into(),
+                        })
+                        .texture_options(TextureOptions::NEAREST)
+                        .fit_to_original_size(1.5),
+                    );
+                });
+                image.response.rect
             },
             |ui| {
                 let line_height = ui.text_style_height(&TextStyle::Monospace);
@@ -169,7 +182,7 @@ impl NodeDynamics for TypstPayload {
                 let compile_output = self.world.render(&self.code);
                 let footer_height = match compile_output {
                     Ok(v) => {
-                        self.image = Some(v.as_bytes().to_vec());
+                        self.image = v.as_bytes().to_vec();
                         0.0
                     }
                     Err(e) => ui

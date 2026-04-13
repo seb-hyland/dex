@@ -12,7 +12,7 @@ use egui::{Align, Frame, TextEdit};
 pub mod plot;
 mod table;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct DataframePayload {
     pub data_ref: RegistryHandle,
     pub scroll_to: Option<usize>,
@@ -32,6 +32,7 @@ impl NodeDynamics for DataframePayload {
         {
             self.view.show(
                 ctx,
+                ctx.theme.background,
                 |ui| {
                     let editor = TextEdit::singleline(table_name)
                         .background_color(Color32::TRANSPARENT)

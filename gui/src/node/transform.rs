@@ -120,6 +120,7 @@ impl NodeDynamics for TransformPayload {
         let mut commands = Vec::new();
         self.view.show(
             ctx,
+            ctx.theme.background,
             |ui| {
                 let response = ui.allocate_ui(ui.available_size(), |ui| {
                     let hovered = ui.rect_contains_pointer(self_rect);

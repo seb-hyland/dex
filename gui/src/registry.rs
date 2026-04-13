@@ -1,7 +1,10 @@
 //! Don't end up on the list!
+
 use crate::prelude::*;
 
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
+
+use strum::EnumTryAs;
 
 #[derive(Default)]
 pub struct Registry {
@@ -13,6 +16,7 @@ pub struct RegistryItem {
     pub inner: RegistryItemInner,
 }
 
+#[derive(EnumTryAs)]
 pub enum RegistryItemInner {
     Dataframe {
         table_name: String,

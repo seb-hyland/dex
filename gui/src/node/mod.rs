@@ -1,3 +1,4 @@
+use crate::node::image::ImagePayload;
 use crate::node::webview::WebviewPayload;
 use crate::prelude::*;
 use crate::{
@@ -12,11 +13,12 @@ use crate::{
     theme::Theme,
 };
 
-use derive_more::Unwrap;
 use eframe::egui::{Id, Sense, Stroke, StrokeKind};
 use enum_dispatch::enum_dispatch;
+use strum::{EnumDiscriminants, EnumTryAs, VariantArray};
 
 pub mod dataframe;
+pub mod image;
 pub mod primitives;
 pub mod transform;
 pub mod typst;
@@ -29,15 +31,12 @@ pub struct Node {
     pub variant: NodeVariant,
 }
 
-#[derive(Unwrap, Serialize, Deserialize)]
-#[unwrap(ref, ref_mut)]
+#[derive(EnumTryAs, EnumDiscriminants, Serialize, Deserialize)]
+#[strum_discriminants(derive(VariantArray))]
 #[enum_dispatch(NodeDynamics)]
 pub enum NodeVariant {
     Dataframe(DataframePayload),
     DataframePlot(DataframePlotPayload),
-
-    Transform(TransformPayload),
-    TransformArg(TransformArgPayload),
 
     Text(TextPayload),
     Integer(NumericPayload<i32>),
@@ -45,6 +44,10 @@ pub enum NodeVariant {
 
     Typst(TypstPayload),
     Webview(WebviewPayload),
+    Image(ImagePayload),
+
+    Transform(TransformPayload),
+    TransformArg(TransformArgPayload),
 }
 
 pub struct DrawContext<'ctx> {

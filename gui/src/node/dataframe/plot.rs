@@ -49,6 +49,7 @@ impl Display for PlotType {
     }
 }
 
+#[derive(Clone)]
 struct DataCol {
     arr: Arc<dyn Array>,
     name: String,
@@ -99,6 +100,7 @@ impl NodeDynamics for DataframePlotPayload {
 
         self.view.show(
             ctx,
+            ctx.theme.background,
             |ui| {
                 let editor = TextEdit::singleline(&mut self.name)
                     .background_color(Color32::TRANSPARENT)

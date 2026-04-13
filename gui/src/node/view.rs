@@ -7,7 +7,7 @@ use eframe::egui::text::LayoutJob;
 use eframe::egui::{Align, Galley, Layout, Sense, StrokeKind, TextBuffer, TextStyle, UiBuilder};
 use egui::{FontId, Stroke};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Window {
     size: Vec2,
     cached_header_height: f32,
@@ -57,6 +57,7 @@ impl Window {
     pub fn show(
         &mut self,
         ctx: &mut DrawContext<'_>,
+        background: Color32,
         add_header: impl FnOnce(&mut Ui) -> Rect,
         add_main: impl FnOnce(&mut Ui),
     ) {
@@ -65,14 +66,14 @@ impl Window {
         ctx.ui.painter().rect(
             bounding_rect,
             ctx.theme.corner_radius,
-            ctx.theme.background,
+            background,
             ctx.theme.border,
             StrokeKind::Inside,
         );
         ctx.ui.painter().rect(
             header_rect,
             ctx.theme.corner_radius,
-            ctx.theme.background,
+            background,
             ctx.theme.border,
             StrokeKind::Inside,
         );
