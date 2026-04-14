@@ -34,10 +34,10 @@ impl Theme {
     pub const COLOR_PALETTE: [Color32; 6] = [
         Color32::GREEN,
         Color32::MAGENTA,
+        Color32::RED,
         Color32::YELLOW,
         Color32::BLUE,
         Color32::BROWN,
-        Color32::RED,
     ];
 
     pub fn palette_next(current_color: Color32) -> Color32 {

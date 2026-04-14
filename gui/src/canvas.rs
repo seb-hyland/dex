@@ -18,6 +18,7 @@ use eframe::{
     emath::RectTransform,
     epaint::CircleShape,
 };
+use egui::{Key, Modifiers};
 use petgraph::stable_graph::EdgeReference;
 use petgraph::{Directed, stable_graph::StableGraph, visit::EdgeRef};
 use serde::{Deserialize, Serialize};
@@ -51,8 +52,24 @@ pub enum NodeConnectionState {
     One(NodeIdx, Option<NodeIdx>),
 }
 
+#[must_use]
+pub enum DexStateUpdate {
+    None,
+    CenterDesktop,
+    ToggleBackgroundVisibility,
+    ToggleDrawerVisibility,
+    ToggleTabBarVisibility,
+    TabForward,
+    TabBackward,
+}
+
 impl Canvas {
-    pub fn draw(&mut self, ui: &mut Ui, registry: &mut Registry, background_visible: bool) {
+    pub fn draw(
+        &mut self,
+        ui: &mut Ui,
+        registry: &mut Registry,
+        background_visible: bool,
+    ) -> DexStateUpdate {
         let (response, painter) =
             ui.allocate_painter(ui.available_size_before_wrap(), Sense::DRAG | Sense::CLICK);
         let canvas_rect = response.rect;
@@ -290,6 +307,8 @@ impl Canvas {
             }
             _ => {}
         }
+
+        Self::handle_keypresses(ui)
     }
 
     fn draw_background(&mut self, canvas_rect: Rect, painter: &Painter, theme: &Theme) {
@@ -324,7 +343,7 @@ impl Canvas {
         registry: &mut Registry,
         name: String,
         path: Option<PathBuf>,
-    ) -> NodeIdx {
+    ) -> NodeVariant {
         let data_ref = registry.insert(RegistryItem {
             backing_file: path,
             inner: RegistryItemInner::Dataframe {
@@ -333,13 +352,12 @@ impl Canvas {
             },
         });
 
-        let node = NodeVariant::Dataframe(DataframePayload {
+        NodeVariant::Dataframe(DataframePayload {
             data_ref,
             scroll_to: None,
             highlighted_row: None,
             view: Window::default(),
-        });
-        self.add_node(node)
+        })
     }
 
     pub fn add_node(&mut self, node: NodeVariant) -> NodeIdx {
@@ -355,6 +373,31 @@ impl Canvas {
         });
         self.indices_by_depth.push(idx);
         idx
+    }
+
+    fn handle_keypresses(ui: &mut Ui) -> DexStateUpdate {
+        ui.input_mut(|input| {
+            let modifier = Modifiers::ALT;
+            if input.consume_key(modifier, Key::B) {
+                DexStateUpdate::ToggleBackgroundVisibility
+            } else if input.consume_key(modifier, Key::C) {
+                DexStateUpdate::CenterDesktop
+            } else if input.consume_key(modifier, Key::D) {
+                DexStateUpdate::ToggleDrawerVisibility
+            } else if input.consume_key(modifier, Key::T) {
+                DexStateUpdate::ToggleTabBarVisibility
+            } else if input.consume_key(modifier, Key::ArrowLeft)
+                | input.consume_key(modifier, Key::H)
+            {
+                DexStateUpdate::TabBackward
+            } else if input.consume_key(modifier, Key::ArrowRight)
+                | input.consume_key(modifier, Key::L)
+            {
+                DexStateUpdate::TabForward
+            } else {
+                DexStateUpdate::None
+            }
+        })
     }
 
     pub fn serialize_to_paths(&self, prefix: &std::path::Path) {
@@ -529,7 +572,8 @@ impl CanvasCommand {
                 canvas.graph.add_edge(origin, idx, ());
             }
             Self::AddDataframe { origin, df, name } => {
-                let idx = canvas.add_dataframe(df, registry, name, None);
+                let variant = canvas.add_dataframe(df, registry, name, None);
+                let idx = canvas.add_node(variant);
                 canvas.graph.add_edge(origin, idx, ());
             }
             Self::SetInteracted { idx } => {

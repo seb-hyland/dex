@@ -71,7 +71,7 @@ impl Drawer {
                 let df_result = lib::load::load_delimited_file(&path);
                 match df_result {
                     Ok(df) => {
-                        let idx = canvas.add_dataframe(
+                        let variant = canvas.add_dataframe(
                             df,
                             registry,
                             path.file_stem()
@@ -79,14 +79,7 @@ impl Drawer {
                                 .unwrap_or_else(|| "Unnamed dataframe".to_owned()),
                             Some(path),
                         );
-                        let dataframe = canvas
-                            .graph
-                            .node_weight(idx)
-                            .unwrap()
-                            .variant
-                            .try_as_dataframe_ref()
-                            .unwrap()
-                            .clone();
+                        let dataframe = variant.try_as_dataframe().unwrap();
                         self.data_items.push(dataframe);
                     }
                     Err(_e) => {}

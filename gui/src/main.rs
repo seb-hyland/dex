@@ -71,6 +71,7 @@ struct DexState {
     tabs: Vec<Tab>,
     active_tab: usize,
     renaming_tab: RenamingTab,
+    tab_bar_visible: bool,
     background_visible: bool,
     drawer: Drawer,
 }
@@ -89,6 +90,16 @@ impl Hash for Tab {
 
 impl Tab {
     pub const NEW_TAB_NAME: &'static str = "Unnamed desktop";
+
+    fn safe_forward(tabs: &mut Vec<Self>, active_tab: &mut usize) {
+        // Increment, saturating at the vector's max index
+        *active_tab = (*active_tab + 1).min(tabs.len() - 1);
+    }
+
+    fn safe_backward(active_tab: &mut usize) {
+        // Decrement, saturating at 0
+        *active_tab = active_tab.saturating_sub(1);
+    }
 }
 
 enum RenamingTab {
@@ -109,6 +120,7 @@ impl DexState {
             active_tab: 0,
             renaming_tab: RenamingTab::None,
             background_visible: true,
+            tab_bar_visible: true,
             drawer: Drawer {
                 visible: true,
                 data_items: Vec::new(),
@@ -122,110 +134,118 @@ impl DexState {
 }
 
 impl eframe::App for DexState {
-    fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         subsecond::call(|| {
             #[cfg(target_os = "linux")]
             gtk::main_iteration_do(false);
 
-            egui::Panel::top("tab_bar").show_inside(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let mut tab_to_close = None;
+            let mut tab_bar_height = 0.0;
+            if self.tab_bar_visible {
+                let resp = egui::Panel::top("tab_bar").show_inside(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let mut tab_to_close = None;
 
-                    let response = egui_dnd::dnd(ui, "tabs_dnd").show_vec(
-                        &mut self.tabs,
-                        |ui, tab, handle, state| {
-                            let idx = state.index;
-                            if state.dragged {
-                                self.active_tab = idx;
-                            }
-                            let is_active = idx == self.active_tab;
+                        let response = egui_dnd::dnd(ui, "tabs_dnd").show_vec(
+                            &mut self.tabs,
+                            |ui, tab, handle, state| {
+                                let idx = state.index;
+                                if state.dragged {
+                                    self.active_tab = idx;
+                                }
+                                let is_active = idx == self.active_tab;
 
-                            ui.horizontal(|ui| {
-                                handle.ui(ui, |ui| {
-                                    if let RenamingTab::Newly(idx) | RenamingTab::Some(idx) =
-                                        self.renaming_tab
-                                    {
-                                        if idx == state.index {
-                                            let output = TextEdit::singleline(&mut tab.name)
-                                                .clip_text(false)
-                                                .desired_width(0.0)
-                                                .frame(Frame::NONE)
-                                                .show(ui);
+                                ui.horizontal(|ui| {
+                                    handle.ui(ui, |ui| {
+                                        if let RenamingTab::Newly(idx) | RenamingTab::Some(idx) =
+                                            self.renaming_tab
+                                        {
+                                            if idx == state.index {
+                                                let output = TextEdit::singleline(&mut tab.name)
+                                                    .clip_text(false)
+                                                    .desired_width(0.0)
+                                                    .frame(Frame::NONE)
+                                                    .show(ui);
 
-                                            if matches!(self.renaming_tab, RenamingTab::Newly(_)) {
-                                                output.response.request_focus();
-                                                let mut state = TextEdit::load_state(
-                                                    ui.ctx(),
-                                                    output.response.id,
-                                                )
-                                                .unwrap_or_default();
-                                                state.cursor.set_char_range(Some(
-                                                    CCursorRange::two(
-                                                        CCursor::new(0),
-                                                        CCursor::new(tab.name.chars().count()),
-                                                    ),
-                                                ));
-                                                state.store(ui.ctx(), output.response.id);
+                                                if matches!(
+                                                    self.renaming_tab,
+                                                    RenamingTab::Newly(_)
+                                                ) {
+                                                    output.response.request_focus();
+                                                    let mut state = TextEdit::load_state(
+                                                        ui.ctx(),
+                                                        output.response.id,
+                                                    )
+                                                    .unwrap_or_default();
+                                                    state.cursor.set_char_range(Some(
+                                                        CCursorRange::two(
+                                                            CCursor::new(0),
+                                                            CCursor::new(tab.name.chars().count()),
+                                                        ),
+                                                    ));
+                                                    state.store(ui.ctx(), output.response.id);
 
-                                                self.renaming_tab = RenamingTab::Some(idx);
-                                            }
+                                                    self.renaming_tab = RenamingTab::Some(idx);
+                                                }
 
-                                            if output.response.lost_focus()
-                                                || ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                            {
-                                                self.renaming_tab = RenamingTab::None;
+                                                if output.response.lost_focus()
+                                                    || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                                {
+                                                    self.renaming_tab = RenamingTab::None;
+                                                }
+                                            } else {
+                                                let _ = ui.selectable_label(is_active, &tab.name);
                                             }
                                         } else {
-                                            let _ = ui.selectable_label(is_active, &tab.name);
-                                        }
-                                    } else {
-                                        let label_res = ui.selectable_label(is_active, &tab.name);
+                                            let label_res =
+                                                ui.selectable_label(is_active, &tab.name);
 
-                                        if label_res.clicked() {
-                                            self.active_tab = idx;
+                                            if label_res.clicked() {
+                                                self.active_tab = idx;
+                                            }
+                                            if label_res.double_clicked() {
+                                                self.renaming_tab = RenamingTab::Newly(idx);
+                                            }
                                         }
-                                        if label_res.double_clicked() {
-                                            self.renaming_tab = RenamingTab::Newly(idx);
-                                        }
-                                    }
 
-                                    if ui.button("x").clicked() {
-                                        tab_to_close = Some(idx);
-                                    }
+                                        if ui.button("x").clicked() {
+                                            tab_to_close = Some(idx);
+                                        }
+                                    });
                                 });
-                            });
-                        },
-                    );
+                            },
+                        );
 
-                    if let Some(update) = response.update {
-                        shift_vec(update.from, update.to, &mut self.tabs);
-                    }
+                        if let Some(update) = response.update {
+                            shift_vec(update.from, update.to, &mut self.tabs);
+                        }
 
-                    if let Some(close_idx) = tab_to_close {
-                        self.tabs.remove(close_idx);
-                        self.active_tab = self.active_tab.saturating_sub(1);
+                        if let Some(close_idx) = tab_to_close {
+                            self.tabs.remove(close_idx);
+                            self.active_tab = self.active_tab.saturating_sub(1);
 
-                        if self.tabs.is_empty() {
+                            if self.tabs.is_empty() {
+                                self.tabs.push(Tab {
+                                    name: Tab::NEW_TAB_NAME.to_owned(),
+                                    canvas: Canvas::default(),
+                                    add_index: 0,
+                                });
+                            }
+                        }
+
+                        if ui.button("+").clicked() {
+                            let new_tab_idx = self.tabs.len();
                             self.tabs.push(Tab {
                                 name: Tab::NEW_TAB_NAME.to_owned(),
-                                canvas: Canvas::default(),
-                                add_index: 0,
+                                canvas: canvas::Canvas::default(),
+                                add_index: new_tab_idx,
                             });
+                            self.active_tab = new_tab_idx;
+                            self.renaming_tab = RenamingTab::Newly(self.active_tab);
                         }
-                    }
-
-                    if ui.button("+").clicked() {
-                        let new_tab_idx = self.tabs.len();
-                        self.tabs.push(Tab {
-                            name: Tab::NEW_TAB_NAME.to_owned(),
-                            canvas: canvas::Canvas::default(),
-                            add_index: new_tab_idx,
-                        });
-                        self.active_tab = new_tab_idx;
-                        self.renaming_tab = RenamingTab::Newly(self.active_tab);
-                    }
+                    });
                 });
-            });
+                tab_bar_height = resp.response.rect.height();
+            }
 
             if self.drawer.visible {
                 let mut want_center = false;
@@ -249,11 +269,32 @@ impl eframe::App for DexState {
             }
 
             egui::CentralPanel::default().show_inside(ui, |ui| {
-                Self::active_canvas(&mut self.tabs, self.active_tab).draw(
+                let update = Self::active_canvas(&mut self.tabs, self.active_tab).draw(
                     ui,
                     &mut self.registry,
                     self.background_visible,
                 );
+                match update {
+                    canvas::DexStateUpdate::None => {}
+                    canvas::DexStateUpdate::ToggleBackgroundVisibility => {
+                        self.background_visible = !self.background_visible
+                    }
+                    canvas::DexStateUpdate::CenterDesktop => {
+                        Self::active_canvas(&mut self.tabs, self.active_tab)
+                            .view_state
+                            .reset_offset()
+                    }
+                    canvas::DexStateUpdate::ToggleDrawerVisibility => {
+                        self.drawer.visible = !self.drawer.visible
+                    }
+                    canvas::DexStateUpdate::ToggleTabBarVisibility => {
+                        self.tab_bar_visible = !self.tab_bar_visible
+                    }
+                    canvas::DexStateUpdate::TabBackward => Tab::safe_backward(&mut self.active_tab),
+                    canvas::DexStateUpdate::TabForward => {
+                        Tab::safe_forward(&mut self.tabs, &mut self.active_tab)
+                    }
+                }
             });
 
             let drawer_button_text = if self.drawer.visible { "⏴" } else { "⏵" };
@@ -273,6 +314,22 @@ impl eframe::App for DexState {
                         .clicked()
                     {
                         self.drawer.visible = !self.drawer.visible;
+                    }
+                });
+
+            let tab_bar_button_text = if self.tab_bar_visible { "⏶" } else { "⏷" };
+            egui::Area::new(Id::new("tab_bar_handle"))
+                .fixed_pos(Pos2 {
+                    x: ui.max_rect().width() / 2.0,
+                    y: tab_bar_height,
+                })
+                .show(ui.ctx(), |ui| {
+                    if ui
+                        .button(tab_bar_button_text)
+                        .on_hover_cursor(CursorIcon::PointingHand)
+                        .clicked()
+                    {
+                        self.tab_bar_visible = !self.tab_bar_visible;
                     }
                 });
         });

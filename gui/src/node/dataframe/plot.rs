@@ -247,13 +247,17 @@ fn draw_scatterplot(
     .name(format!("{} vs {}", x.name, y.name))
     .radius(2.0);
 
-    let plot_resp = Plot::new(ui.id().with("plot")).show(ui, |plot_ui| {
-        if *change == PlotChange::ChangedLastFrame {
-            plot_ui.set_auto_bounds([true, true]);
-            *change = PlotChange::None;
-        }
-        plot_ui.points(points_element);
-    });
+    let plot_resp = Plot::new(ui.id().with("plot"))
+        .x_axis_label(&x.name)
+        .y_axis_label(&y.name)
+        .label_formatter(|_, point| format!("{:.3}, {:.3}", point.x, point.y))
+        .show(ui, |plot_ui| {
+            if *change == PlotChange::ChangedLastFrame {
+                plot_ui.set_auto_bounds([true, true]);
+                *change = PlotChange::None;
+            }
+            plot_ui.points(points_element);
+        });
 
     if plot_resp.response.clicked() {
         let pointer_pos = plot_resp.response.interact_pointer_pos().unwrap();
@@ -286,29 +290,31 @@ fn draw_boxplot(ui: &mut Ui, data: &DataCol, just_changed: &mut PlotChange) -> O
     let box_elem = BoxElem::new(0.0, spread);
     let box_plot = BoxPlot::new(&data.name, vec![box_elem]);
 
-    let plot_resp = Plot::new(ui.id().with("plot")).show(ui, |plot_ui| {
-        match *just_changed {
-            PlotChange::ChangedLastFrame => {
-                plot_ui.set_auto_bounds([true, true]);
-                *just_changed = PlotChange::DrawnLastFrame;
+    let plot_resp = Plot::new(ui.id().with("plot"))
+        .y_axis_label(&data.name)
+        .show(ui, |plot_ui| {
+            match *just_changed {
+                PlotChange::ChangedLastFrame => {
+                    plot_ui.set_auto_bounds([true, true]);
+                    *just_changed = PlotChange::DrawnLastFrame;
+                }
+                PlotChange::DrawnLastFrame => {
+                    let bounds = plot_ui.plot_bounds();
+
+                    let min = bounds.min();
+                    let mut max = bounds.max();
+                    let height = bounds.height();
+
+                    max[1] += height * 0.6;
+                    let new_bounds = PlotBounds::from_min_max(min, max);
+
+                    plot_ui.set_plot_bounds(new_bounds);
+                    *just_changed = PlotChange::None;
+                }
+                PlotChange::None => {}
             }
-            PlotChange::DrawnLastFrame => {
-                let bounds = plot_ui.plot_bounds();
-
-                let min = bounds.min();
-                let mut max = bounds.max();
-                let height = bounds.height();
-
-                max[1] += height * 0.6;
-                let new_bounds = PlotBounds::from_min_max(min, max);
-
-                plot_ui.set_plot_bounds(new_bounds);
-                *just_changed = PlotChange::None;
-            }
-            PlotChange::None => {}
-        }
-        plot_ui.box_plot(box_plot);
-    });
+            plot_ui.box_plot(box_plot);
+        });
 
     // if plot_resp.response.clicked() {
     //     let pointer_pos = plot_resp.response.interact_pointer_pos().unwrap();

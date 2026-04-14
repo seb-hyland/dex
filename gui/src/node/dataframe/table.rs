@@ -6,8 +6,8 @@ use arrow::{datatypes::DataType, util::display::array_value_to_string};
 use eframe::egui::{Align, FontSelection, Label, RichText, ScrollArea, Tooltip, WidgetText};
 use egui_extras::{Column, TableBuilder};
 
-const HIGHLIGHT_DURATION: f64 = 2.0;
-const ANIMATION_TIME: f64 = 0.5;
+const HIGHLIGHT_DURATION: f64 = 5.0;
+const ANIMATION_TIME: f64 = 1.0;
 
 pub fn draw_record_batch(
     ui: &mut Ui,
