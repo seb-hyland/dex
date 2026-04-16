@@ -11,7 +11,7 @@ use crate::{
 };
 
 use eframe::egui::{Button, ComboBox, Frame, Sense, Stroke, StrokeKind, TextEdit, TextStyle};
-use egui::{Align, Layout};
+use egui::FontId;
 use egui_code_editor::{CodeEditor, ColorTheme, Completer, Syntax};
 use lib::compute::{self, TransformValue, python};
 use petgraph::visit::EdgeRef;
@@ -28,7 +28,6 @@ pub struct TransformPayload {
     completer: Completer,
     python: String,
     view: Window,
-    cached_height: f32,
     error: String,
 }
 
@@ -46,7 +45,6 @@ def transform():
                 .to_owned(),
             view: Window::default(),
             last_color: None,
-            cached_height: 0.0,
             error: String::new(),
         }
     }
@@ -123,15 +121,27 @@ impl NodeDynamics for TransformPayload {
             ctx,
             ctx.theme.background,
             |ui| {
-                let response = ui.allocate_ui_with_layout(
-                    ui.available_size(),
-                    Layout::left_to_right(Align::Center),
-                    |ui| {
-                        let hovered = ui.rect_contains_pointer(self_rect);
-                        let default_x_spacing = ui.spacing().item_spacing.x;
+                ui.horizontal_wrapped(|ui| {
+                    let hovered = ui.rect_contains_pointer(self_rect);
+                    let default_x_spacing = ui.spacing().item_spacing.x;
 
-                        if self.args.is_empty() {
-                            TextEdit::singleline(&mut self.unit_arg_name)
+                    if self.args.is_empty() {
+                        TextEdit::singleline(&mut self.unit_arg_name)
+                            .background_color(Color32::TRANSPARENT)
+                            .frame(Frame::NONE)
+                            .clip_text(false)
+                            .desired_width(0.0)
+                            // .layouter(&mut Window::wrapping_layouter(
+                            //     None,
+                            //     ctx.theme.text,
+                            //     Align::Min,
+                            //     ui.available_width(),
+                            // ))
+                            .show(ui);
+                    } else {
+                        self.args.retain_mut(|arg| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            TextEdit::singleline(&mut arg.label)
                                 .background_color(Color32::TRANSPARENT)
                                 .frame(Frame::NONE)
                                 .clip_text(false)
@@ -143,131 +153,107 @@ impl NodeDynamics for TransformPayload {
                                 //     ui.available_width(),
                                 // ))
                                 .show(ui);
+
+                            ui.spacing_mut().item_spacing.x = default_x_spacing;
+                            ui.label(":");
+
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            let arg_node_idx = arg.node.unwrap();
+                            let is_connected = graph.edge_count(arg_node_idx) != 0;
+                            let arg_resp = TextEdit::singleline(&mut arg.arg_name)
+                                .background_color(Color32::TRANSPARENT)
+                                .frame(Frame::new().corner_radius(ctx.theme.corner_radius).stroke(
+                                    Stroke {
+                                        color: if is_connected {
+                                            graph
+                                                .get(arg.node.unwrap())
+                                                .unwrap()
+                                                .variant
+                                                .override_edge_color()
+                                                .unwrap()
+                                        } else {
+                                            default_border.color
+                                        },
+                                        ..default_border
+                                    },
+                                ))
+                                .clip_text(false)
+                                .desired_width(0.0)
+                                // .layouter(&mut Window::wrapping_layouter(
+                                //     None,
+                                //     ctx.theme.text,
+                                //     Align::Min,
+                                //     ui.available_width(),
+                                // ))
+                                .show(ui);
+
+                            ui.spacing_mut().item_spacing.x = default_x_spacing;
+                            let retained = !ui.add_visible(hovered, Button::new("x")).clicked();
+
+                            commands.push(CanvasCommand::UpdateTransformArgLocation {
+                                idx: arg.node.unwrap(),
+                                new_rect: arg_resp.response.rect,
+                            });
+
+                            retained
+                        });
+                    }
+
+                    if ui.add_visible(hovered, Button::new("+")).clicked() {
+                        let label = if self.args.is_empty() {
+                            self.unit_arg_name.clone()
                         } else {
-                            self.args.retain_mut(|arg| {
-                                ui.spacing_mut().item_spacing.x = 0.0;
-                                TextEdit::singleline(&mut arg.label)
-                                    .background_color(Color32::TRANSPARENT)
-                                    .frame(Frame::NONE)
-                                    .clip_text(false)
-                                    .desired_width(0.0)
-                                    // .layouter(&mut Window::wrapping_layouter(
-                                    //     None,
-                                    //     ctx.theme.text,
-                                    //     Align::Min,
-                                    //     ui.available_width(),
-                                    // ))
-                                    .show(ui);
-
-                                ui.spacing_mut().item_spacing.x = default_x_spacing;
-                                ui.label(":");
-
-                                ui.spacing_mut().item_spacing.x = 0.0;
-                                let arg_node_idx = arg.node.unwrap();
-                                let is_connected = graph.edge_count(arg_node_idx) != 0;
-                                let arg_resp = TextEdit::singleline(&mut arg.arg_name)
-                                    .background_color(Color32::TRANSPARENT)
-                                    .frame(
-                                        Frame::new().corner_radius(ctx.theme.corner_radius).stroke(
-                                            Stroke {
-                                                color: if is_connected {
-                                                    graph
-                                                        .get(arg.node.unwrap())
-                                                        .unwrap()
-                                                        .variant
-                                                        .override_edge_color()
-                                                        .unwrap()
-                                                } else {
-                                                    default_border.color
-                                                },
-                                                ..default_border
-                                            },
-                                        ),
-                                    )
-                                    .clip_text(false)
-                                    .desired_width(0.0)
-                                    // .layouter(&mut Window::wrapping_layouter(
-                                    //     None,
-                                    //     ctx.theme.text,
-                                    //     Align::Min,
-                                    //     ui.available_width(),
-                                    // ))
-                                    .show(ui);
-
-                                ui.spacing_mut().item_spacing.x = default_x_spacing;
-                                let retained = !ui.add_visible(hovered, Button::new("x")).clicked();
-
-                                commands.push(CanvasCommand::UpdateTransformArgLocation {
-                                    idx: arg.node.unwrap(),
-                                    new_rect: arg_resp.response.rect,
-                                });
-
-                                retained
-                            });
-                        }
-
-                        if ui.add_visible(hovered, Button::new("+")).clicked() {
-                            let label = if self.args.is_empty() {
-                                self.unit_arg_name.clone()
-                            } else {
-                                "Action on".to_owned()
-                            };
-                            self.args.push(TransformArg {
-                                label,
-                                arg_name: "thisValue".to_owned(),
-                                node: None,
-                            });
-                            commands.push(CanvasCommand::AddTransformArg { origin: cur_index });
-                        }
-                    },
-                );
-                response.response.rect
+                            "Action on".to_owned()
+                        };
+                        self.args.push(TransformArg {
+                            label,
+                            arg_name: "thisValue".to_owned(),
+                            node: None,
+                        });
+                        commands.push(CanvasCommand::AddTransformArg { origin: cur_index });
+                    }
+                });
             },
             |ui| {
-                ComboBox::from_id_salt(ui.id().with("transform_language"))
-                    .selected_text(format!("{:?}", self.active_lang))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.active_lang, TransformLang::Python, "Python");
-                    });
+                execute = ui
+                    .horizontal(|ui| {
+                        ComboBox::from_id_salt(ui.id().with("transform_language"))
+                            .selected_text(format!("{:?}", self.active_lang))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.active_lang,
+                                    TransformLang::Python,
+                                    "Python",
+                                );
+                            });
+
+                        ui.button("Execute transform").clicked()
+                    })
+                    .inner;
+
+                ui.colored_label(Color32::BROWN, warnings_text.unwrap_or_default());
+                ui.colored_label(Color32::RED, &self.error);
 
                 let completer = &mut self.completer;
-                let line_height = ui.text_style_height(&TextStyle::Monospace);
-                let available_lines = (ui.available_height()
-                    - 2.0 * ui.spacing().item_spacing.y
-                    - self.cached_height)
-                    / line_height;
-                let font_size = ui
-                    .fonts_mut(|fonts| fonts.row_height(&TextStyle::Monospace.resolve(ui.style())));
-                CodeEditor::default()
-                    .id_source(ui.id().with("code_editor").value().to_string())
-                    .with_syntax(match self.active_lang {
-                        TransformLang::Python => Syntax::python(),
-                    })
-                    .with_theme(ColorTheme::AYU)
-                    .with_fontsize(font_size)
-                    // This is super jank but whatever idk
-                    .with_rows((available_lines as usize).saturating_sub(2))
-                    .show_with_completer(
-                        ui,
-                        match self.active_lang {
-                            TransformLang::Python => &mut self.python,
-                        },
-                        completer,
-                    );
 
-                let footer_height = ui
-                    .vertical(|ui| {
-                        ui.colored_label(Color32::BROWN, warnings_text.unwrap_or_default());
-                        ui.colored_label(Color32::RED, &self.error);
-                        if ui.button("Execute transform").clicked() {
-                            execute = true;
-                        }
-                    })
-                    .response
-                    .rect
-                    .height();
-
-                self.cached_height = footer_height;
+                ui.add_sized(ui.available_size(), |ui: &mut Ui| {
+                    CodeEditor::default()
+                        .id_source(ui.id().with("code_editor").value().to_string())
+                        .with_syntax(match self.active_lang {
+                            TransformLang::Python => Syntax::python(),
+                        })
+                        .with_fontsize(ui.text_style_height(&TextStyle::Monospace))
+                        .with_theme(ColorTheme::AYU)
+                        .show_with_completer(
+                            ui,
+                            match self.active_lang {
+                                TransformLang::Python => &mut self.python,
+                            },
+                            completer,
+                        )
+                        .response
+                        .response
+                });
             },
         );
 

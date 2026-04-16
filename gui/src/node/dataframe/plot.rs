@@ -102,7 +102,7 @@ impl NodeDynamics for DataframePlotPayload {
             ctx,
             ctx.theme.background,
             |ui| {
-                let editor = TextEdit::singleline(&mut self.name)
+                TextEdit::singleline(&mut self.name)
                     .background_color(Color32::TRANSPARENT)
                     .clip_text(false)
                     .desired_width(0.0)
@@ -114,7 +114,6 @@ impl NodeDynamics for DataframePlotPayload {
                     ))
                     .frame(Frame::NONE)
                     .show(ui);
-                editor.text_clip_rect
             },
             |ui| {
                 ui.vertical(|ui| {
@@ -201,10 +200,10 @@ impl NodeDynamics for DataframePlotPayload {
                         }
                         PlotType::Boxplot => {
                             if let Some(x_col) = self.x_col {
-                                draw_boxplot(ui, self.cols.get(x_col).unwrap(), &mut self.change);
                                 if ui.button("Reset plot bounds").clicked() {
                                     self.change = PlotChange::ChangedLastFrame;
                                 }
+                                draw_boxplot(ui, self.cols.get(x_col).unwrap(), &mut self.change);
                             }
                         }
                     }

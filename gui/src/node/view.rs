@@ -5,20 +5,20 @@ use std::sync::Arc;
 
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{Align, Galley, Layout, Sense, StrokeKind, TextBuffer, TextStyle, UiBuilder};
-use egui::{FontId, Stroke};
+use egui::{CursorIcon, FontId};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Window {
-    size: Vec2,
-    cached_header_height: f32,
+    body_size: Vec2,
+    cached_header_content_height: f32,
     collapsed: bool,
 }
 
 impl Default for Window {
     fn default() -> Self {
         Self {
-            size: Vec2 { x: 500.0, y: 300.0 },
-            cached_header_height: 0.0,
+            body_size: Vec2 { x: 500.0, y: 300.0 },
+            cached_header_content_height: 0.0,
             collapsed: true,
         }
     }
@@ -29,25 +29,18 @@ impl Window {
     pub fn rects(&self, location: Pos2) -> (Rect, Rect, f32) {
         let padding = 10.0;
 
-        let header_height = self.cached_header_height;
+        let header_height = self.cached_header_content_height;
         let header_size = Vec2 {
-            x: self.size.x,
+            x: self.body_size.x,
             y: header_height + 2.0 * padding,
         };
-        let header_rect = Rect::from_center_size(
-            location
-                + Vec2 {
-                    x: 0.0,
-                    y: header_height / 2.0,
-                },
-            header_size,
-        );
+        let header_rect = Rect::from_min_size(location, header_size);
 
         let bounding_rect = if self.collapsed {
             header_rect
         } else {
             let mut rect = header_rect;
-            rect.max.y += self.size.y;
+            rect.max.y += self.body_size.y;
             rect
         };
 
@@ -58,7 +51,7 @@ impl Window {
         &mut self,
         ctx: &mut DrawContext<'_>,
         background: Color32,
-        add_header: impl FnOnce(&mut Ui) -> Rect,
+        add_header: impl FnOnce(&mut Ui),
         add_main: impl FnOnce(&mut Ui),
     ) {
         let (header_rect, bounding_rect, padding) = self.rects(ctx.screen_location);
@@ -79,121 +72,115 @@ impl Window {
         );
 
         // Header
+        let header_area = ctx
+            .ui
+            .interact(
+                header_rect,
+                ctx.id.with("header_bar"),
+                Sense::HOVER | Sense::DRAG,
+            )
+            .on_hover_cursor(CursorIcon::Grab);
+
+        let edge_width = 6.0;
+
+        // Dragging left or right edge always affects this node
+        let left_edge = ctx
+            .ui
+            .interact(
+                bounding_rect
+                    .with_min_x(bounding_rect.min.x - edge_width / 2.0)
+                    .with_max_x(bounding_rect.min.x + edge_width / 2.0),
+                ctx.id.with("left_edge"),
+                Sense::DRAG | Sense::HOVER,
+            )
+            .on_hover_cursor(CursorIcon::ResizeHorizontal);
+        if left_edge.dragged() {
+            let drag_delta = left_edge.drag_delta();
+            self.body_size.x -= drag_delta.x;
+            ctx.command_queue.push(CanvasCommand::MoveNode {
+                idx: ctx.index,
+                delta: Vec2::new(drag_delta.x, 0.0),
+            })
+        }
+
+        let right_edge = ctx
+            .ui
+            .interact(
+                bounding_rect
+                    .with_min_x(bounding_rect.max.x - edge_width / 2.0)
+                    .with_max_x(bounding_rect.max.x + edge_width / 2.0),
+                ctx.id.with("right_edge"),
+                Sense::DRAG | Sense::HOVER,
+            )
+            .on_hover_cursor(CursorIcon::ResizeHorizontal);
+        if right_edge.dragged() {
+            self.body_size.x += right_edge.drag_delta().x;
+        }
+
+        // Dragging bottom works when expanded
+        if !self.collapsed {
+            let top_edge = ctx
+                .ui
+                .interact(
+                    bounding_rect
+                        .with_min_y(bounding_rect.min.y - edge_width / 2.0)
+                        .with_max_y(bounding_rect.min.y + edge_width / 2.0),
+                    ctx.id.with("top_edge"),
+                    Sense::DRAG,
+                )
+                .on_hover_cursor(CursorIcon::ResizeVertical);
+            if top_edge.dragged() {
+                let drag_delta = top_edge.drag_delta();
+                self.body_size.y -= drag_delta.y;
+                ctx.command_queue.push(CanvasCommand::MoveNode {
+                    idx: ctx.index,
+                    delta: Vec2::new(0.0, drag_delta.y),
+                });
+            }
+
+            let bottom_edge = ctx
+                .ui
+                .interact(
+                    bounding_rect
+                        .with_min_y(bounding_rect.max.y - edge_width / 2.0)
+                        .with_max_y(bounding_rect.max.y + edge_width / 2.0),
+                    ctx.id.with("bottom_edge"),
+                    Sense::DRAG,
+                )
+                .on_hover_cursor(CursorIcon::ResizeVertical);
+            if bottom_edge.dragged() {
+                self.body_size.y += bottom_edge.drag_delta().y;
+            }
+        }
+
         ctx.ui.scope_builder(
             UiBuilder::new()
-                .id(ctx.id.with("header"))
-                .max_rect(header_rect.shrink(padding)),
+                .max_rect(header_rect.shrink(padding))
+                .id(ctx.id.with("header_ui")),
             |ui| {
-                let header_area = ui.interact(
-                    header_rect,
-                    ui.id().with("header_bar"),
-                    Sense::HOVER | Sense::DRAG,
-                );
-
-                let edge_width = 6.0;
-
-                // Dragging left or right edge always affects this node
-                let left_edge = ui.interact(
-                    bounding_rect
-                        .with_min_x(bounding_rect.min.x - edge_width / 2.0)
-                        .with_max_x(bounding_rect.min.x + edge_width / 2.0),
-                    ui.id().with("left_edge"),
-                    Sense::DRAG | Sense::HOVER,
-                );
-                let right_edge = ui.interact(
-                    bounding_rect
-                        .with_min_x(bounding_rect.max.x - edge_width / 2.0)
-                        .with_max_x(bounding_rect.max.x + edge_width / 2.0),
-                    ui.id().with("right_edge"),
-                    Sense::DRAG | Sense::HOVER,
-                );
-                match DrawInteraction::from(left_edge) {
-                    DrawInteraction::Hovered => cursor_icon!(ui, ResizeHorizontal),
-                    DrawInteraction::Dragged(drag_delta) => {
-                        self.size.x -= drag_delta.x;
-                        ctx.command_queue.push(CanvasCommand::MoveNode {
-                            idx: ctx.index,
-                            delta: Vec2::new(drag_delta.x / 2.0, 0.0),
-                        })
-                    }
-                    _ => {}
-                }
-                match DrawInteraction::from(right_edge) {
-                    DrawInteraction::Hovered => cursor_icon!(ui, ResizeHorizontal),
-                    DrawInteraction::Dragged(drag_delta) => {
-                        self.size.x += drag_delta.x;
-                        ctx.command_queue.push(CanvasCommand::MoveNode {
-                            idx: ctx.index,
-                            delta: Vec2::new(drag_delta.x / 2.0, 0.0),
-                        })
-                    }
-                    _ => {}
-                }
-
-                // Dragging top or bottom works when expanded
-                if !self.collapsed {
-                    let top_edge = ui.interact(
-                        bounding_rect
-                            .with_min_y(bounding_rect.min.y - edge_width / 2.0)
-                            .with_max_y(bounding_rect.min.y + edge_width / 2.0),
-                        ui.id().with("top_edge"),
-                        Sense::DRAG,
-                    );
-                    let bottom_edge = ui.interact(
-                        bounding_rect
-                            .with_min_y(bounding_rect.max.y - edge_width / 2.0)
-                            .with_max_y(bounding_rect.max.y + edge_width / 2.0),
-                        ui.id().with("bottom_edge"),
-                        Sense::DRAG,
-                    );
-                    match DrawInteraction::from(top_edge) {
-                        DrawInteraction::Hovered => cursor_icon!(ui, ResizeVertical),
-                        DrawInteraction::Dragged(drag_delta) => {
-                            self.size.y -= drag_delta.y;
-                            ctx.command_queue.push(CanvasCommand::MoveNode {
-                                idx: ctx.index,
-                                delta: Vec2::new(0.0, drag_delta.y),
-                            })
-                        }
-                        _ => {}
-                    }
-                    match DrawInteraction::from(bottom_edge) {
-                        DrawInteraction::Hovered => cursor_icon!(ui, ResizeVertical),
-                        DrawInteraction::Dragged(drag_delta) => self.size.y += drag_delta.y,
-                        _ => {}
-                    }
-                }
-
                 ui.horizontal(|ui| {
-                    ui.with_layout(
-                        Layout::left_to_right(Align::Center).with_main_wrap(true),
-                        |ui| {
-                            let header_rect = add_header(ui);
-                            self.cached_header_height = header_rect.height();
-                        },
-                    );
+                    let header = ui.allocate_ui(ui.available_size_before_wrap(), |ui| {
+                        add_header(ui);
+                    });
+                    self.cached_header_content_height = header.response.rect.height();
 
-                    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                        let symbol = if self.collapsed { "<" } else { "v" };
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let symbol = if self.collapsed { "⏴" } else { "⏷" };
                         if ui.button(symbol).clicked() {
                             self.collapsed = !self.collapsed;
                         }
                     });
                 });
-
-                match DrawInteraction::from(header_area) {
-                    DrawInteraction::Hovered => cursor_icon!(ui, PointingHand),
-                    DrawInteraction::Dragged(drag_delta) => {
-                        cursor_icon!(ui, Grabbing);
-                        ctx.command_queue.push(CanvasCommand::MoveNode {
-                            idx: ctx.index,
-                            delta: drag_delta,
-                        });
-                    }
-                    _ => {}
-                }
             },
         );
+
+        if header_area.dragged() {
+            cursor_icon!(ctx.ui, Grabbing);
+            ctx.command_queue.push(CanvasCommand::MoveNode {
+                idx: ctx.index,
+                delta: header_area.drag_delta(),
+            });
+        }
 
         if !self.collapsed {
             // Ui for main body
@@ -204,10 +191,12 @@ impl Window {
             };
             ctx.ui.scope_builder(
                 UiBuilder::new()
-                    .id(ctx.id.with("body"))
-                    .max_rect(body_rect.shrink(padding)),
+                    .max_rect(body_rect.shrink(padding))
+                    .id(ctx.id.with("body")),
                 |ui| {
-                    add_main(ui);
+                    ui.vertical(|ui| {
+                        add_main(ui);
+                    });
                 },
             );
         }
@@ -235,16 +224,16 @@ impl Window {
 
 #[derive(Serialize, Deserialize)]
 pub struct HeadlessWindow {
-    cached_height: f32,
-    width: f32,
+    cached_content_height: f32,
+    content_width: f32,
     auto_width: bool,
 }
 
 impl Default for HeadlessWindow {
     fn default() -> Self {
         Self {
-            cached_height: 0.0,
-            width: 300.0,
+            cached_content_height: 0.0,
+            content_width: 600.0,
             auto_width: false,
         }
     }
@@ -264,8 +253,8 @@ impl HeadlessWindow {
         let bounding_rect = Rect::from_min_size(
             ctx.screen_location,
             Vec2 {
-                x: self.width + 2.0 * padding,
-                y: self.cached_height + 2.0 * padding,
+                x: self.content_width + (padding * 2.0),
+                y: self.cached_content_height + (padding * 2.0),
             },
         );
 
@@ -276,74 +265,70 @@ impl HeadlessWindow {
     pub fn show(&mut self, ctx: &mut DrawContext<'_>, add_body: impl FnOnce(&mut Ui) -> Rect) {
         let (bounding_rect, padding) = self.rect(ctx);
 
-        let border = if ctx.ui.rect_contains_pointer(bounding_rect.expand(2.0)) {
-            ctx.theme.border
-        } else {
-            Stroke::NONE
-        };
-        ctx.ui.painter().rect(
-            bounding_rect,
-            ctx.theme.corner_radius,
-            Color32::TRANSPARENT,
-            border,
-            StrokeKind::Inside,
-        );
-
-        ctx.ui.push_id(ctx.id, |ui| {
-            let edge_width = 6.0;
-
-            // Dragging left or right edge always affects this node
-            let left_edge = ui.interact(
-                bounding_rect
-                    .with_min_x(bounding_rect.min.x - edge_width / 2.0)
-                    .with_max_x(bounding_rect.min.x + edge_width / 2.0),
-                ui.id().with("left_edge"),
-                Sense::DRAG | Sense::HOVER,
+        if ctx.ui.rect_contains_pointer(bounding_rect.expand(10.0)) {
+            ctx.ui.painter().rect(
+                bounding_rect,
+                ctx.theme.corner_radius,
+                Color32::TRANSPARENT,
+                ctx.theme.border,
+                StrokeKind::Inside,
             );
-            let right_edge = ui.interact(
-                bounding_rect
-                    .with_min_x(bounding_rect.max.x - edge_width / 2.0)
-                    .with_max_x(bounding_rect.max.x + edge_width / 2.0),
-                ui.id().with("right_edge"),
-                Sense::DRAG | Sense::HOVER,
-            );
-            match DrawInteraction::from(left_edge) {
-                DrawInteraction::Hovered => cursor_icon!(ui, ResizeHorizontal),
-                DrawInteraction::Dragged(drag_delta) => {
-                    self.width -= drag_delta.x;
-                    ctx.command_queue.push(CanvasCommand::MoveNode {
-                        idx: ctx.index,
-                        delta: Vec2::new(drag_delta.x, 0.0),
-                    })
-                }
-                _ => {}
-            }
-            match DrawInteraction::from(right_edge) {
-                DrawInteraction::Hovered => cursor_icon!(ui, ResizeHorizontal),
-                DrawInteraction::Dragged(drag_delta) => {
-                    self.width += drag_delta.x;
-                }
-                _ => {}
+        }
+
+        let edge_width = 6.0;
+
+        // Dragging left or right edge affects this node if not auto sized
+        if !self.auto_width {
+            let left_edge = ctx
+                .ui
+                .interact(
+                    bounding_rect
+                        .with_min_x(bounding_rect.min.x - edge_width / 2.0)
+                        .with_max_x(bounding_rect.min.x + edge_width / 2.0),
+                    ctx.id.with("left_edge"),
+                    Sense::DRAG | Sense::HOVER,
+                )
+                .on_hover_cursor(CursorIcon::ResizeHorizontal);
+            if left_edge.dragged() {
+                let drag_delta = left_edge.drag_delta();
+                self.content_width -= drag_delta.x;
+                ctx.command_queue.push(CanvasCommand::MoveNode {
+                    idx: ctx.index,
+                    delta: Vec2::new(drag_delta.x, 0.0),
+                });
             }
 
-            let top_edge = ui.interact(
+            let right_edge = ctx
+                .ui
+                .interact(
+                    bounding_rect
+                        .with_min_x(bounding_rect.max.x - edge_width / 2.0)
+                        .with_max_x(bounding_rect.max.x + edge_width / 2.0),
+                    ctx.id.with("right_edge"),
+                    Sense::DRAG | Sense::HOVER,
+                )
+                .on_hover_cursor(CursorIcon::ResizeHorizontal);
+            if right_edge.dragged() {
+                self.content_width += right_edge.drag_delta().x;
+            }
+        }
+
+        let top_edge = ctx
+            .ui
+            .interact(
                 bounding_rect
                     .with_min_y(bounding_rect.min.y - edge_width / 2.0)
                     .with_max_y(bounding_rect.min.y + edge_width / 2.0),
-                ui.id().with("top_edge"),
+                ctx.id.with("top_edge"),
                 Sense::DRAG,
-            );
-            match DrawInteraction::from(top_edge) {
-                DrawInteraction::Hovered => cursor_icon!(ui, Grab),
-                DrawInteraction::Dragged(drag_delta) => {
-                    ctx.command_queue.push(CanvasCommand::MoveNode {
-                        idx: ctx.index,
-                        delta: drag_delta,
-                    })
-                }
-                _ => {}
-            }
-        });
+            )
+            .on_hover_cursor(CursorIcon::Grab);
+        if top_edge.dragged() {
+            ctx.command_queue.push(CanvasCommand::MoveNode {
+                idx: ctx.index,
+                delta: top_edge.drag_delta(),
+            })
+        }
 
         // Ui for main body
         ctx.ui.scope_builder(
@@ -351,11 +336,13 @@ impl HeadlessWindow {
                 .max_rect(bounding_rect.shrink(padding))
                 .id(ctx.id.with("body")),
             |ui| {
-                let rect = add_body(ui);
-                self.cached_height = rect.height();
-                if self.auto_width {
-                    self.width = rect.width();
-                }
+                ui.vertical(|ui| {
+                    let rect = add_body(ui);
+                    self.cached_content_height = rect.height();
+                    if self.auto_width {
+                        self.content_width = rect.width();
+                    }
+                });
             },
         );
     }

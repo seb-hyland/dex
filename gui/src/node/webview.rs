@@ -54,8 +54,6 @@ impl NodeDynamics for WebviewPayload {
                         height: 312.5,
                     }),
                 });
-
-                Rect::from_min_size(pos, Vec2 { x: width, y: 312.5 })
             },
             |ui| {
                 ui.horizontal(|ui| {

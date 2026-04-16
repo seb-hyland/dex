@@ -119,8 +119,8 @@ pub struct TypstPayload {
     #[serde(skip)]
     world: IncrementalTypstWorld,
     image: Vec<u8>,
+    last_err: Option<String>,
     view: Window,
-    cached_height: f32,
 }
 
 impl Default for TypstPayload {
@@ -133,8 +133,8 @@ impl Default for TypstPayload {
             code,
             world,
             image,
+            last_err: None,
             view: Window::default(),
-            cached_height: 0.0,
         }
     }
 }
@@ -161,38 +161,28 @@ impl NodeDynamics for TypstPayload {
                         .fit_to_original_size(1.5),
                     );
                 });
-                image.response.rect
             },
             |ui| {
-                let line_height = ui.text_style_height(&TextStyle::Monospace);
-                let available_lines = (ui.available_height()
-                    - 2.0 * ui.spacing().item_spacing.y
-                    - self.cached_height)
-                    / line_height;
-                let font_size = ui
-                    .fonts_mut(|fonts| fonts.row_height(&TextStyle::Monospace.resolve(ui.style())));
-                CodeEditor::default()
-                    .id_source(ui.id().with("code_editor").value().to_string())
-                    .with_theme(ColorTheme::AYU)
-                    .with_fontsize(font_size)
-                    // This is super jank but whatever idk
-                    .with_rows((available_lines as usize).saturating_sub(2))
-                    .show(ui, &mut self.code);
+                if let Some(err) = &self.last_err {
+                    ui.colored_label(Color32::RED, err);
+                }
+                self.last_err = None;
+
+                ui.add_sized(ui.available_size(), |ui: &mut Ui| {
+                    CodeEditor::default()
+                        .id_source(ui.id().with("code_editor").value().to_string())
+                        .with_theme(ColorTheme::AYU)
+                        .with_fontsize(ui.text_style_height(&TextStyle::Monospace))
+                        .show(ui, &mut self.code)
+                        .response
+                        .response
+                });
 
                 let compile_output = self.world.render(&self.code);
-                let footer_height = match compile_output {
-                    Ok(v) => {
-                        self.image = v.as_bytes().to_vec();
-                        0.0
-                    }
-                    Err(e) => ui
-                        .vertical(|ui| ui.label(format!("{e:?}")))
-                        .response
-                        .rect
-                        .height(),
-                };
-
-                self.cached_height = footer_height;
+                match compile_output {
+                    Ok(svg) => self.image = svg.as_bytes().to_vec(),
+                    Err(e) => self.last_err = Some(format!("{e:?}")),
+                }
             },
         );
     }

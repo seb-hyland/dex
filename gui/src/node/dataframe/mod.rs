@@ -46,7 +46,6 @@ impl NodeDynamics for DataframePayload {
                         ))
                         .frame(Frame::NONE)
                         .show(ui);
-                    editor.text_clip_rect
                 },
                 |ui| {
                     if ui.button("Plot view").clicked() {

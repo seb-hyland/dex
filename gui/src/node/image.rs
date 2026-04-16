@@ -4,6 +4,7 @@ use crate::node::view::HeadlessWindow;
 use crate::node::{DrawContext, NodeDynamics};
 use crate::prelude::*;
 
+use std::f32;
 use std::path::Path;
 
 #[derive(Serialize, Deserialize)]
@@ -40,9 +41,13 @@ impl NodeDynamics for ImagePayload {
     fn draw(&mut self, ctx: &mut DrawContext<'_>) {
         let uri = &self.uri;
         self.view.show(ctx, |ui| {
+            let w = ui.available_width();
+            // Allow the image to expand vertically as much as it wants
             let image = Image::new(ImageSource::Uri(uri.into()))
-                .fit_to_original_size(3.0)
-                .max_width(ui.available_width());
+                .maintain_aspect_ratio(true)
+                .max_width(w)
+                .fit_to_exact_size(Vec2::new(f32::INFINITY, w));
+
             ui.vertical_centered(|ui| {
                 ui.add(image);
             })
