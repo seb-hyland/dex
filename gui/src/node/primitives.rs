@@ -54,10 +54,11 @@ impl NodeDynamics for TextPayload {
 
             let alignment = self.alignment;
             let inner = |ui: &mut Ui| {
-                let editor = TextEdit::singleline(&mut self.text)
+                let editor = TextEdit::multiline(&mut self.text)
                     .background_color(Color32::TRANSPARENT)
                     .frame(Frame::NONE)
                     .clip_text(false)
+                    .desired_rows(0)
                     .desired_width(0.0)
                     .hint_text("...")
                     .layouter(&mut Window::wrapping_layouter(

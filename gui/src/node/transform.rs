@@ -283,7 +283,12 @@ impl NodeDynamics for TransformPayload {
                         argument_from_node(arg_node, arg.arg_name.clone(), ctx.registry)
                     })
                     .collect(),
-                Some("/Users/seb-hyland/Documents/dex/lib/tests/venv/lib/python3.14/site-packages"),
+                Some(
+                    #[cfg(target_os = "macos")]
+                    "/Users/seb-hyland/Documents/dex/lib/tests/venv/lib/python3.14/site-packages",
+                    #[cfg(target_os = "linux")]
+                    "/home/seb-hyland/Documents/dex/lib/tests/venv/lib/python3.14/site-packages",
+                ),
             );
             match transform_result {
                 Ok(v) => {
