@@ -25,8 +25,8 @@ impl Default for Window {
 }
 
 impl Window {
-    /// Returns (header_rect, bounding_rect, padding)
-    pub fn rects(&self, location: Pos2) -> (Rect, Rect, f32) {
+    /// Returns (header_size, bounding_size, padding)
+    pub fn sizes(&self) -> (Vec2, Vec2, f32) {
         let padding = 10.0;
 
         let header_height = self.cached_header_content_height;
@@ -34,17 +34,17 @@ impl Window {
             x: self.body_size.x,
             y: header_height + 2.0 * padding,
         };
-        let header_rect = Rect::from_min_size(location, header_size);
 
-        let bounding_rect = if self.collapsed {
-            header_rect
+        let bounding_size = if self.collapsed {
+            header_size
         } else {
-            let mut rect = header_rect;
-            rect.max.y += self.body_size.y;
-            rect
+            Vec2 {
+                y: header_size.y + self.body_size.y,
+                ..header_size
+            }
         };
 
-        (header_rect, bounding_rect, padding)
+        (header_size, bounding_size, padding)
     }
 
     pub fn show(
@@ -54,7 +54,10 @@ impl Window {
         add_header: impl FnOnce(&mut Ui),
         add_main: impl FnOnce(&mut Ui),
     ) {
-        let (header_rect, bounding_rect, padding) = self.rects(ctx.screen_location);
+        let (header_size, bounding_size, padding) = self.sizes();
+
+        let header_rect = Rect::from_min_size(ctx.screen_location, header_size);
+        let bounding_rect = Rect::from_min_size(ctx.screen_location, bounding_size);
 
         ctx.ui.painter().rect(
             bounding_rect,
@@ -247,23 +250,21 @@ impl HeadlessWindow {
         }
     }
 
-    /// Returns (bounding_rect, padding)
-    pub fn rect(&self, ctx: &mut DrawContext<'_>) -> (Rect, f32) {
+    /// Returns (bounding_size, padding)
+    pub fn size(&self) -> (Vec2, f32) {
         let padding = 10.0;
-        let bounding_rect = Rect::from_min_size(
-            ctx.screen_location,
-            Vec2 {
-                x: self.content_width + (padding * 2.0),
-                y: self.cached_content_height + (padding * 2.0),
-            },
-        );
+        let bounding_size = Vec2 {
+            x: self.content_width + (padding * 2.0),
+            y: self.cached_content_height + (padding * 2.0),
+        };
 
-        (bounding_rect, padding)
+        (bounding_size, padding)
     }
 
     /// `add_body` must return (Option<height>, Option<width>)
     pub fn show(&mut self, ctx: &mut DrawContext<'_>, add_body: impl FnOnce(&mut Ui) -> Rect) {
-        let (bounding_rect, padding) = self.rect(ctx);
+        let (bounding_size, padding) = self.size();
+        let bounding_rect = Rect::from_min_size(ctx.screen_location, bounding_size);
 
         if ctx.ui.rect_contains_pointer(bounding_rect.expand(10.0)) {
             ctx.ui.painter().rect(

@@ -135,7 +135,7 @@ const fn draw_variant(ty: NodeVariantDiscriminants) -> NodeCreator {
         NodeVariantDiscriminants::Text => match_arm!("T" for Text),
 
         NodeVariantDiscriminants::Typst => match_arm!("ƒ" for Typst),
-        NodeVariantDiscriminants::Webview => |_| None,
+        // NodeVariantDiscriminants::Webview => |_| None,
         NodeVariantDiscriminants::Image => match_arm!("🖼" for Image),
 
         NodeVariantDiscriminants::Transform => match_arm!("λ" for Transform),

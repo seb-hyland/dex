@@ -1,4 +1,4 @@
-use crate::node::Node;
+use crate::node::{LayoutContext, Node};
 use crate::prelude::*;
 use crate::{
     canvas::CanvasCommand,
@@ -11,7 +11,6 @@ use crate::{
 };
 
 use eframe::egui::{Button, ComboBox, Frame, Sense, Stroke, StrokeKind, TextEdit, TextStyle};
-use egui::FontId;
 use egui_code_editor::{CodeEditor, ColorTheme, Completer, Syntax};
 use lib::compute::{self, TransformValue, python};
 use petgraph::visit::EdgeRef;
@@ -74,7 +73,11 @@ impl NodeDynamics for TransformArgPayload {
         unreachable!("Never directly call NodeDynamics impls for TransformArgPayload")
     }
 
-    fn rect(&self, _ctx: &mut DrawContext<'_>) -> Rect {
+    fn size(&self, _ctx: LayoutContext) -> Vec2 {
+        self.cached_rect.size()
+    }
+
+    fn rect(&self, _ctx: LayoutContext, _pos: Pos2) -> Rect {
         self.cached_rect
     }
 
@@ -85,7 +88,8 @@ impl NodeDynamics for TransformArgPayload {
 
 impl NodeDynamics for TransformPayload {
     fn draw(&mut self, ctx: &mut DrawContext<'_>) {
-        let self_rect = self.rect(ctx);
+        let bounding_rect = self.rect(ctx.layout, ctx.screen_location);
+
         let cur_index = ctx.index;
         let graph = ctx.graph_ref;
         let default_border = ctx.theme.border;
@@ -122,7 +126,7 @@ impl NodeDynamics for TransformPayload {
             ctx.theme.background,
             |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    let hovered = ui.rect_contains_pointer(self_rect);
+                    let hovered = ui.rect_contains_pointer(bounding_rect);
                     let default_x_spacing = ui.spacing().item_spacing.x;
 
                     if self.args.is_empty() {
@@ -286,8 +290,8 @@ impl NodeDynamics for TransformPayload {
         }
     }
 
-    fn rect(&self, ctx: &mut DrawContext<'_>) -> Rect {
-        self.view.rects(ctx.screen_location).1
+    fn size(&self, _ctx: LayoutContext) -> Vec2 {
+        self.view.sizes().1
     }
 
     fn edge_target(&self, ctx: &mut DrawContext<'_>) -> Option<(NodeIdx, bool)> {

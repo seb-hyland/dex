@@ -8,6 +8,7 @@ use egui::{Align, ComboBox, Frame, TextEdit};
 use egui_plot::{BoxElem, BoxPlot, BoxSpread, Plot, PlotBounds, Points};
 
 use crate::canvas::CanvasCommand;
+use crate::node::LayoutContext;
 use crate::node::{DrawContext, NodeDynamics, view::Window};
 use crate::prelude::*;
 
@@ -91,8 +92,8 @@ impl DataframePlotPayload {
 }
 
 impl NodeDynamics for DataframePlotPayload {
-    fn rect(&self, ctx: &mut DrawContext<'_>) -> Rect {
-        self.view.rects(ctx.screen_location).1
+    fn size(&self, _ctx: LayoutContext) -> Vec2 {
+        self.view.sizes().1
     }
 
     fn draw(&mut self, ctx: &mut DrawContext<'_>) {

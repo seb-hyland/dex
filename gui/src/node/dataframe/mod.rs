@@ -1,7 +1,8 @@
 use crate::{
     canvas::CanvasCommand,
     node::{
-        DrawContext, NodeDynamics, NodeVariant, dataframe::plot::DataframePlotPayload, view::Window,
+        DrawContext, LayoutContext, NodeDynamics, NodeVariant,
+        dataframe::plot::DataframePlotPayload, view::Window,
     },
     prelude::*,
     registry::{RegistryHandle, RegistryItemInner},
@@ -34,7 +35,7 @@ impl NodeDynamics for DataframePayload {
                 ctx,
                 ctx.theme.background,
                 |ui| {
-                    let editor = TextEdit::singleline(table_name)
+                    TextEdit::singleline(table_name)
                         .background_color(Color32::TRANSPARENT)
                         .clip_text(false)
                         .desired_width(0.0)
@@ -72,7 +73,7 @@ impl NodeDynamics for DataframePayload {
     }
 
     #[inline(always)]
-    fn rect(&self, ctx: &mut DrawContext<'_>) -> Rect {
-        self.view.rects(ctx.screen_location).1
+    fn size(&self, _ctx: LayoutContext) -> Vec2 {
+        self.view.sizes().1
     }
 }

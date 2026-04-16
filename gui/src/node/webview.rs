@@ -32,7 +32,7 @@ impl WebviewPayload {
 }
 
 impl NodeDynamics for WebviewPayload {
-    fn rect(&self, ctx: &mut DrawContext<'_>) -> Rect {
+    fn size(&self, ctx: &mut DrawContext<'_>) -> Rect {
         self.view.rects(ctx.screen_location).1
     }
 

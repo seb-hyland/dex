@@ -1,8 +1,7 @@
 use crate::node::image::ImagePayload;
-use crate::node::webview::WebviewPayload;
 use crate::prelude::*;
 use crate::{
-    canvas::{CanvasCommand, DisjointGraphRef, ViewState},
+    canvas::{CanvasCommand, DisjointGraphRef},
     node::{
         dataframe::{DataframePayload, plot::DataframePlotPayload},
         primitives::{NumericPayload, TextPayload},
@@ -23,7 +22,7 @@ pub mod primitives;
 pub mod transform;
 pub mod typst;
 pub mod view;
-pub mod webview;
+// pub mod webview;
 
 #[derive(Serialize, Deserialize)]
 pub struct Node {
@@ -43,7 +42,7 @@ pub enum NodeVariant {
     Float(NumericPayload<f64>),
 
     Typst(TypstPayload),
-    Webview(WebviewPayload),
+    // Webview(WebviewPayload),
     Image(ImagePayload),
 
     Transform(TransformPayload),
@@ -55,22 +54,32 @@ pub struct DrawContext<'ctx> {
     pub id: Id,
     pub screen_location: Pos2,
     pub command_queue: &'ctx mut Vec<CanvasCommand>,
-    pub view_state: &'ctx ViewState,
+    pub layout: LayoutContext,
     pub registry: &'ctx Registry,
     pub graph_ref: DisjointGraphRef,
     pub ui: &'ctx mut Ui,
     pub theme: &'ctx Theme,
 }
 
+#[derive(Clone, Copy)]
+pub struct LayoutContext {
+    pub scale: f32,
+}
+
 #[enum_dispatch]
 pub trait NodeDynamics {
     fn draw(&mut self, ctx: &mut DrawContext<'_>);
 
-    fn rect(&self, ctx: &mut DrawContext<'_>) -> Rect;
+    fn size(&self, ctx: LayoutContext) -> Vec2;
+
+    fn rect(&self, ctx: LayoutContext, pos: Pos2) -> Rect {
+        Rect::from_min_size(pos, self.size(ctx))
+    }
 
     /// If interacted, returns `Some((interacted_index, clicked))`
     fn edge_target(&self, ctx: &mut DrawContext<'_>) -> Option<(NodeIdx, bool)> {
-        let bounding_rect = self.rect(ctx);
+        let bounding_rect = self.rect(ctx.layout, ctx.screen_location);
+
         let interaction = ctx.ui.interact(
             bounding_rect,
             ctx.id.with("edge_target"),

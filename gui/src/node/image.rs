@@ -1,7 +1,7 @@
 use egui::{Image, ImageSource};
 
 use crate::node::view::HeadlessWindow;
-use crate::node::{DrawContext, NodeDynamics};
+use crate::node::{DrawContext, LayoutContext, NodeDynamics};
 use crate::prelude::*;
 
 use std::f32;
@@ -34,8 +34,8 @@ impl Default for ImagePayload {
 }
 
 impl NodeDynamics for ImagePayload {
-    fn rect(&self, ctx: &mut DrawContext<'_>) -> Rect {
-        self.view.rect(ctx).0
+    fn size(&self, _ctx: LayoutContext) -> Vec2 {
+        self.view.size().0
     }
 
     fn draw(&mut self, ctx: &mut DrawContext<'_>) {

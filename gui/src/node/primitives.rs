@@ -1,3 +1,4 @@
+use crate::node::LayoutContext;
 use crate::node::view::Window;
 use crate::node::{DrawContext, NodeDynamics, view::HeadlessWindow};
 use crate::prelude::*;
@@ -93,8 +94,8 @@ impl NodeDynamics for TextPayload {
         });
     }
 
-    fn rect(&self, ctx: &mut DrawContext<'_>) -> Rect {
-        self.view.rect(ctx).0
+    fn size(&self, _ctx: LayoutContext) -> Vec2 {
+        self.view.size().0
     }
 }
 
@@ -184,7 +185,7 @@ impl<N: Numeric> NodeDynamics for NumericPayload<N> {
         });
     }
 
-    fn rect(&self, ctx: &mut DrawContext<'_>) -> Rect {
-        self.view.rect(ctx).0
+    fn size(&self, _ctx: LayoutContext) -> Vec2 {
+        self.view.size().0
     }
 }

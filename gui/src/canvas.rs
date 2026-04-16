@@ -1,3 +1,4 @@
+use crate::node::LayoutContext;
 use crate::prelude::*;
 use crate::theme::Theme;
 use crate::{
@@ -84,30 +85,21 @@ impl Canvas {
         let graph_ref = DisjointGraphRef::new(&self.graph);
 
         // Draw all connections between nodes
+        let layout_context = LayoutContext {
+            scale: self.view_state.scale(),
+        };
         for cur_idx in self.graph.node_indices() {
             let source_node = self.graph.node_weight(cur_idx).unwrap();
-
-            let source_location = source_node.location;
-            let source_location_screen = self.view_state.world_to_screen(source_location);
-
-            let id = Id::new("canvas_edge").with(cur_idx);
-            let mut draw_context = DrawContext {
-                index: cur_idx,
-                screen_location: source_location_screen,
-                id,
-                command_queue: &mut command_queue,
-                view_state: &self.view_state,
-                registry,
-                graph_ref,
-                ui,
-                theme: &theme,
-            };
-            let source_rect = source_node.variant.rect(&mut draw_context);
+            let source_location_screen = self.view_state.world_to_screen(source_node.location);
+            let source_rect = source_node
+                .variant
+                .rect(layout_context, source_location_screen);
 
             // For each origin, draw connections to all targets
             for outgoing_edge in self.graph.edges(cur_idx) {
                 let target_idx = outgoing_edge.target();
                 let target_node = self.graph.node_weight(target_idx).unwrap();
+                let target_location_screen = self.view_state.world_to_screen(target_node.location);
 
                 if matches!(target_node.variant, NodeVariant::TransformArg(_)) {
                     unreachable!(
@@ -115,12 +107,9 @@ impl Canvas {
                     );
                 }
 
-                let target_location = target_node.location;
-                let target_location_screen = self.view_state.world_to_screen(target_location);
-
-                draw_context.index = target_idx;
-                draw_context.screen_location = target_location_screen;
-                let target_rect = target_node.variant.rect(&mut draw_context);
+                let target_rect = target_node
+                    .variant
+                    .rect(layout_context, target_location_screen);
 
                 let (source_pos, target_pos) =
                     Node::nearest_boundary_point(source_rect, target_rect);
@@ -144,22 +133,12 @@ impl Canvas {
             NodeConnectionState::Searching => {}
             NodeConnectionState::One(origin, ref mut current_target) => {
                 let origin_node = self.graph.node_weight(origin).unwrap();
-                let origin_location = origin_node.location;
-                let origin_location_screen = self.view_state.world_to_screen(origin_location);
+                let origin_location_screen = self.view_state.world_to_screen(origin_node.location);
 
-                let id = Id::new("canvas_connecting_edge");
-                let mut draw_context = DrawContext {
-                    index: origin,
-                    screen_location: origin_location_screen,
-                    id,
-                    command_queue: &mut command_queue,
-                    view_state: &self.view_state,
-                    registry,
-                    graph_ref,
-                    ui,
-                    theme: &theme,
-                };
-                let origin_pos = origin_node.variant.rect(&mut draw_context).center();
+                let origin_pos = origin_node
+                    .variant
+                    .rect(layout_context, origin_location_screen)
+                    .center();
 
                 let stroke = Stroke {
                     color: origin_node
@@ -171,23 +150,21 @@ impl Canvas {
 
                 match *current_target {
                     None => {
-                        if let Some(last_cursor_pos) = draw_context
-                            .ui
-                            .ctx()
-                            .input(|input| input.pointer.latest_pos())
+                        if let Some(last_cursor_pos) = ui.input(|input| input.pointer.latest_pos())
                         {
                             painter.line_segment([origin_pos, last_cursor_pos], stroke);
                         }
                     }
                     Some(target) => {
                         let target_node = self.graph.node_weight(target).unwrap();
-                        let target_location = target_node.location;
                         let target_location_screen =
-                            self.view_state.world_to_screen(target_location);
+                            self.view_state.world_to_screen(target_node.location);
 
-                        draw_context.index = target;
-                        draw_context.screen_location = target_location_screen;
-                        let target_pos = target_node.variant.rect(&mut draw_context).center();
+                        let target_pos = target_node
+                            .variant
+                            .rect(layout_context, target_location_screen)
+                            .center();
+
                         painter.line_segment(
                             [origin_pos, target_pos],
                             Stroke {
@@ -215,22 +192,22 @@ impl Canvas {
                 continue 'node_loop;
             }
 
-            let node_location = self.view_state.world_to_screen(node.location);
+            let node_screen_location = self.view_state.world_to_screen(node.location);
             let mut draw_context = DrawContext {
                 index: cur_idx,
                 id: node_id,
-                screen_location: node_location,
+                screen_location: node_screen_location,
                 command_queue: &mut command_queue,
-                view_state: &self.view_state,
+                layout: layout_context,
                 registry,
                 graph_ref,
                 ui,
                 theme: &theme,
             };
 
-            let node_rect = node.variant.rect(&mut draw_context);
+            let node_rect = node.variant.rect(layout_context, node_screen_location);
             // At least part of the node is visible
-            if canvas_rect.contains(node_location) || canvas_rect.intersects(node_rect) {
+            if canvas_rect.contains(node_screen_location) || canvas_rect.intersects(node_rect) {
                 // Draw yourself, I COMMAND you
                 node.variant.draw(&mut draw_context);
 

@@ -1,5 +1,5 @@
 use crate::{
-    node::{DrawContext, NodeDynamics, view::Window},
+    node::{DrawContext, LayoutContext, NodeDynamics, view::Window},
     prelude::*,
 };
 
@@ -151,7 +151,7 @@ impl NodeDynamics for TypstPayload {
                 let uri = format!("bytes://typst_{}.svg", node_id);
                 // Evict cache
                 ui.ctx().forget_image(&uri);
-                let image = ui.vertical_centered(|ui| {
+                ui.vertical_centered(|ui| {
                     ui.add(
                         Image::new(ImageSource::Bytes {
                             uri: uri.into(),
@@ -187,7 +187,7 @@ impl NodeDynamics for TypstPayload {
         );
     }
 
-    fn rect(&self, ctx: &mut DrawContext<'_>) -> Rect {
-        self.view.rects(ctx.screen_location).1
+    fn size(&self, _ctx: LayoutContext) -> Vec2 {
+        self.view.sizes().1
     }
 }
