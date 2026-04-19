@@ -12,7 +12,7 @@ const ANIMATION_TIME: f64 = 1.0;
 pub fn draw_record_batch(
     ui: &mut Ui,
     data: &RecordBatch,
-    scroll_to: Option<usize>,
+    scroll_to: &Option<usize>,
     highlight: &mut Option<(usize, f64)>,
 ) {
     // Revert visuals changes
@@ -62,7 +62,7 @@ pub fn draw_record_batch(
                     .max_scroll_height(available_height)
                     .striped(true);
 
-                if let Some(row) = scroll_to {
+                if let &Some(row) = scroll_to {
                     table = table.scroll_to_row(row, Some(Align::Center));
                 }
 

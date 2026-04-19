@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["gui","lib"]
+members = ["gui", "gui_code_editor", "lib"]
 
 [workspace.dependencies]
 arrow = "58.0"

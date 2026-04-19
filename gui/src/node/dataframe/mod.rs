@@ -1,8 +1,9 @@
 use crate::{
-    canvas::CanvasCommand,
+    canvas::AddConnectedNode,
     node::{
-        DrawContext, LayoutContext, NodeDynamics, NodeVariant,
-        dataframe::plot::DataframePlotPayload, view::Window,
+        DrawContext, LayoutContext, NodeDynamics, NodeInitialization, NodeVariant,
+        dataframe::plot::DataframePlotPayload,
+        view::{ResizeDir, Window},
     },
     prelude::*,
     registry::{RegistryHandle, RegistryItemInner},
@@ -13,16 +14,34 @@ use egui::{Align, Frame, TextEdit};
 pub mod plot;
 mod table;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct DataframePayload {
     pub data_ref: RegistryHandle,
-    pub scroll_to: Option<usize>,
-    pub highlighted_row: Option<(usize, f64)>,
+    pub scroll_to: Transient<Option<usize>>,
+    pub highlighted_row: Transient<Option<(usize, f64)>>,
     pub view: Window,
 }
 
+impl DataframePayload {
+    pub fn new(handle: RegistryHandle) -> Self {
+        Self {
+            data_ref: handle,
+            highlighted_row: Transient::from(None),
+            scroll_to: Transient::from(None),
+            view: Window::default(),
+        }
+    }
+
+    pub fn scroll_to(&self, row: usize, ui: &Ui) {
+        self.scroll_to.set(Some(row));
+        self.highlighted_row.set(Some((row, ui.time())));
+    }
+}
+
 impl NodeDynamics for DataframePayload {
-    fn draw(&mut self, ctx: &mut DrawContext<'_>) {
+    fn step(&self, _ctx: &mut DrawContext<'_>) {}
+
+    fn draw(&self, ctx: &mut DrawContext<'_>) {
         let item = ctx.registry.get(self.data_ref).unwrap();
         let mut create_new_plot = false;
 
@@ -34,7 +53,7 @@ impl NodeDynamics for DataframePayload {
             self.view.show(
                 ctx,
                 ctx.theme.background,
-                |ui| {
+                |ui, _actions| {
                     TextEdit::singleline(table_name)
                         .background_color(Color32::TRANSPARENT)
                         .clip_text(false)
@@ -48,23 +67,25 @@ impl NodeDynamics for DataframePayload {
                         .frame(Frame::NONE)
                         .show(ui);
                 },
-                |ui| {
+                |ui, _actions| {
                     if ui.button("Plot view").clicked() {
                         create_new_plot = true;
                     }
-                    table::draw_record_batch(ui, data, self.scroll_to, &mut self.highlighted_row);
-                    self.scroll_to = None;
+                    self.highlighted_row.modify(|row| {
+                        table::draw_record_batch(ui, data, &self.scroll_to.val(), row)
+                    });
+                    self.scroll_to.set(None);
                 },
             );
 
             if create_new_plot {
-                ctx.command_queue.push(CanvasCommand::AddNode {
+                let idx = ctx.index;
+                let batch = data.clone();
+                ctx.action_queue.push(AddConnectedNode {
                     origin: ctx.index,
-                    node: NodeVariant::DataframePlot(DataframePlotPayload::new(
-                        ctx.index,
-                        table_name.clone(),
-                        data,
-                    )),
+                    constructor: move |_| {
+                        NodeVariant::DataframePlot(DataframePlotPayload::new(idx, batch))
+                    },
                 });
             }
         } else {
@@ -75,5 +96,9 @@ impl NodeDynamics for DataframePayload {
     #[inline(always)]
     fn size(&self, _ctx: LayoutContext) -> Vec2 {
         self.view.sizes().1
+    }
+
+    fn resize(&mut self, dir: ResizeDir, delta: Vec2) {
+        self.view.handle_resize(dir, delta);
     }
 }

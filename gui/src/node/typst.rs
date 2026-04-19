@@ -1,21 +1,24 @@
 use crate::{
-    node::{DrawContext, LayoutContext, NodeDynamics, view::Window},
+    node::{
+        DrawContext, LayoutContext, NodeDynamics, NodeInitialization, NodeVariant,
+        view::{ResizeDir, Window},
+    },
     prelude::*,
 };
 
-use egui::{Image, ImageSource, TextStyle, TextureOptions};
+use egui::{Id, Image, ImageSource, TextStyle, TextureOptions, UiBuilder};
 use egui_code_editor::{CodeEditor, ColorTheme};
-use time::{OffsetDateTime, UtcOffset};
 use typst::{
     Library, LibraryExt,
     diag::{FileError, FileResult, SourceDiagnostic},
     ecow::EcoVec,
-    foundations::{Bytes, Datetime},
+    foundations::Bytes,
     syntax::{FileId, Source, VirtualPath},
     text::{Font, FontBook},
     utils::LazyHash,
 };
 
+#[derive(Clone)]
 pub struct IncrementalTypstWorld {
     library: LazyHash<Library>,
     book: LazyHash<FontBook>,
@@ -101,53 +104,63 @@ impl typst::World for IncrementalTypstWorld {
         Err(FileError::NotFound(path.vpath().as_rootless_path().into()))
     }
 
-    fn today(&self, offset: Option<i64>) -> Option<typst::foundations::Datetime> {
-        let mut cur_time =
-            OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-        if let Some(offset) = offset {
-            cur_time = cur_time.to_offset(UtcOffset::from_hms(offset as i8, 0, 0).unwrap());
-        }
-
-        let (h, m, s) = cur_time.to_hms();
-        Datetime::from_hms(h, m, s)
+    fn today(&self, _offset: Option<i64>) -> Option<typst::foundations::Datetime> {
+        None
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct TypstPayload {
-    code: String,
-    #[serde(skip)]
-    world: IncrementalTypstWorld,
-    image: Vec<u8>,
-    last_err: Option<String>,
+    code: Buffer<String>,
+    world: Transient<IncrementalTypstWorld>,
+    image: Transient<Vec<u8>>,
+    last_err: Transient<Option<String>>,
     view: Window,
 }
 
-impl Default for TypstPayload {
-    fn default() -> Self {
+impl NodeInitialization for TypstPayload {
+    type Origin = String;
+
+    fn init_from(f: Self::Origin, seed: u32) -> Self {
         let mut world = IncrementalTypstWorld::default();
-        let code = String::new();
-        let image = world.render(&code).unwrap().as_bytes().into();
+        let code = Buffer::new(f, Id::new(seed).with("code_buffer"));
+        let empty_image = Transient::from(world.render("").unwrap().as_bytes().to_vec());
 
         Self {
             code,
-            world,
-            image,
-            last_err: None,
+            world: Transient::from(world),
+            image: empty_image,
+            last_err: Transient::from(None),
             view: Window::default(),
         }
     }
 }
 
 impl NodeDynamics for TypstPayload {
-    fn draw(&mut self, ctx: &mut DrawContext<'_>) {
+    fn step(&self, ctx: &mut DrawContext<'_>) {
+        action! {
+            SetTypstCode { idx: NodeIdx, val: String }
+                does(ctx) {
+                    let typst_node = ctx.unwrap_mut_with(idx, NodeVariant::try_as_typst_mut);
+                    typst_node.code.set(val);
+                }
+        }
+
+        self.code
+            .resolve_pending_actions(ctx.ui, ctx.action_queue, |s| SetTypstCode {
+                idx: ctx.index,
+                val: s,
+            });
+    }
+
+    fn draw(&self, ctx: &mut DrawContext<'_>) {
         let image = self.image.clone();
         let node_id = ctx.id.value();
 
         self.view.show(
             ctx,
             Color32::TRANSPARENT,
-            |ui| {
+            |ui, _actions| {
                 let uri = format!("bytes://typst_{}.svg", node_id);
                 // Evict cache
                 ui.ctx().forget_image(&uri);
@@ -155,36 +168,49 @@ impl NodeDynamics for TypstPayload {
                     ui.add(
                         Image::new(ImageSource::Bytes {
                             uri: uri.into(),
-                            bytes: image.into(),
+                            bytes: (*image.val()).clone().into(),
                         })
                         .texture_options(TextureOptions::NEAREST)
                         .fit_to_original_size(1.5),
                     );
                 });
             },
-            |ui| {
-                if let Some(err) = &self.last_err {
+            |ui, _actions| {
+                if let Some(err) = &*self.last_err.val() {
                     ui.colored_label(Color32::RED, err);
                 }
-                self.last_err = None;
+                self.last_err.set(None);
 
-                ui.add_sized(ui.available_size(), |ui: &mut Ui| {
-                    CodeEditor::default()
-                        .id_source(ui.id().with("code_editor").value().to_string())
-                        .with_theme(ColorTheme::AYU)
-                        .with_fontsize(ui.text_style_height(&TextStyle::Monospace))
-                        .show(ui, &mut self.code)
-                        .response
-                        .response
+                self.code.show(|code, id| {
+                    ui.add_sized(ui.available_size(), |ui: &mut Ui| {
+                        CodeEditor::default()
+                            .id(id)
+                            .with_theme(ColorTheme::AYU)
+                            .with_fontsize(ui.text_style_height(&TextStyle::Monospace))
+                            .show(ui, code)
+                            .response
+                            .response
+                    })
                 });
 
-                let compile_output = self.world.render(&self.code);
+                let compile_output = self
+                    .world
+                    .modify(|world| world.render(&self.code.temp_str()));
                 match compile_output {
-                    Ok(svg) => self.image = svg.as_bytes().to_vec(),
-                    Err(e) => self.last_err = Some(format!("{e:?}")),
+                    Ok(svg) => self.image.set(svg.as_bytes().to_vec()),
+                    Err(e) => {
+                        let e_string = format!("{e:?}");
+                        if self.last_err.val().as_deref() != Some(&e_string) {
+                            self.last_err.set(Some(e_string));
+                        }
+                    }
                 }
             },
         );
+    }
+
+    fn resize(&mut self, dir: ResizeDir, delta: Vec2) {
+        self.view.handle_resize(dir, delta);
     }
 
     fn size(&self, _ctx: LayoutContext) -> Vec2 {

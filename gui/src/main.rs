@@ -1,29 +1,51 @@
-use crate::canvas::Canvas;
+use crate::actions::DoActionContext;
 use crate::prelude::*;
+use crate::tab::TabState;
 use crate::{drawer::Drawer, registry::Registry, theme::LIGHT_THEME};
 
-use egui::{
-    CursorIcon, FontData, FontFamily, Frame, Id, TextEdit, Visuals,
-    text::{CCursor, CCursorRange},
-};
-use egui_dnd::utils::shift_vec;
+use eframe::CreationContext;
+use egui::{FontData, FontFamily, Visuals};
 use egui_extras::install_image_loaders;
 
-use std::hash::Hash;
-
+mod actions;
 mod canvas;
+mod components;
 mod drawer;
 mod node;
 mod prelude;
 mod registry;
+mod tab;
+mod text;
 mod theme;
+mod types;
+
+#[derive(Default)]
+struct Main {
+    registry: Registry,
+    active: Situation,
+    action_queue: Actions,
+    situations: Vec<Situation>,
+}
+
+#[derive(Default, Clone)]
+struct Situation {
+    tab_state: TabState,
+    drawer: Drawer,
+}
+
+impl Situation {
+    pub fn active_canvas(&mut self) -> Option<&mut canvas::Canvas> {
+        self.tab_state.active_canvas()
+    }
+}
+
+#[global_allocator]
+static GLOBAL: &stats_alloc::StatsAlloc<std::alloc::System> = &stats_alloc::INSTRUMENTED_SYSTEM;
 
 fn main() {
     dioxus_devtools::connect_subsecond();
+    #[cfg(debug_assertions)]
     env_logger::init();
-
-    #[cfg(target_os = "linux")]
-    gtk::init().unwrap();
 
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
@@ -31,307 +53,92 @@ fn main() {
         native_options,
         Box::new(|cc| {
             install_image_loaders(&cc.egui_ctx);
+            initialize_fonts(cc);
             cc.egui_ctx.set_visuals(Visuals::from(LIGHT_THEME));
 
-            let mut fonts = egui::FontDefinitions::default();
-
-            let mut add_font = |name: &'static str, data: &'static [u8]| {
-                fonts
-                    .font_data
-                    .insert(name.to_owned(), FontData::from_static(data).into());
-                fonts
-                    .families
-                    .insert(FontFamily::Name(name.into()), vec![name.to_owned()]);
-            };
-
-            add_font("inter", include_bytes!("../assets/Inter_Regular.ttf"));
-            add_font("inter_italic", include_bytes!("../assets/Inter_Italic.ttf"));
-            add_font("inter_bold", include_bytes!("../assets/Inter_Bold.ttf"));
-            add_font(
-                "inter_bold_italic",
-                include_bytes!("../assets/Inter_BoldItalic.ttf"),
-            );
-
-            fonts
-                .families
-                .get_mut(&FontFamily::Proportional)
-                .unwrap()
-                .insert(0, "inter".to_owned());
-
-            cc.egui_ctx.set_fonts(fonts);
-
-            Ok(Box::new(DexState::new()))
+            Ok(Box::new(Main::default()))
         }),
     )
     .unwrap();
 }
 
-struct DexState {
-    registry: Registry,
-    tabs: Vec<Tab>,
-    active_tab: usize,
-    renaming_tab: RenamingTab,
-    tab_bar_visible: bool,
-    background_visible: bool,
-    drawer: Drawer,
+fn initialize_fonts(cc: &CreationContext) {
+    let mut fonts = egui::FontDefinitions::default();
+    let mut add_font = |name: &'static str, data: &'static [u8]| {
+        fonts
+            .font_data
+            .insert(name.to_owned(), FontData::from_static(data).into());
+        fonts
+            .families
+            .insert(FontFamily::Name(name.into()), vec![name.to_owned()]);
+    };
+
+    add_font("inter", include_bytes!("../assets/Inter_Regular.ttf"));
+    add_font("inter_italic", include_bytes!("../assets/Inter_Italic.ttf"));
+    add_font("inter_bold", include_bytes!("../assets/Inter_Bold.ttf"));
+    add_font(
+        "inter_bold_italic",
+        include_bytes!("../assets/Inter_BoldItalic.ttf"),
+    );
+
+    fonts
+        .families
+        .get_mut(&FontFamily::Proportional)
+        .unwrap()
+        .insert(0, "inter".to_owned());
+    cc.egui_ctx.set_fonts(fonts);
 }
 
-struct Tab {
-    name: String,
-    canvas: canvas::Canvas,
-    add_index: usize,
-}
-
-impl Hash for Tab {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.add_index.hash(state);
-    }
-}
-
-impl Tab {
-    pub const NEW_TAB_NAME: &'static str = "Unnamed desktop";
-
-    fn safe_forward(tabs: &mut Vec<Self>, active_tab: &mut usize) {
-        // Increment, saturating at the vector's max index
-        *active_tab = (*active_tab + 1).min(tabs.len() - 1);
-    }
-
-    fn safe_backward(active_tab: &mut usize) {
-        // Decrement, saturating at 0
-        *active_tab = active_tab.saturating_sub(1);
-    }
-}
-
-enum RenamingTab {
-    None,
-    Newly(usize),
-    Some(usize),
-}
-
-impl DexState {
-    fn new() -> Self {
-        Self {
-            registry: Registry::default(),
-            tabs: vec![Tab {
-                name: Tab::NEW_TAB_NAME.to_owned(),
-                canvas: canvas::Canvas::default(),
-                add_index: 0,
-            }],
-            active_tab: 0,
-            renaming_tab: RenamingTab::None,
-            background_visible: true,
-            tab_bar_visible: true,
-            drawer: Drawer {
-                visible: true,
-                data_items: Vec::new(),
-            },
-        }
-    }
-
-    fn active_canvas(tabs: &mut [Tab], active_tab: usize) -> &mut canvas::Canvas {
-        &mut tabs.get_mut(active_tab).unwrap().canvas
-    }
-}
-
-impl eframe::App for DexState {
+impl eframe::App for Main {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         subsecond::call(|| {
-            #[cfg(target_os = "linux")]
-            gtk::main_iteration_do(false);
+            let active_situation = &mut self.active;
 
-            let mut tab_bar_height = 0.0;
-            if self.tab_bar_visible {
-                let resp = egui::Panel::top("tab_bar").show_inside(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let mut tab_to_close = None;
+            active_situation
+                .tab_state
+                .draw_fluent(ui, &mut self.action_queue);
 
-                        let response = egui_dnd::dnd(ui, "tabs_dnd").show_vec(
-                            &mut self.tabs,
-                            |ui, tab, handle, state| {
-                                let idx = state.index;
-                                if state.dragged {
-                                    self.active_tab = idx;
-                                }
-                                let is_active = idx == self.active_tab;
-
-                                ui.horizontal(|ui| {
-                                    handle.ui(ui, |ui| {
-                                        if let RenamingTab::Newly(idx) | RenamingTab::Some(idx) =
-                                            self.renaming_tab
-                                        {
-                                            if idx == state.index {
-                                                let output = TextEdit::singleline(&mut tab.name)
-                                                    .clip_text(false)
-                                                    .desired_width(0.0)
-                                                    .frame(Frame::NONE)
-                                                    .show(ui);
-
-                                                if matches!(
-                                                    self.renaming_tab,
-                                                    RenamingTab::Newly(_)
-                                                ) {
-                                                    output.response.request_focus();
-                                                    let mut state = TextEdit::load_state(
-                                                        ui.ctx(),
-                                                        output.response.id,
-                                                    )
-                                                    .unwrap_or_default();
-                                                    state.cursor.set_char_range(Some(
-                                                        CCursorRange::two(
-                                                            CCursor::new(0),
-                                                            CCursor::new(tab.name.chars().count()),
-                                                        ),
-                                                    ));
-                                                    state.store(ui.ctx(), output.response.id);
-
-                                                    self.renaming_tab = RenamingTab::Some(idx);
-                                                }
-
-                                                if output.response.lost_focus()
-                                                    || ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                                {
-                                                    self.renaming_tab = RenamingTab::None;
-                                                }
-                                            } else {
-                                                let _ = ui.selectable_label(is_active, &tab.name);
-                                            }
-                                        } else {
-                                            let label_res =
-                                                ui.selectable_label(is_active, &tab.name);
-
-                                            if label_res.clicked() {
-                                                self.active_tab = idx;
-                                            }
-                                            if label_res.double_clicked() {
-                                                self.renaming_tab = RenamingTab::Newly(idx);
-                                            }
-                                        }
-
-                                        if ui.button("x").clicked() {
-                                            tab_to_close = Some(idx);
-                                        }
-                                    });
-                                });
-                            },
-                        );
-
-                        if let Some(update) = response.update {
-                            shift_vec(update.from, update.to, &mut self.tabs);
-                        }
-
-                        if let Some(close_idx) = tab_to_close {
-                            self.tabs.remove(close_idx);
-                            self.active_tab = self.active_tab.saturating_sub(1);
-
-                            if self.tabs.is_empty() {
-                                self.tabs.push(Tab {
-                                    name: Tab::NEW_TAB_NAME.to_owned(),
-                                    canvas: Canvas::default(),
-                                    add_index: 0,
-                                });
+            match active_situation.tab_state.active_canvas() {
+                None => {
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.label("No desktops have been created!");
+                            if ui.button("Create new...").clicked() {
+                                self.action_queue.push(tab::NewTab {});
                             }
-                        }
-
-                        if ui.button("+").clicked() {
-                            let new_tab_idx = self.tabs.len();
-                            self.tabs.push(Tab {
-                                name: Tab::NEW_TAB_NAME.to_owned(),
-                                canvas: canvas::Canvas::default(),
-                                add_index: new_tab_idx,
-                            });
-                            self.active_tab = new_tab_idx;
-                            self.renaming_tab = RenamingTab::Newly(self.active_tab);
-                        }
+                        });
                     });
-                });
-                tab_bar_height = resp.response.rect.height();
-            }
-
-            if self.drawer.visible {
-                let mut want_center = false;
-                let active_canvas = Self::active_canvas(&mut self.tabs, self.active_tab);
-                egui::Panel::left("drawer")
-                    .exact_size(Drawer::SIZE)
-                    .resizable(false)
-                    .show_inside(ui, |ui| {
-                        self.drawer.draw(
-                            ui,
-                            active_canvas,
-                            &mut self.registry,
-                            &mut self.background_visible,
-                            &mut want_center,
-                        );
+                }
+                Some(canvas) => {
+                    active_situation.drawer.draw_fluent(
+                        ui,
+                        &mut self.action_queue,
+                        canvas,
+                        &self.registry,
+                    );
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        canvas.sync_placing_node(ui);
+                        canvas.draw_fluent(ui, &mut self.action_queue, &mut self.registry);
                     });
-
-                if want_center {
-                    active_canvas.view_state.reset_offset();
                 }
             }
 
-            egui::CentralPanel::default().show_inside(ui, |ui| {
-                let update = Self::active_canvas(&mut self.tabs, self.active_tab).draw(
-                    ui,
-                    &mut self.registry,
-                    self.background_visible,
-                );
-                match update {
-                    canvas::DexStateUpdate::None => {}
-                    canvas::DexStateUpdate::ToggleBackgroundVisibility => {
-                        self.background_visible = !self.background_visible
-                    }
-                    canvas::DexStateUpdate::CenterDesktop => {
-                        Self::active_canvas(&mut self.tabs, self.active_tab)
-                            .view_state
-                            .reset_offset()
-                    }
-                    canvas::DexStateUpdate::ToggleDrawerVisibility => {
-                        self.drawer.visible = !self.drawer.visible
-                    }
-                    canvas::DexStateUpdate::ToggleTabBarVisibility => {
-                        self.tab_bar_visible = !self.tab_bar_visible
-                    }
-                    canvas::DexStateUpdate::TabBackward => Tab::safe_backward(&mut self.active_tab),
-                    canvas::DexStateUpdate::TabForward => {
-                        Tab::safe_forward(&mut self.tabs, &mut self.active_tab)
-                    }
-                }
-            });
+            if self.action_queue.is_dirty() {
+                let mut context = DoActionContext {
+                    situation: active_situation,
+                    registry: &mut self.registry,
+                    frame_time: ui.time(),
+                };
+                self.action_queue.do_all(&mut context);
 
-            let drawer_button_text = if self.drawer.visible { "⏴" } else { "⏵" };
-            egui::Area::new(Id::new("drawer_handle"))
-                .fixed_pos(Pos2 {
-                    x: if self.drawer.visible {
-                        Drawer::SIZE
-                    } else {
-                        0.0
-                    },
-                    y: ui.max_rect().height() / 2.0,
-                })
-                .show(ui.ctx(), |ui| {
-                    if ui
-                        .button(drawer_button_text)
-                        .on_hover_cursor(CursorIcon::PointingHand)
-                        .clicked()
-                    {
-                        self.drawer.visible = !self.drawer.visible;
-                    }
-                });
+                self.situations.push(self.active.clone());
+            }
 
-            let tab_bar_button_text = if self.tab_bar_visible { "⏶" } else { "⏷" };
-            egui::Area::new(Id::new("tab_bar_handle"))
-                .fixed_pos(Pos2 {
-                    x: ui.max_rect().width() / 2.0,
-                    y: tab_bar_height,
-                })
-                .show(ui.ctx(), |ui| {
-                    if ui
-                        .button(tab_bar_button_text)
-                        .on_hover_cursor(CursorIcon::PointingHand)
-                        .clicked()
-                    {
-                        self.tab_bar_visible = !self.tab_bar_visible;
-                    }
-                });
+            // let stats = GLOBAL.stats();
+            // println!(
+            //     "Net allocation: {}",
+            //     stats.bytes_allocated - stats.bytes_deallocated
+            // );
         });
     }
 }

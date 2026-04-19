@@ -1,7 +1,9 @@
+use crate::actions::DoActionContext;
+use crate::canvas::CanvasGraph;
 use crate::node::image::ImagePayload;
+use crate::node::view::ResizeDir;
 use crate::prelude::*;
 use crate::{
-    canvas::{CanvasCommand, DisjointGraphRef},
     node::{
         dataframe::{DataframePayload, plot::DataframePlotPayload},
         primitives::{NumericPayload, TextPayload},
@@ -24,13 +26,14 @@ pub mod typst;
 pub mod view;
 // pub mod webview;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct Node {
     pub location: Pos2,
+    pub id: Id,
     pub variant: NodeVariant,
 }
 
-#[derive(EnumTryAs, EnumDiscriminants, Serialize, Deserialize)]
+#[derive(EnumTryAs, EnumDiscriminants, Clone)]
 #[strum_discriminants(derive(VariantArray))]
 #[enum_dispatch(NodeDynamics)]
 pub enum NodeVariant {
@@ -53,10 +56,10 @@ pub struct DrawContext<'ctx> {
     pub index: NodeIdx,
     pub id: Id,
     pub screen_location: Pos2,
-    pub command_queue: &'ctx mut Vec<CanvasCommand>,
+    pub action_queue: &'ctx mut Actions,
     pub layout: LayoutContext,
     pub registry: &'ctx Registry,
-    pub graph_ref: DisjointGraphRef,
+    pub graph: &'ctx CanvasGraph,
     pub ui: &'ctx mut Ui,
     pub theme: &'ctx Theme,
 }
@@ -66,15 +69,28 @@ pub struct LayoutContext {
     pub scale: f32,
 }
 
+pub trait NodeInitialization: Sized {
+    type Origin: Default;
+    fn init_from(f: Self::Origin, seed: u32) -> Self;
+
+    fn init(seed: u32) -> Self {
+        Self::init_from(Self::Origin::default(), seed)
+    }
+}
+
 #[enum_dispatch]
 pub trait NodeDynamics {
-    fn draw(&mut self, ctx: &mut DrawContext<'_>);
+    fn step(&self, _ctx: &mut DrawContext<'_>);
+
+    fn draw(&self, ctx: &mut DrawContext<'_>);
 
     fn size(&self, ctx: LayoutContext) -> Vec2;
 
     fn rect(&self, ctx: LayoutContext, pos: Pos2) -> Rect {
         Rect::from_min_size(pos, self.size(ctx))
     }
+
+    fn resize(&mut self, _dir: ResizeDir, _delta: Vec2);
 
     /// If interacted, returns `Some((interacted_index, clicked))`
     fn edge_target(&self, ctx: &mut DrawContext<'_>) -> Option<(NodeIdx, bool)> {
@@ -125,4 +141,23 @@ impl Node {
 
         (pos_o, pos_d)
     }
+}
+
+impl<'ctx> DoActionContext<'ctx> {
+    pub fn unwrap_mut_with<Variant>(
+        &mut self,
+        idx: NodeIdx,
+        f: impl Fn(&mut NodeVariant) -> Option<&mut Variant>,
+    ) -> &mut Variant {
+        f(&mut self.unwrap_active_canvas().get_node_mut(idx).variant).unwrap()
+    }
+}
+
+action! {
+    MoveNode { idx: NodeIdx, delta: Vec2 }
+        does(ctx) {
+            let canvas = ctx.unwrap_active_canvas();
+            canvas.set_interacted(idx);
+            canvas.get_node_mut(idx).location += delta;
+        }
 }

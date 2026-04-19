@@ -1,40 +1,41 @@
+use crate::node::NodeVariant;
+use crate::node::view::ResizeDir;
+use crate::prelude::*;
+use crate::{
+    node::{DrawContext, LayoutContext, NodeDynamics, view::Window},
+    registry::RegistryItemInner,
+};
+
 use std::fmt::Display;
 use std::sync::Arc;
 
-use arrow::array::{Array, Float64Array};
-use arrow::compute::kernels::cast;
-use arrow::datatypes::DataType;
-use egui::{Align, ComboBox, Frame, TextEdit};
+use arrow::{
+    array::{Array, Float64Array},
+    compute::kernels::cast,
+    datatypes::DataType,
+};
+use egui::ComboBox;
 use egui_plot::{BoxElem, BoxPlot, BoxSpread, Plot, PlotBounds, Points};
 
-use crate::canvas::CanvasCommand;
-use crate::node::LayoutContext;
-use crate::node::{DrawContext, NodeDynamics, view::Window};
-use crate::prelude::*;
-
-#[derive(Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct DataframePlotPayload {
     origin_node: NodeIdx,
-    name: String,
     view: Window,
-    change: PlotChange,
+    change: Transient<PlotChange>,
     ty: PlotType,
     // TODO: implement persistance for arrays
-    #[serde(skip)]
     cols: Vec<DataCol>,
-    #[serde(skip)]
     x_col: Option<usize>,
-    #[serde(skip)]
     y_col: Option<usize>,
 }
 
-#[derive(PartialEq, Serialize, Deserialize)]
-enum PlotType {
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum PlotType {
     Scatter,
     Boxplot,
 }
 
-#[derive(PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 enum PlotChange {
     None,
     ChangedLastFrame,
@@ -57,7 +58,7 @@ struct DataCol {
 }
 
 impl DataframePlotPayload {
-    pub fn new(origin: NodeIdx, origin_name: String, data: &RecordBatch) -> Self {
+    pub fn new(origin: NodeIdx, data: RecordBatch) -> Self {
         let schema = data.schema();
         let fields = schema.fields();
 
@@ -80,10 +81,9 @@ impl DataframePlotPayload {
 
         Self {
             origin_node: origin,
-            name: format!("Plotter: {origin_name}"),
             view: Window::default(),
             ty: PlotType::Scatter,
-            change: PlotChange::None,
+            change: Transient::from(PlotChange::None),
             cols: numeric_cols,
             x_col: None,
             y_col: None,
@@ -92,89 +92,130 @@ impl DataframePlotPayload {
 }
 
 impl NodeDynamics for DataframePlotPayload {
-    fn size(&self, _ctx: LayoutContext) -> Vec2 {
-        self.view.sizes().1
+    fn step(&self, _ctx: &mut DrawContext<'_>) {}
+
+    fn resize(&mut self, dir: ResizeDir, delta: Vec2) {
+        self.view.handle_resize(dir, delta);
     }
 
-    fn draw(&mut self, ctx: &mut DrawContext<'_>) {
-        let mut scroll_to_command = None;
+    fn draw(&self, ctx: &mut DrawContext<'_>) {
+        let idx = ctx.index;
+        let graph = ctx.graph;
+
+        let root_node_ref = ctx
+            .graph
+            .get_node(self.origin_node)
+            .variant
+            .try_as_dataframe_ref()
+            .unwrap()
+            .data_ref;
+        let reg_item = ctx.registry.get(root_node_ref).unwrap();
+        let RegistryItemInner::Dataframe { ref table_name, .. } = reg_item.borrow().inner;
 
         self.view.show(
             ctx,
             ctx.theme.background,
-            |ui| {
-                TextEdit::singleline(&mut self.name)
-                    .background_color(Color32::TRANSPARENT)
-                    .clip_text(false)
-                    .desired_width(0.0)
-                    .layouter(&mut Window::wrapping_layouter(
-                        None,
-                        ctx.theme.text,
-                        Align::Min,
-                        ui.available_width(),
-                    ))
-                    .frame(Frame::NONE)
-                    .show(ui);
+            |ui, _actions| {
+                ui.label(format!("Plotter: {table_name}"));
             },
-            |ui| {
+            |ui, actions| {
                 ui.vertical(|ui| {
-                    ComboBox::from_id_salt(ui.id().with("plot_type_selector"))
-                        .selected_text(self.ty.to_string())
-                        .show_ui(ui, |ui| {
-                            if ui
-                                .selectable_label(
-                                    self.ty == PlotType::Scatter,
-                                    PlotType::Scatter.to_string(),
-                                )
-                                .clicked()
-                            {
-                                self.change = PlotChange::ChangedLastFrame;
-                                self.ty = PlotType::Scatter;
-                            };
-                            if ui
-                                .selectable_label(
-                                    self.ty == PlotType::Boxplot,
-                                    PlotType::Boxplot.to_string(),
-                                )
-                                .clicked()
-                            {
-                                self.change = PlotChange::ChangedLastFrame;
-                                self.ty = PlotType::Boxplot;
-                            };
-                        });
+                    action! {
+                        SetPlotType { idx: NodeIdx, val: PlotType }
+                            does(ctx) {
+                                ctx.unwrap_mut_with(idx, NodeVariant::try_as_dataframe_plot_mut)
+                                    .ty = val;
+                            }
+                    }
+                    let plot_type_formatter = |ty: PlotType| match ty {
+                        PlotType::Boxplot => "Boxplot",
+                        PlotType::Scatter => "Scatter",
+                    };
+                    let action_creator =
+                        move |ty| Box::new(SetPlotType { idx, val: ty }) as Box<dyn Action>;
+                    let combo_box_interaction = ui.combo_box(
+                        ui.id().with("plot_type_selector"),
+                        &self.ty,
+                        plot_type_formatter(self.ty),
+                        vec![
+                            (
+                                PlotType::Boxplot,
+                                plot_type_formatter(PlotType::Boxplot),
+                                Box::new(action_creator)
+                                    as Box<dyn FnMut(PlotType) -> Box<dyn Action>>,
+                            ),
+                            (
+                                PlotType::Scatter,
+                                plot_type_formatter(PlotType::Scatter),
+                                Box::new(action_creator)
+                                    as Box<dyn FnMut(PlotType) -> Box<dyn Action>>,
+                            ),
+                        ],
+                    );
+                    if let Some(action) = combo_box_interaction {
+                        actions.push(action);
+                    }
 
                     ui.horizontal(|ui| {
-                        let mut selection_box =
-                            |ui: &mut Ui, id_str: &'static str, self_col: &mut Option<usize>| {
+                        #[derive(Clone, Copy)]
+                        enum SelectionCol {
+                            X,
+                            Y,
+                        }
+                        action! {
+                            SetCol { idx: NodeIdx, col: SelectionCol, new_value: Option<usize> }
+                                does(ctx) {
+                                    let this_node = ctx.unwrap_mut_with(
+                                        idx,
+                                        NodeVariant::try_as_dataframe_plot_mut
+                                    );
+                                    this_node.change.set(PlotChange::ChangedLastFrame);
+                                    let mod_col = match col {
+                                        SelectionCol::X => &mut this_node.x_col,
+                                        SelectionCol::Y => &mut this_node.y_col,
+                                    };
+                                    *mod_col = new_value;
+                                }
+                        }
+
+                        let selection_box =
+                            |ui: &mut Ui, id_str: &'static str, selection_col: SelectionCol| {
+                                let self_col = match selection_col {
+                                    SelectionCol::X => &self.x_col,
+                                    SelectionCol::Y => &self.y_col,
+                                };
                                 let selected_text = match self_col {
                                     Some(col) => self.cols.get(*col).unwrap().name.as_str(),
                                     None => "",
                                 };
+                                let items = self.cols.iter().enumerate().map(|(i, col)| {
+                                    (
+                                        Some(i),
+                                        &col.name,
+                                        Box::new(move |i| {
+                                            Box::new(SetCol {
+                                                idx,
+                                                col: selection_col,
+                                                new_value: i,
+                                            })
+                                                as Box<dyn Action>
+                                        })
+                                            as Box<dyn FnMut(Option<usize>) -> Box<dyn Action>>,
+                                    )
+                                });
 
-                                ComboBox::from_id_salt(ui.id().with(id_str))
-                                    .selected_text(selected_text)
-                                    .show_ui(ui, |ui| {
-                                        for (i, col) in self.cols.iter().enumerate() {
-                                            if ui
-                                                .selectable_label(*self_col == Some(i), &col.name)
-                                                .clicked()
-                                            {
-                                                self.change = PlotChange::ChangedLastFrame;
-                                                *self_col = Some(i);
-                                            }
-                                        }
-                                    });
+                                ui.combo_box(ui.id().with(id_str), self_col, selected_text, items);
                             };
 
                         ui.label("Plot of");
                         match self.ty {
                             PlotType::Scatter => {
-                                selection_box(ui, "x_selection", &mut self.x_col);
+                                selection_box(ui, "x_selection", SelectionCol::X);
                                 ui.label("vs");
-                                selection_box(ui, "y_selection", &mut self.y_col);
+                                selection_box(ui, "y_selection", SelectionCol::Y);
                             }
                             PlotType::Boxplot => {
-                                selection_box(ui, "x_selection", &mut self.x_col);
+                                selection_box(ui, "x_selection", SelectionCol::X);
                             }
                         }
                     });
@@ -182,39 +223,38 @@ impl NodeDynamics for DataframePlotPayload {
                     match self.ty {
                         PlotType::Scatter => {
                             if let (Some(x_col), Some(y_col)) = (self.x_col, self.y_col) {
-                                if let Some(selected_idx) = draw_scatterplot(
+                                if let Some(selected_row) = draw_scatterplot(
                                     ui,
                                     self.cols.get(x_col).unwrap(),
                                     self.cols.get(y_col).unwrap(),
-                                    &mut self.change,
+                                    &self.change,
                                 ) {
                                     // User clicked a point!
-                                    scroll_to_command = Some(CanvasCommand::ScrollTable {
-                                        table_node: self.origin_node,
-                                        row: selected_idx,
-                                    });
+                                    let variant = &graph.get_node(self.origin_node).variant;
+                                    let df_node = variant.try_as_dataframe_ref().unwrap();
+                                    df_node.scroll_to(selected_row, ui);
                                 }
                                 if ui.button("Reset plot bounds").clicked() {
-                                    self.change = PlotChange::ChangedLastFrame;
+                                    self.change.set(PlotChange::ChangedLastFrame);
                                 }
                             }
                         }
                         PlotType::Boxplot => {
                             if let Some(x_col) = self.x_col {
                                 if ui.button("Reset plot bounds").clicked() {
-                                    self.change = PlotChange::ChangedLastFrame;
+                                    self.change.set(PlotChange::ChangedLastFrame);
                                 }
-                                draw_boxplot(ui, self.cols.get(x_col).unwrap(), &mut self.change);
+                                draw_boxplot(ui, self.cols.get(x_col).unwrap(), &self.change);
                             }
                         }
                     }
                 });
             },
         );
+    }
 
-        if let Some(scroll_to_command) = scroll_to_command {
-            ctx.command_queue.push(scroll_to_command);
-        }
+    fn size(&self, _ctx: LayoutContext) -> Vec2 {
+        self.view.sizes().1
     }
 }
 
@@ -223,7 +263,7 @@ fn draw_scatterplot(
     ui: &mut Ui,
     x: &DataCol,
     y: &DataCol,
-    change: &mut PlotChange,
+    change: &Transient<PlotChange>,
 ) -> Option<usize> {
     let x_cast = cast(&x.arr, &DataType::Float64).unwrap();
     let x_vals = x_cast.as_any().downcast_ref::<Float64Array>().unwrap();
@@ -252,9 +292,9 @@ fn draw_scatterplot(
         .y_axis_label(&y.name)
         .label_formatter(|_, point| format!("{:.3}, {:.3}", point.x, point.y))
         .show(ui, |plot_ui| {
-            if *change == PlotChange::ChangedLastFrame {
+            if *change.val() == PlotChange::ChangedLastFrame {
                 plot_ui.set_auto_bounds([true, true]);
-                *change = PlotChange::None;
+                change.set(PlotChange::None);
             }
             plot_ui.points(points_element);
         });
@@ -276,7 +316,11 @@ fn draw_scatterplot(
     }
 }
 
-fn draw_boxplot(ui: &mut Ui, data: &DataCol, just_changed: &mut PlotChange) -> Option<usize> {
+fn draw_boxplot(
+    ui: &mut Ui,
+    data: &DataCol,
+    just_changed: &Transient<PlotChange>,
+) -> Option<usize> {
     let data_cast = cast(&data.arr, &DataType::Float64).unwrap();
     let data_vals = data_cast.as_any().downcast_ref::<Float64Array>().unwrap();
 
@@ -293,10 +337,10 @@ fn draw_boxplot(ui: &mut Ui, data: &DataCol, just_changed: &mut PlotChange) -> O
     let plot_resp = Plot::new(ui.id().with("plot"))
         .y_axis_label(&data.name)
         .show(ui, |plot_ui| {
-            match *just_changed {
+            match *just_changed.val() {
                 PlotChange::ChangedLastFrame => {
                     plot_ui.set_auto_bounds([true, true]);
-                    *just_changed = PlotChange::DrawnLastFrame;
+                    just_changed.set(PlotChange::DrawnLastFrame);
                 }
                 PlotChange::DrawnLastFrame => {
                     let bounds = plot_ui.plot_bounds();
@@ -309,7 +353,7 @@ fn draw_boxplot(ui: &mut Ui, data: &DataCol, just_changed: &mut PlotChange) -> O
                     let new_bounds = PlotBounds::from_min_max(min, max);
 
                     plot_ui.set_plot_bounds(new_bounds);
-                    *just_changed = PlotChange::None;
+                    just_changed.set(PlotChange::None);
                 }
                 PlotChange::None => {}
             }
