@@ -1,0 +1,14 @@
+[package]
+name = "nodes"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dyn-clone.workspace = true
+egui.workspace = true
+serde.workspace = true
+typetag.workspace = true
+utils.workspace = true
+slotmap = { version = "1.1.1", features = ["serde"] }
+rpds = { version = "1.2.1", features = ["serde"] }
+uuid = "1.24.0"

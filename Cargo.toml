@@ -1,7 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["gui", "gui_code_editor", "lib"]
+members = ["sources/*"]
 
 [workspace.dependencies]
-arrow = "58.0"
-lib = { path = "lib" }
+dyn-clone = "1.0.20"
+egui = { version = "0.35.0", features = ["serde"] }
+petgraph = { version = "0.8.3", features = ["serde-1"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+typetag = "0.2.22"
+utils.path = "sources/utils/"

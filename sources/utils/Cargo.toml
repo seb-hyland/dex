@@ -1,0 +1,11 @@
+[package]
+name = "utils"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+dyn-clone.workspace = true
+petgraph.workspace = true
+uuid = { version = "1.23.4", features = ["v7", "serde"] }
