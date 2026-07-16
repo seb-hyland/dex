@@ -8,7 +8,7 @@
 ## Composites
 
 - For at least some:
-  - Defined in a scripting/extension language -> Typescript?
+  - Defined in a scripting/extension language -> Python
   - Able to be modified at runtime
 - Has internal layouting, "tells" internal primitives where to draw
 - Either canvas (zstack), vertical (ystack), or horizontal (xstack)
@@ -19,11 +19,13 @@
   - This is required if messaging/mutation/interaction is desired
   - UIDs are generated deterministically by workplace state, requested via action (replication)
   - The workspace contains a lookup map that holds a reference to the node, for messaging
+  - The nodes themselves are stored in a flat "pool" for serialization
+    - Every node from every time period exists in this pool
   - Each node is reference counted, with two references in the current time period (exists in the lookup map and held by the parent)
-  - Nodes internally store their own UID
+  - Nodes are passed their own UID when drawn
 - On draw, each parent draws its children (in a tree), passing constraints to children (location, size, etc.)
   - Metadata is stored such that "last known location/size" can be queried (or none can be handled)
-  - This enables _relative_ constraints (e.g., 5 pixels right of node x, connecting lines)
+    - This enables _relative_ constraints (e.g., 5 pixels right of node x, connecting lines)
 - Histories are grained both at node-level and workspace-level
   - A history buffer exists at the workspace level, and at the node level
   - The entire node tree exists in a persistent structurally-shared data structure
@@ -41,16 +43,11 @@ Synchronous operations that may request data from a node
 
 - They are non-mutating and can be called during draw operations
 - Every node supports certain queries, and returns `None` in cases where the query is not understood
-  ```rust
-  fn query(&self, q: &dyn Any) -> Option<Box<dyn Any>>;
-  ```
 
 ### Actions
 
-Requested operations
-
-- MAY be history-defining
-  - Mutating operations are always defining, unless the mutation is transient and can be reconstructed or discarded (e.g., buffered changes, caching)
+Requested history-defining operations
+- Transient mutations that can be discarded/reconstructed are done via queries
 - Asynchronous and do not have a return value
 - Buffered and processed at frame end
 

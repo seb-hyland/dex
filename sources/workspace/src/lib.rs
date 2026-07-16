@@ -1,10 +1,8 @@
-use std::any::Any;
-
 use dyn_clone::DynClone;
 use egui::{Pos2, Ui};
 
 use crate::{
-    messages::{QueryType, RequestType},
+    messages::{action::ActionType, request::Requestable},
     pool::NodeUid,
     region::DrawRegion,
     workspace::Workspace,
@@ -16,15 +14,12 @@ mod region;
 mod workspace;
 
 #[typetag::serde]
-pub trait Node: 'static + DynClone {
+pub trait Node: 'static + Requestable + DynClone {
     /// Draw the node. Called every frame; should not be blocking.
     fn draw(&self, ctx: &mut DrawContext) -> Option<DrawRegion>;
 
-    /// Resolve a query message
-    fn query(&self, q: Box<dyn QueryType>) -> Option<Box<dyn Any>>;
-
     /// Resolve an action
-    fn handle_request(&mut self, r: Box<dyn RequestType>);
+    fn handle_request(&mut self, r: Box<dyn ActionType>);
 }
 
 dyn_clone::clone_trait_object!(Node);

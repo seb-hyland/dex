@@ -4,10 +4,10 @@
 */
 macro_rules! match_dyn {
     (
-        $matcher:expr, $($binding:ident : $match_type:ty => $body:expr,)*
+        $matched_item:expr, $($binding:ident : $match_type:ty => $body:expr,)*
         _ => $rest:expr $(,)?
     ) => {
-        match $matcher {
+        match $matched_item {
             $($binding if $binding.as_any_ref().is::<$match_type>() => {
                 let $binding = *$binding.as_any().downcast::<$match_type>().unwrap();
                 $body
@@ -20,6 +20,6 @@ macro_rules! match_dyn {
 #[macro_export]
 macro_rules! boxed_any {
     ($val:expr) => {
-        Box::new($val) as Box<dyn ::std::any::Any>
+        ::std::boxed::Box::new($val) as ::std::boxed::Box<dyn ::std::any::Any>
     };
 }

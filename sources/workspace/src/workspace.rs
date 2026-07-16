@@ -2,11 +2,14 @@ use std::any::Any;
 
 use egui::{Rect, Ui};
 use serde::{Deserialize, Serialize};
-use utils::{boxed_any, match_dyn};
+use utils::match_dyn;
 
 use crate::{
     DrawContext,
-    messages::{Query, Request, RequestGroup, Size},
+    messages::{
+        action::{Action, ActionGroup},
+        request::{Region, Request, TypedRequest, downcast_resp},
+    },
     pool::{NodeUid, Registry},
     region::DrawRegion,
 };
@@ -17,7 +20,7 @@ pub struct Workspace {
     root_node: NodeUid,
 
     /// A queue of unprocessed requests
-    requests: Vec<Request>,
+    requests: Vec<Action>,
 
     /// A historical registry for the workspace
     registry: Registry,
@@ -40,11 +43,17 @@ impl Workspace {
         assert!(draw_res.is_some(), "Root node should exist")
     }
 
-    pub fn query(&self, q: Query) -> Option<Box<dyn Any>> {
+    pub fn message<Resp: Any>(&self, q: TypedRequest<Resp>) -> Option<Resp> {
+        self.message_dyn(q.into()).map(downcast_resp)
+    }
+
+    pub fn message_dyn(&self, q: Request) -> Option<Box<dyn Any>> {
         let (dest_node, last_draw_region) = self.registry.get(q.dest)?;
-        match_dyn! { q.body,
-            q: Size => Some(boxed_any!(last_draw_region)),
-            _ => dest_node.query(q.body)
+        if q.body.as_any_ref().is::<Region>() {
+            // Draw region is being requested
+            Some(Box::new(last_draw_region) as Box<dyn Any>)
+        } else {
+            dest_node.request(q.body)
         }
     }
 
@@ -56,8 +65,8 @@ impl Workspace {
             }
 
             match_dyn! { req.body,
-                req_group: RequestGroup => {
-                    for req in req_group.requests {
+                req_group: ActionGroup => {
+                    for req in req_group.actions {
                         self.registry.apply_request(req);
                     }
                 },

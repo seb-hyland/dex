@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use slotmap::{SlotMap, new_key_type};
 use utils::{HistoryGraph, Timestamp};
 
-use crate::{Node, messages::Request, region::DrawRegion};
+use crate::{Node, messages::action::Action, region::DrawRegion};
 
 /**
     A unique identifier for a node.
@@ -21,7 +21,7 @@ pub struct Registry {
     pool: NodePool,
 
     /// A history of nodes and requests
-    history: HistoryGraph<WorldSnapshot, Request>,
+    history: HistoryGraph<WorldSnapshot, Action>,
 }
 
 impl Registry {
@@ -30,7 +30,7 @@ impl Registry {
         maybe_nobj.map(|nobj| (nobj.current(&self.pool), nobj.last_known_region.clone()))
     }
 
-    pub fn start_epoch(&mut self, edge: Request) {
+    pub fn start_epoch(&mut self, edge: Action) {
         let ts = Timestamp::now();
         self.history.start_epoch(edge, ts);
     }
@@ -39,7 +39,7 @@ impl Registry {
         self.history.current_epoch().time()
     }
 
-    pub fn apply_request<'pool>(&mut self, req: Request) {
+    pub fn apply_request<'pool>(&mut self, req: Action) {
         let cur_epoch_time = self.current_epoch_time();
 
         if let Some(nobj) = self.history.current_epoch_mut().map.get_mut(&req.dest) {
@@ -81,7 +81,7 @@ impl WorldSnapshot {
 #[derive(Clone, Serialize, Deserialize)]
 struct NodeObject {
     /// A history of the node's previous states for fine-grained rollbacks
-    history: HistoryGraph<NodeRef, Request>,
+    history: HistoryGraph<NodeRef, Action>,
 
     /// The region at which this node was drawn either last frame or this frame
     pub(crate) last_known_region: Option<DrawRegion>,
@@ -105,7 +105,7 @@ impl NodeObject {
 
     pub(crate) fn make_mut<'pool>(
         &mut self,
-        req: Request,
+        req: Action,
         epoch_ts: Timestamp,
         pool: &'pool mut NodePool,
     ) -> &'pool mut dyn Node {

@@ -8,14 +8,14 @@ use uuid::Uuid;
 use crate::pool::NodeUid;
 
 #[derive(Serialize, Deserialize)]
-pub struct Request {
+pub struct Action {
     pub dest: NodeUid,
     pub brand: Uuid,
-    pub description: RequestDescription,
-    pub body: Box<dyn RequestType>,
+    pub description: ActionDescription,
+    pub body: Box<dyn ActionType>,
 }
 
-impl Clone for Request {
+impl Clone for Action {
     fn clone(&self) -> Self {
         Self {
             dest: self.dest,
@@ -26,10 +26,10 @@ impl Clone for Request {
     }
 }
 
-type RequestDescription = Cow<'static, str>;
+type ActionDescription = Cow<'static, str>;
 
 #[typetag::serde]
-pub trait RequestType: AsAny + DynClone {
+pub trait ActionType: AsAny + DynClone {
     fn is_history_defining(&self) -> bool {
         true
     }
@@ -40,13 +40,13 @@ pub trait RequestType: AsAny + DynClone {
     This request group represents a single operation.
 */
 #[derive(Clone, Serialize, Deserialize)]
-pub struct RequestGroup {
-    pub requests: Vec<Request>,
+pub struct ActionGroup {
+    pub actions: Vec<Action>,
 }
 
 #[typetag::serde]
-impl RequestType for RequestGroup {
+impl ActionType for ActionGroup {
     fn is_history_defining(&self) -> bool {
-        self.requests.iter().any(|r| r.body.is_history_defining())
+        self.actions.iter().any(|r| r.body.is_history_defining())
     }
 }
