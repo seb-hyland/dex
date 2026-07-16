@@ -9,3 +9,4 @@ serde_json.workspace = true
 dyn-clone.workspace = true
 petgraph.workspace = true
 uuid = { version = "1.23.4", features = ["v7", "serde"] }
+utils-proc-macro.workspace = true

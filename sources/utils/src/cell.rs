@@ -1,17 +1,13 @@
-use std::{
-    cell::UnsafeCell,
-    mem::{self, MaybeUninit},
-    rc::Rc,
-};
+use std::{cell::UnsafeCell, rc::Rc};
 
-use crate::rc::Shared;
+use serde::{Deserialize, Serialize};
 
 #[derive(Default, Clone)]
-pub struct Rigid<T: Copy>(Shared<Cell<T>>);
+pub struct Rigid<T: Copy>(Rc<Cell<T>>);
 
 impl<T: Copy> Rigid<T> {
     pub fn new(value: T) -> Self {
-        Self(Shared::new(Cell::new(value)))
+        Self(Rc::new(Cell::new(value)))
     }
 
     pub fn val(&self) -> T {
@@ -21,60 +17,63 @@ impl<T: Copy> Rigid<T> {
     pub fn set(&self, val: T) {
         self.0.set(val);
     }
+}
 
-    pub fn modify<U>(&self, mut f: impl FnMut(&mut T) -> U) -> U {
-        let mut new_val: T = self.val();
-        let out = f(&mut new_val);
-        self.set(new_val);
-        out
+#[derive(Serialize, Deserialize)]
+/// A cached, short-lived, reconstructable value.
+pub struct Transient<T> {
+    #[serde(skip)]
+    inner: Cell<Option<Rc<T>>>,
+}
+
+pub trait Reset {
+    /// Reset any [`Transient`] values
+    fn reset(&mut self);
+}
+
+impl<T> Reset for Transient<T> {
+    fn reset(&mut self) {
+        *self = Self::default();
     }
 }
 
-#[derive(Default)]
-pub struct Transient<T>(Cell<Shared<T>>);
+impl<T> Default for Transient<T> {
+    fn default() -> Self {
+        Self {
+            inner: Cell::new(None),
+        }
+    }
+}
 
 impl<T> Clone for Transient<T> {
     fn clone(&self) -> Self {
-        Self(Cell::new(self.0.get_cloned()))
+        // Reset the cache
+        Self::default()
     }
 }
 
 impl<T> Transient<T> {
-    pub fn new(value: T) -> Self {
-        Self(Cell::new(Shared::new(value)))
-    }
-
     pub fn set(&self, val: T) {
-        self.0.set(Shared::new(val));
+        self.inner.set(Some(Rc::new(val)));
     }
 
-    pub fn val(&self) -> Shared<T> {
-        self.0.get_cloned()
-    }
-}
-
-impl<T: Clone> Transient<T> {
-    pub fn modify<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
-        self.0.update(|current_val| {
-            let rc_mut = Rc::make_mut(&mut current_val.0);
-            f(rc_mut)
-        })
+    pub fn val(&self) -> Option<Rc<T>> {
+        self.inner.get_cloned()
     }
 }
 
 /**
     A re-implementation of [`std::cell::Cell`] with support for:
     - [`Clone`]-based get operations for arbitrary `T` (see [`Self::get_cloned`])
-    - Transactional updates for arbitrary `T` (see [`Self::update`])
 */
 struct Cell<T> {
-    value: UnsafeCell<MaybeUninit<T>>,
+    value: UnsafeCell<T>,
 }
 
 impl<T: Default> Default for Cell<T> {
     fn default() -> Self {
         Self {
-            value: UnsafeCell::new(MaybeUninit::new(T::default())),
+            value: UnsafeCell::new(T::default()),
         }
     }
 }
@@ -82,46 +81,18 @@ impl<T: Default> Default for Cell<T> {
 impl<T> Cell<T> {
     fn new(val: T) -> Self {
         Self {
-            value: UnsafeCell::new(MaybeUninit::new(val)),
+            value: UnsafeCell::new(val),
         }
     }
 
     fn set(&self, val: T) {
-        // SAFETY: the slot is always initialized outside of `update`'s transient window
-
-        let old = mem::replace(unsafe { &mut *self.value.get() }, MaybeUninit::new(val));
-        drop(unsafe { old.assume_init() });
-    }
-}
-
-struct AbortGuard;
-
-impl Drop for AbortGuard {
-    fn drop(&mut self) {
-        std::process::abort()
-    }
-}
-
-impl<T> Cell<T> {
-    fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
-        unsafe {
-            let container = &mut *self.value.get();
-            // If f panics, there is no recovering
-            let guard = AbortGuard;
-
-            let mut val = mem::replace(container, MaybeUninit::uninit()).assume_init();
-            let res = f(&mut val);
-
-            container.write(val);
-            // We made it 😌
-            mem::forget(guard);
-            res
-        }
+        // SAFETY: no other references can exist
+        unsafe { *self.value.get() = val };
     }
 }
 
 impl<T: Clone> Cell<T> {
     fn get_cloned(&self) -> T {
-        unsafe { (*self.value.get()).assume_init_ref() }.clone()
+        unsafe { &*self.value.get() }.clone()
     }
 }
