@@ -1,46 +1,90 @@
 use dyn_clone::DynClone;
-use egui::{Pos2, Ui};
+use egui::Ui;
 
-use crate::{
-    messages::{action::ActionType, request::Requestable},
-    pool::NodeUid,
-    region::DrawRegion,
-    workspace::Workspace,
-};
-
-pub mod messages;
+mod messages;
 mod pool;
 mod region;
+mod theme;
 mod workspace;
+
+pub mod prelude {
+    pub use crate::{
+        messages::{
+            action::{Action, ActionBody},
+            request::{Request, RequestBody, Requestable},
+        },
+        pool::NodeUid,
+        region::{ScreenPos, ScreenRegion, Vector},
+        workspace::Workspace,
+        *,
+    };
+}
+pub use prelude::*;
 
 #[typetag::serde]
 pub trait Node: 'static + Requestable + DynClone {
-    /// Draw the node. Called every frame; should not be blocking.
-    fn draw(&self, ctx: &mut DrawContext) -> Option<DrawRegion>;
+    /// Given some context, draw the node on screen
+    fn draw(&self, ctx: &mut DrawContext) -> DrawResult;
 
     /// Resolve an action
-    fn handle_request(&mut self, r: Box<dyn ActionType>);
+    fn handle_action(&mut self, r: Box<dyn ActionBody>);
 }
 
 dyn_clone::clone_trait_object!(Node);
 
+pub enum DrawResult {
+    /// Drawing succeeded.
+    /// Here is the region on screen that was occupied.
+    Complete { region: ScreenRegion },
+
+    /// Not enough space is available; here is what was occupied.
+    /// Please wrap and call [`Node::draw`] again with this continuation.
+    Wrap {
+        region: ScreenRegion,
+        continuation: u64,
+    },
+}
+
 pub struct DrawContext<'ctx> {
     /// The unique identifier of the node being drawn
-    id: NodeUid,
-
-    /// A UI surface to draw on
-    ui: &'ctx mut Ui,
-
-    /// The top-left corner of the draw location
-    /// May be ignored by nodes that position relative to other nodes
-    pos: Pos2,
-
-    /// The width that this node should occupy
-    width: Option<f32>,
-
-    /// The height that this node should occupy
-    height: Option<f32>,
+    pub id: NodeUid,
 
     /// A handle to the workspace in which this node is being drawn
-    workspace: &'ctx mut Workspace,
+    pub workspace: &'ctx mut Workspace,
+
+    /// A set of constraints to determine draw sizing
+    pub constraints: DrawConstraints,
+
+    /// A UI surface to draw on
+    pub ui: &'ctx mut Ui,
+}
+
+#[derive(Clone, Copy)]
+pub struct DrawConstraints {
+    pub pos: PositionConstraint,
+    pub x: Option<AxisConstraint>,
+    pub y: Option<AxisConstraint>,
+    pub can_request_wrap: bool,
+    pub continuation: Option<u64>,
+}
+
+#[derive(Clone, Copy)]
+pub enum PositionConstraint {
+    Center(ScreenPos),
+    TopLeft(ScreenPos),
+}
+
+#[derive(Clone, Copy)]
+pub enum AxisConstraint {
+    Exactly(f32),
+    AtMost(f32),
+}
+
+impl AxisConstraint {
+    pub fn provided_value(&self) -> f32 {
+        match self {
+            Self::Exactly(v) => *v,
+            Self::AtMost(v) => *v,
+        }
+    }
 }

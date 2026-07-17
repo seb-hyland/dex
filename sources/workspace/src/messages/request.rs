@@ -2,11 +2,11 @@ use std::any::{Any, type_name};
 
 use utils::AsAny;
 
-use crate::{pool::NodeUid, region::DrawRegion};
+use crate::{pool::NodeUid, region::ScreenRegion};
 
 /**
-    A type-erased message addressed to a node.
-    Call sites should use [`BrandedMessage`], which remembers the response type.
+    A type-erased request addressed to a node.
+    Call sites should use [`TypedRequest`], which remembers the response type.
 */
 pub struct Request {
     pub dest: NodeUid,
@@ -16,7 +16,7 @@ pub struct Request {
 pub trait RequestBody: AsAny {}
 
 /**
-    A typed message addressed to a node.
+    A typed request addressed to a node.
 */
 pub struct TypedRequest<Resp> {
     pub dest: NodeUid,
@@ -59,15 +59,15 @@ impl<T: Requestable + ?Sized> TypedRequestable for T {
 pub fn downcast_resp<Resp: Any>(response: Box<dyn Any>) -> Resp {
     *response.downcast::<Resp>().unwrap_or_else(|_| {
         panic!(
-            "Message with response type {} returned a different type.",
+            "Request with response type {} returned a different type.",
             type_name::<Resp>()
         )
     })
 }
 
-/// Match on an incoming message and respond
+/// Match on an incoming request and respond
 #[macro_export]
-macro_rules! handle_requests {
+macro_rules! respond_requests {
     (
         $matched_item:expr, $($binding:ident : $match_type:ty => $body:expr,)*
     ) => {
@@ -110,4 +110,4 @@ macro_rules! defrequest {
     };
 }
 
-defrequest! { Region -> requests "the last known draw region of a node" and returns Option<DrawRegion> }
+defrequest! { Region -> requests "the last known draw region of a node" and returns Option<ScreenRegion> }

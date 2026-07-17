@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use slotmap::{SlotMap, new_key_type};
 use utils::{HistoryGraph, Timestamp};
 
-use crate::{Node, messages::action::Action, region::DrawRegion};
+use crate::{Node, messages::action::Action, region::ScreenRegion};
 
 /**
     A unique identifier for a node.
@@ -25,7 +25,7 @@ pub struct Registry {
 }
 
 impl Registry {
-    pub fn get(&self, id: NodeUid) -> Option<(&dyn Node, Option<DrawRegion>)> {
+    pub fn get(&self, id: NodeUid) -> Option<(&dyn Node, Option<ScreenRegion>)> {
         let maybe_nobj = self.history.current_epoch().data.map.get(&id);
         maybe_nobj.map(|nobj| (nobj.current(&self.pool), nobj.last_known_region.clone()))
     }
@@ -44,11 +44,11 @@ impl Registry {
 
         if let Some(nobj) = self.history.current_epoch_mut().map.get_mut(&req.dest) {
             let node_mut = nobj.make_mut(req.clone(), cur_epoch_time, &mut self.pool);
-            node_mut.handle_request(req.body);
+            node_mut.handle_action(req.body);
         }
     }
 
-    pub fn update_node_region(&mut self, id: NodeUid, new_region: DrawRegion) {
+    pub fn update_node_region(&mut self, id: NodeUid, new_region: ScreenRegion) {
         if let Some(nobj) = self.history.current_epoch_mut().map.get_mut(&id) {
             nobj.last_known_region = Some(new_region);
         }
@@ -84,7 +84,7 @@ struct NodeObject {
     history: HistoryGraph<NodeRef, Action>,
 
     /// The region at which this node was drawn either last frame or this frame
-    pub(crate) last_known_region: Option<DrawRegion>,
+    pub(crate) last_known_region: Option<ScreenRegion>,
 }
 
 impl NodeObject {

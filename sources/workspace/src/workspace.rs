@@ -11,7 +11,6 @@ use crate::{
         request::{Region, Request, TypedRequest, downcast_resp},
     },
     pool::{NodeUid, Registry},
-    region::DrawRegion,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -27,21 +26,21 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn draw_root(&mut self, ui: &mut Ui, area: Rect) {
-        let root_node = self.root_node;
+    // pub fn draw_root(&mut self, ui: &mut Ui, area: Rect) {
+    //     let root_node = self.root_node;
 
-        let mut ctx = DrawContext {
-            id: root_node,
-            ui,
-            pos: area.min,
-            width: Some(area.width()),
-            height: Some(area.height()),
-            workspace: self,
-        };
-        let draw_res = ctx.draw_node(root_node);
+    //     let mut ctx = DrawContext {
+    //         id: root_node,
+    //         ui,
+    //         pos: area.min,
+    //         width: Some(area.width()),
+    //         height: Some(area.height()),
+    //         workspace: self,
+    //     };
+    //     let draw_res = ctx.draw_node(root_node);
 
-        assert!(draw_res.is_some(), "Root node should exist")
-    }
+    //     assert!(draw_res.is_some(), "Root node should exist")
+    // }
 
     pub fn message<Resp: Any>(&self, q: TypedRequest<Resp>) -> Option<Resp> {
         self.message_dyn(q.into()).map(downcast_resp)
@@ -77,21 +76,21 @@ impl Workspace {
 }
 
 impl<'ctx> DrawContext<'ctx> {
-    pub fn draw_node(&mut self, id: NodeUid) -> Option<DrawRegion> {
-        let maybe_node = self.workspace.registry.get(id);
-        let (node, _) = maybe_node?;
+    // pub fn draw_node(&mut self, id: NodeUid) -> Option<ScreenRegion> {
+    //     let maybe_node = self.w_ctx.workspace.registry.get(id);
+    //     let (node, _) = maybe_node?;
 
-        // Cheap clone of active node for display purposes
-        let node_clone = dyn_clone::clone_box(node);
-        self.id = id;
-        let maybe_region = node_clone.draw(self);
+    //     // Cheap clone of active node for display purposes
+    //     let node_clone = dyn_clone::clone_box(node);
+    //     self.w_ctx.id = id;
+    //     let maybe_region = node_clone.draw(self);
 
-        if let Some(region) = &maybe_region {
-            self.workspace
-                .registry
-                .update_node_region(id, region.clone());
-        }
+    //     if let Some(region) = &maybe_region {
+    //         self.workspace
+    //             .registry
+    //             .update_node_region(id, region.clone());
+    //     }
 
-        maybe_region
-    }
+    //     maybe_region
+    // }
 }

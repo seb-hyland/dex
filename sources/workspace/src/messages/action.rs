@@ -12,7 +12,7 @@ pub struct Action {
     pub dest: NodeUid,
     pub brand: Uuid,
     pub description: ActionDescription,
-    pub body: Box<dyn ActionType>,
+    pub body: Box<dyn ActionBody>,
 }
 
 impl Clone for Action {
@@ -29,15 +29,14 @@ impl Clone for Action {
 type ActionDescription = Cow<'static, str>;
 
 #[typetag::serde]
-pub trait ActionType: AsAny + DynClone {
+pub trait ActionBody: AsAny + DynClone {
     fn is_history_defining(&self) -> bool {
         true
     }
 }
 
 /**
-    A special marker type that represents a series of requests.
-    This request group represents a single operation.
+    A special marker type that represents a series of actions.
 */
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ActionGroup {
@@ -45,7 +44,7 @@ pub struct ActionGroup {
 }
 
 #[typetag::serde]
-impl ActionType for ActionGroup {
+impl ActionBody for ActionGroup {
     fn is_history_defining(&self) -> bool {
         self.actions.iter().any(|r| r.body.is_history_defining())
     }
