@@ -12,6 +12,10 @@ pub struct Rect {
 
 #[typetag::serde]
 impl Node for Rect {
+    fn type_name(&self) -> String {
+        "Rectangle".into()
+    }
+
     fn draw(&self, ctx: DrawContext) -> DrawResult {
         let origin = ctx.constraints.pos.to_top_left(self.size);
         let region = ScreenRegion::from_min_size(origin, self.size);
@@ -41,7 +45,7 @@ impl Node for Rect {
         }
     }
 
-    fn handle_action(&mut self, r: Box<dyn ActionBody>) {}
+    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
 impl Requestable for Rect {
@@ -59,6 +63,10 @@ pub struct Circle {
 
 #[typetag::serde]
 impl Node for Circle {
+    fn type_name(&self) -> String {
+        "Circle".into()
+    }
+
     fn draw(&self, ctx: DrawContext) -> DrawResult {
         let size_vector = Vector::splat(self.radius);
         let center = ctx.constraints.pos.to_center(size_vector);
@@ -86,11 +94,11 @@ impl Node for Circle {
         }
     }
 
-    fn handle_action(&mut self, r: Box<dyn ActionBody>) {}
+    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
 impl Requestable for Circle {
-    fn request(&self, body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
+    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
         None
     }
 }
@@ -103,6 +111,10 @@ pub struct Triangle {
 
 #[typetag::serde]
 impl Node for Triangle {
+    fn type_name(&self) -> String {
+        "Triangle".into()
+    }
+
     fn draw(&self, ctx: DrawContext) -> DrawResult {
         let [vec1, vec2] = self.vectors;
         let bounding_size = Vector::from_points(&[
@@ -138,11 +150,11 @@ impl Node for Triangle {
         }
     }
 
-    fn handle_action(&mut self, r: Box<dyn ActionBody>) {}
+    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
 impl Requestable for Triangle {
-    fn request(&self, body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
+    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
         None
     }
 }
@@ -155,6 +167,10 @@ pub struct Line {
 
 #[typetag::serde]
 impl Node for Line {
+    fn type_name(&self) -> String {
+        "Line".into()
+    }
+
     fn draw(&self, ctx: DrawContext) -> DrawResult {
         let start = ctx.constraints.pos.to_top_left(self.span);
         let end = start + self.span;
@@ -180,11 +196,11 @@ impl Node for Line {
         }
     }
 
-    fn handle_action(&mut self, r: Box<dyn ActionBody>) {}
+    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
 impl Requestable for Line {
-    fn request(&self, body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
+    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
         None
     }
 }

@@ -2,15 +2,14 @@ use std::borrow::Cow;
 
 use dyn_clone::DynClone;
 use serde::{Deserialize, Serialize};
-use utils::AsAny;
-use uuid::Uuid;
+use utils::{AsAny, Timestamp};
 
 use crate::pool::NodeUid;
 
 #[derive(Serialize, Deserialize)]
 pub struct Action {
-    pub dest: NodeUid,
-    pub brand: Uuid,
+    pub dest: Option<NodeUid>,
+    pub brand: Timestamp,
     pub description: ActionDescription,
     pub body: Box<dyn ActionBody>,
 }
@@ -29,11 +28,7 @@ impl Clone for Action {
 type ActionDescription = Cow<'static, str>;
 
 #[typetag::serde]
-pub trait ActionBody: AsAny + DynClone {
-    fn is_history_defining(&self) -> bool {
-        true
-    }
-}
+pub trait ActionBody: AsAny + DynClone {}
 
 /**
     A special marker type that represents a series of actions.
@@ -44,8 +39,4 @@ pub struct ActionGroup {
 }
 
 #[typetag::serde]
-impl ActionBody for ActionGroup {
-    fn is_history_defining(&self) -> bool {
-        self.actions.iter().any(|r| r.body.is_history_defining())
-    }
-}
+impl ActionBody for ActionGroup {}

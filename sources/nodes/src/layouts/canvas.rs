@@ -52,6 +52,10 @@ impl CanvasLayout {
 
 #[typetag::serde]
 impl Node for CanvasLayout {
+    fn type_name(&self) -> String {
+        "Canvas".into()
+    }
+
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
         let avail_x = ctx
             .constraints
@@ -102,11 +106,11 @@ impl Node for CanvasLayout {
         }
     }
 
-    fn handle_action(&mut self, r: Box<dyn ActionBody>) {}
+    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
 impl Requestable for CanvasLayout {
-    fn request(&self, body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
+    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
         None
     }
 }

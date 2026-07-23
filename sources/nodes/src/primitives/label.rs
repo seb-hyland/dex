@@ -15,6 +15,10 @@ pub struct Label {
 
 #[typetag::serde]
 impl Node for Label {
+    fn type_name(&self) -> String {
+        "Text Label".into()
+    }
+
     fn draw(&self, ctx: DrawContext) -> DrawResult {
         // A continuation is a char offset
         let start = ctx.constraints.continuation.unwrap_or(0) as usize;

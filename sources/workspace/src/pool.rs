@@ -2,15 +2,22 @@ use rpds::HashTrieMap;
 use serde::{Deserialize, Serialize};
 use slotmap::{SlotMap, new_key_type};
 use utils::{HistoryGraph, Timestamp};
+use uuid::Uuid;
 
-use crate::{Node, messages::action::Action, region::ScreenRegion};
+use crate::{Node, messages::action::Action, region::ScreenRegion, workspace::PushWorkspaceNode};
 
 /**
     A unique identifier for a node.
     Used for registry lookup and messaging.
 */
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
-pub struct NodeUid(u64);
+pub struct NodeUid(Uuid);
+
+impl NodeUid {
+    pub(crate) fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
 
 /**
    A historical registry of all nodes and their changes over time.
@@ -28,30 +35,59 @@ pub struct Registry {
 }
 
 impl Registry {
-    pub fn get(&self, id: NodeUid) -> Option<(&dyn Node, Option<ScreenRegion>)> {
+    pub(crate) fn new(root_node: Box<dyn Node>) -> (Self, NodeUid) {
+        let mut pool = NodePool::default();
+        let mut snapshot = WorldSnapshot::default();
+
+        let root_id = NodeUid::new();
+        snapshot.push(root_node, root_id, &mut pool);
+
+        (
+            Self {
+                pool,
+                history: HistoryGraph::new(snapshot),
+                current_frame: 0,
+            },
+            root_id,
+        )
+    }
+
+    pub(crate) fn tick_frame(&mut self) {
+        self.current_frame += 1;
+    }
+
+    pub(crate) fn get(&self, id: NodeUid) -> Option<(&dyn Node, Option<ScreenRegion>)> {
         let maybe_nobj = self.history.current_epoch().data.map.get(&id);
         maybe_nobj.map(|nobj| (nobj.current(&self.pool), nobj.last_known_region))
     }
 
-    pub fn start_epoch(&mut self, edge: Action) {
+    pub(crate) fn push(&mut self, action: PushWorkspaceNode) {
+        self.history
+            .current_epoch_mut()
+            .push(action.node, action.uid, &mut self.pool);
+    }
+
+    pub(crate) fn start_epoch(&mut self, edge: Action) {
         let ts = Timestamp::now();
         self.history.start_epoch(edge, ts);
     }
 
-    pub fn current_epoch_time(&self) -> Timestamp {
+    pub(crate) fn current_epoch_time(&self) -> Timestamp {
         self.history.current_epoch().time()
     }
 
-    pub fn apply_request(&mut self, req: Action) {
+    pub(crate) fn apply_action(&mut self, req: Action) {
         let cur_epoch_time = self.current_epoch_time();
 
-        if let Some(nobj) = self.history.current_epoch_mut().map.get_mut(&req.dest) {
+        if let Some(dest) = req.dest
+            && let Some(nobj) = self.history.current_epoch_mut().map.get_mut(&dest)
+        {
             let node_mut = nobj.make_mut(req.clone(), cur_epoch_time, &mut self.pool);
             node_mut.handle_action(req.body);
         }
     }
 
-    pub fn update_node_region(&mut self, id: NodeUid, new_region: Option<ScreenRegion>) {
+    pub(crate) fn update_node_region(&mut self, id: NodeUid, new_region: Option<ScreenRegion>) {
         let Some(nobj) = self.history.current_epoch_mut().map.get_mut(&id) else {
             // Node does not exist
             return;
@@ -76,25 +112,18 @@ impl Registry {
 }
 
 /**
-   A registry of nodes for messaging.
-
-   An instance of [`NodeRegistry`] represents a snapshot of the workspace at a point in time.
-   A registry is structurally shared and CoW; cloning it is cheap.
+   An instance of [`WorldSnapshot`] represents a snapshot of the workspace at a point in time.
+   It is structurally shared and CoW, so cloning it is cheap.
 */
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct WorldSnapshot {
     map: HashTrieMap<NodeUid, NodeObject>,
-    next_count: u64,
 }
 
 impl WorldSnapshot {
-    fn push(&mut self, new_node: Box<dyn Node>, pool: &mut NodePool) -> NodeUid {
-        let uid = NodeUid(self.next_count);
+    fn push(&mut self, new_node: Box<dyn Node>, uid: NodeUid, pool: &mut NodePool) {
         let new_node_object = NodeObject::new(new_node, pool);
         self.map.insert_mut(uid, new_node_object);
-
-        self.next_count += 1;
-        uid
     }
 }
 
@@ -151,7 +180,7 @@ impl NodeObject {
    [`NodeRef`]s should never be used directly; the public API is [`NodeUid`]s.
    A [`NodeUid`] may point to different [`NodeRef`]s at different points in time (i.e., if it is replaced).
 */
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 pub(crate) struct NodePool {
     inner: SlotMap<NodeRef, Box<dyn Node>>,
 }
@@ -163,6 +192,7 @@ impl NodePool {
         self.inner.get(nref).map(|n| &**n)
     }
 
+    #[must_use]
     fn insert(&mut self, node: Box<dyn Node>) -> NodeRef {
         self.inner.insert(node)
     }

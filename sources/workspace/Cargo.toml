@@ -6,9 +6,9 @@ edition = "2024"
 [dependencies]
 dyn-clone.workspace = true
 egui.workspace = true
+rpds = { version = "1.2.1", features = ["serde"] }
 serde.workspace = true
+slotmap = { version = "1.1.1", features = ["serde"] }
 typetag.workspace = true
 utils.workspace = true
-slotmap = { version = "1.1.1", features = ["serde"] }
-rpds = { version = "1.2.1", features = ["serde"] }
-uuid = "1.24.0"
+uuid.workspace = true

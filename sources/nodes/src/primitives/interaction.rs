@@ -44,6 +44,10 @@ impl InteractionBox {
 
 #[typetag::serde]
 impl Node for InteractionBox {
+    fn type_name(&self) -> String {
+        "Interaction Sensor".into()
+    }
+
     fn draw(&self, ctx: DrawContext) -> DrawResult {
         let Some(x) = ctx.constraints.x else {
             // Cannot draw; unbounded
@@ -75,7 +79,7 @@ impl Node for InteractionBox {
         }
     }
 
-    fn handle_action(&mut self, r: Box<dyn ActionBody>) {}
+    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
 pub struct WasClicked;

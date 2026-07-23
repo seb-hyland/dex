@@ -10,6 +10,10 @@ pub struct HorizontalLayout {
 
 #[typetag::serde]
 impl Node for HorizontalLayout {
+    fn type_name(&self) -> String {
+        "Horizontal Layout".into()
+    }
+
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
         let avail_w = ctx
             .constraints
@@ -201,11 +205,11 @@ impl Node for HorizontalLayout {
         compute_draw_res(origin, max_line_width, consumed_height)
     }
 
-    fn handle_action(&mut self, r: Box<dyn ActionBody>) {}
+    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
 impl Requestable for HorizontalLayout {
-    fn request(&self, body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
+    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
         None
     }
 }

@@ -70,9 +70,9 @@
     "semantic_hash": "18a5cd52440ad0045ff64ccbb1eb6849"
   },
   "sources/workspace/src/lib.rs": {
-    "mtime": 1784837335.4240737,
-    "ast_hash": "9a6b81f867c451f3f16102a77b92e498",
-    "semantic_hash": "9a6b81f867c451f3f16102a77b92e498"
+    "mtime": 1784837715.077298,
+    "ast_hash": "f0ef35328934592b7a33b143fa1305f6",
+    "semantic_hash": "f0ef35328934592b7a33b143fa1305f6"
   },
   "sources/workspace/src/messages/action.rs": {
     "mtime": 1784259390.7545464,
@@ -90,9 +90,9 @@
     "semantic_hash": "0fe84fae9fbe76b7bb19911e82cb18eb"
   },
   "sources/workspace/src/pool.rs": {
-    "mtime": 1784835912.2413526,
-    "ast_hash": "d62948480905b01bf2b568684c5ed72a",
-    "semantic_hash": "d62948480905b01bf2b568684c5ed72a"
+    "mtime": 1784837448.6511884,
+    "ast_hash": "0705f14fc4a955604f847a78f229f87a",
+    "semantic_hash": "0705f14fc4a955604f847a78f229f87a"
   },
   "sources/workspace/src/region.rs": {
     "mtime": 1784835056.1693678,
@@ -105,9 +105,9 @@
     "semantic_hash": "68b329da9893e34099c7d8ad5cb9c940"
   },
   "sources/workspace/src/workspace.rs": {
-    "mtime": 1784836932.1690085,
-    "ast_hash": "538f315aed6ffa55dae61eb491c8a837",
-    "semantic_hash": "538f315aed6ffa55dae61eb491c8a837"
+    "mtime": 1784837718.6693678,
+    "ast_hash": "caf3d9624942bad34dd382e2cca078d8",
+    "semantic_hash": "caf3d9624942bad34dd382e2cca078d8"
   },
   "design/experience.md": {
     "mtime": 1784257662.7614083,

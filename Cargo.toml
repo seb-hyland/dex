@@ -12,3 +12,4 @@ serde_json = "1.0.150"
 typetag = "0.2.22"
 utils.path = "sources/utils/"
 utils-proc-macro.path = "sources/utils-proc-macro/"
+uuid = { version = "1.23.4", features = ["serde", "v4", "v7"] }
