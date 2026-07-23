@@ -26,6 +26,17 @@ impl From<Pos2> for ScreenPos {
     }
 }
 
+impl Add for ScreenPos {
+    type Output = ScreenPos;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self {
+            x: self.x + rhs.x,
+            y: self.y + rhs.y,
+        }
+    }
+}
+
 impl Add<Vector> for ScreenPos {
     type Output = ScreenPos;
 
