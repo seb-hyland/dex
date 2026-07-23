@@ -152,7 +152,7 @@ impl Add for Vector {
     fn add(self, rhs: Self) -> Self::Output {
         Self {
             x: self.x + rhs.x,
-            y: self.y + rhs.x,
+            y: self.y + rhs.y,
         }
     }
 }

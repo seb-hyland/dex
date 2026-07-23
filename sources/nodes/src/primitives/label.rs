@@ -7,10 +7,10 @@ use workspace::prelude::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Label {
-    text: String,
-    singleline: bool,
-    font: FontId,
-    color: Color32,
+    pub text: String,
+    pub singleline: bool,
+    pub font: FontId,
+    pub color: Color32,
 }
 
 #[typetag::serde]

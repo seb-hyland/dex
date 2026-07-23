@@ -10,3 +10,8 @@ workspace.path = "../workspace/"
 typetag.workspace = true
 pyo3.workspace = true
 utils.workspace = true
+
+[dev-dependencies]
+# Only used by `examples/demo.rs` to open a window and drive the workspace.
+# Pinned to the same egui minor as the workspace so the `Ui`/`Rect` types unify.
+eframe = "0.35.0"

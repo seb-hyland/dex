@@ -20,7 +20,7 @@ struct LastFrameInteractions {
 
 impl InteractionBox {
     fn to_sense(&self) -> Sense {
-        let hover = if self.senses_clicks {
+        let hover = if self.senses_hover {
             Sense::HOVER
         } else {
             Sense::empty()
@@ -38,7 +38,7 @@ impl InteractionBox {
             Sense::empty()
         };
 
-        hover & click & drag
+        hover | click | drag
     }
 }
 
