@@ -44,7 +44,7 @@ impl InteractionBox {
 
 #[typetag::serde]
 impl Node for InteractionBox {
-    fn draw(&self, ctx: &mut DrawContext) -> DrawResult {
+    fn draw(&self, ctx: DrawContext) -> DrawResult {
         let Some(x) = ctx.constraints.x else {
             // Cannot draw; unbounded
             return DrawResult::Complete { region: None };

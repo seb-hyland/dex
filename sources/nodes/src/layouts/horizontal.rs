@@ -10,7 +10,7 @@ pub struct HorizontalLayout {
 
 #[typetag::serde]
 impl Node for HorizontalLayout {
-    fn draw(&self, ctx: &mut DrawContext) -> DrawResult {
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
         let avail_w = ctx
             .constraints
             .x
@@ -136,7 +136,7 @@ impl Node for HorizontalLayout {
                 can_request_wrap: self.allow_wrap,
                 continuation: None,
             };
-            let Some(mut child_draw_res) = ctx.draw_node(*child, constraints) else {
+            let Some(mut child_draw_res) = ctx.draw_workspace_node(*child, constraints) else {
                 // This child no longer exists
                 // TODO: delete it
                 continue;
@@ -179,7 +179,7 @@ impl Node for HorizontalLayout {
                     continuation: Some(continuation),
                 };
                 let child_continuation_draw_res = ctx
-                    .draw_node(*child, constraints)
+                    .draw_workspace_node(*child, constraints)
                     .expect("Child should not be deleted mid-draw");
 
                 let maybe_region = child_continuation_draw_res.region();

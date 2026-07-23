@@ -46,13 +46,13 @@ impl CanvasLayout {
             can_request_wrap: false,
             continuation: None,
         };
-        ctx.draw_node(child.id, constraints)
+        ctx.draw_workspace_node(child.id, constraints)
     }
 }
 
 #[typetag::serde]
 impl Node for CanvasLayout {
-    fn draw(&self, ctx: &mut DrawContext) -> DrawResult {
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
         let avail_x = ctx
             .constraints
             .x
@@ -71,7 +71,17 @@ impl Node for CanvasLayout {
         let origin = ctx.constraints.pos.to_top_left(size);
 
         if let Some(interact) = &self.drag_interaction {
-            interact.draw(ctx);
+            ctx.draw_node(
+                interact,
+                LocalId::from_cons(ctx.id, "background drag"),
+                DrawConstraints {
+                    pos: PositionConstraint::TopLeft(origin),
+                    x: Some(AxisConstraint::Exactly(avail_x)),
+                    y: Some(AxisConstraint::Exactly(avail_y)),
+                    can_request_wrap: false,
+                    continuation: None,
+                },
+            );
 
             let drag_res = interact
                 .request_typed(Box::new(WasDragged))
@@ -84,7 +94,7 @@ impl Node for CanvasLayout {
         }
 
         for child in &self.children {
-            self.draw_child(child, origin, ctx);
+            self.draw_child(child, origin, &mut ctx);
         }
 
         DrawResult::Complete {

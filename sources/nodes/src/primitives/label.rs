@@ -15,7 +15,7 @@ pub struct Label {
 
 #[typetag::serde]
 impl Node for Label {
-    fn draw(&self, ctx: &mut DrawContext) -> DrawResult {
+    fn draw(&self, ctx: DrawContext) -> DrawResult {
         // A continuation is a char offset
         let start = ctx.constraints.continuation.unwrap_or(0) as usize;
         let remaining: String = self.text.chars().skip(start).collect();
@@ -40,7 +40,7 @@ impl Node for Label {
 impl Label {
     fn draw_singleline(
         &self,
-        ctx: &mut DrawContext,
+        ctx: DrawContext,
         remaining: &str,
         avail_w: Option<f32>,
     ) -> DrawResult {
@@ -88,7 +88,7 @@ impl Label {
 
     fn draw_multiline(
         &self,
-        ctx: &mut DrawContext,
+        ctx: DrawContext,
         remaining: &str,
         start: usize,
         avail_w: Option<f32>,

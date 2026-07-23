@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use utils::match_dyn;
 
 use crate::{
-    AxisConstraint, DrawConstraints, DrawContext, DrawResult, PositionConstraint,
+    AxisConstraint, DrawConstraints, DrawContext, DrawResult, Id, LocalId, Node,
+    PositionConstraint,
     messages::{
         action::{Action, ActionGroup},
         request::{Region, Request, TypedRequest, TypedRequestBody, downcast_resp},
@@ -37,13 +38,13 @@ impl Workspace {
             continuation: None,
         };
         let mut ctx = DrawContext {
-            id: root_node,
+            id: Id::Workspace(root_node),
             workspace: self,
             constraints,
             ui,
         };
 
-        let draw_res = ctx.draw_node(root_node, constraints);
+        let draw_res = ctx.draw_workspace_node(root_node, constraints);
 
         assert!(draw_res.is_some(), "Root node should exist")
     }
@@ -85,22 +86,43 @@ impl Workspace {
 }
 
 impl<'ctx> DrawContext<'ctx> {
-    pub fn draw_node(&mut self, id: NodeUid, constraints: DrawConstraints) -> Option<DrawResult> {
+    pub fn draw_workspace_node(
+        &mut self,
+        id: NodeUid,
+        constraints: DrawConstraints,
+    ) -> Option<DrawResult> {
         let (node, _) = self.workspace.registry.get(id)?;
         // Cheap clone of node for display, releasing the borrow on the registry
         let node_clone = dyn_clone::clone_box(node);
 
-        let mut temp_ctx = DrawContext {
-            id,
+        let temp_ctx = DrawContext {
+            id: Id::Workspace(id),
             constraints,
             ..self.reborrow()
         };
 
-        let res = node_clone.draw(&mut temp_ctx);
+        #[allow(deprecated)] // Private call
+        let res = node_clone.draw(temp_ctx);
 
         let maybe_region = res.region();
         self.workspace.registry.update_node_region(id, maybe_region);
 
         Some(res)
+    }
+
+    pub fn draw_node(
+        &mut self,
+        node: &impl Node,
+        id: LocalId,
+        constraints: DrawConstraints,
+    ) -> DrawResult {
+        let temp_ctx = DrawContext {
+            id: Id::Local(id),
+            constraints,
+            ..self.reborrow()
+        };
+
+        #[allow(deprecated)] // Private call
+        node.draw(temp_ctx)
     }
 }

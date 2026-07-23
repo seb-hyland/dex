@@ -30,7 +30,7 @@ pub struct Registry {
 impl Registry {
     pub fn get(&self, id: NodeUid) -> Option<(&dyn Node, Option<ScreenRegion>)> {
         let maybe_nobj = self.history.current_epoch().data.map.get(&id);
-        maybe_nobj.map(|nobj| (nobj.current(&self.pool), nobj.last_known_region.clone()))
+        maybe_nobj.map(|nobj| (nobj.current(&self.pool), nobj.last_known_region))
     }
 
     pub fn start_epoch(&mut self, edge: Action) {

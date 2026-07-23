@@ -1,3 +1,5 @@
+use std::hash::{DefaultHasher, Hash, Hasher};
+
 use dyn_clone::DynClone;
 use egui::Ui;
 
@@ -22,11 +24,14 @@ pub mod prelude {
     };
 }
 pub use prelude::*;
+use serde::{Deserialize, Serialize};
 
 #[typetag::serde]
 pub trait Node: 'static + Requestable + DynClone {
     /// Given some context, draw the node on screen
-    fn draw(&self, ctx: &mut DrawContext) -> DrawResult;
+    #[doc(hidden)]
+    #[deprecated = "This should never be called directly. Use `DrawContext::draw_node` or `DrawContext::draw_workspace_node` instead."]
+    fn draw(&self, ctx: DrawContext) -> DrawResult;
 
     /// Resolve an action
     fn handle_action(&mut self, r: Box<dyn ActionBody>);
@@ -56,9 +61,10 @@ impl DrawResult {
     }
 }
 
+#[non_exhaustive]
 pub struct DrawContext<'ctx> {
     /// The unique identifier of the node being drawn
-    pub id: NodeUid,
+    pub id: Id,
 
     /// A set of constraints to determine draw sizing
     pub constraints: DrawConstraints,
@@ -72,9 +78,10 @@ pub struct DrawContext<'ctx> {
 
 impl<'ctx> DrawContext<'ctx> {
     pub fn last_frame_location(&self) -> Option<ScreenRegion> {
+        let workspace_id = self.id.into_workspace_id()?;
         self.workspace
             .send_request(TypedRequest {
-                dest: self.id,
+                dest: workspace_id,
                 body: Box::new(Region),
             })
             .flatten()
@@ -84,12 +91,43 @@ impl<'ctx> DrawContext<'ctx> {
         self.ui.request_discard("need_skip");
     }
 
-    pub fn reborrow<'rb>(&'rb mut self) -> DrawContext<'rb> {
+    pub(crate) fn reborrow<'rb>(&'rb mut self) -> DrawContext<'rb> {
         DrawContext {
             id: self.id,
             constraints: self.constraints,
             workspace: &mut *self.workspace,
             ui: &mut *self.ui,
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+pub enum Id {
+    Workspace(NodeUid),
+    Local(LocalId),
+}
+
+impl Id {
+    pub fn into_workspace_id(self) -> Option<NodeUid> {
+        match self {
+            Self::Workspace(id) => Some(id),
+            _ => None,
+        }
+    }
+}
+
+/**
+   A stable, local ID for parent-owned nodes.
+   Typically produced from a hash of the parent ID and some stable identifier (e.g., field name)
+*/
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+pub struct LocalId(u64);
+
+impl LocalId {
+    pub fn from_cons(car: impl Hash, cdr: impl Hash) -> Self {
+        let mut hasher = DefaultHasher::new();
+        car.hash(&mut hasher);
+        cdr.hash(&mut hasher);
+        Self(hasher.finish())
     }
 }

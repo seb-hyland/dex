@@ -12,7 +12,7 @@ pub struct Rect {
 
 #[typetag::serde]
 impl Node for Rect {
-    fn draw(&self, ctx: &mut DrawContext) -> DrawResult {
+    fn draw(&self, ctx: DrawContext) -> DrawResult {
         let origin = ctx.constraints.pos.to_top_left(self.size);
         let region = ScreenRegion::from_min_size(origin, self.size);
 
@@ -59,7 +59,7 @@ pub struct Circle {
 
 #[typetag::serde]
 impl Node for Circle {
-    fn draw(&self, ctx: &mut DrawContext) -> DrawResult {
+    fn draw(&self, ctx: DrawContext) -> DrawResult {
         let size_vector = Vector::splat(self.radius);
         let center = ctx.constraints.pos.to_center(size_vector);
 
@@ -103,7 +103,7 @@ pub struct Triangle {
 
 #[typetag::serde]
 impl Node for Triangle {
-    fn draw(&self, ctx: &mut DrawContext) -> DrawResult {
+    fn draw(&self, ctx: DrawContext) -> DrawResult {
         let [vec1, vec2] = self.vectors;
         let bounding_size = Vector::from_points(&[
             ScreenPos::zero(),
@@ -155,7 +155,7 @@ pub struct Line {
 
 #[typetag::serde]
 impl Node for Line {
-    fn draw(&self, ctx: &mut DrawContext) -> DrawResult {
+    fn draw(&self, ctx: DrawContext) -> DrawResult {
         let start = ctx.constraints.pos.to_top_left(self.span);
         let end = start + self.span;
 
