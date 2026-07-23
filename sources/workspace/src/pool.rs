@@ -22,6 +22,9 @@ pub struct Registry {
 
     /// A history of nodes and requests
     history: HistoryGraph<WorldSnapshot, Action>,
+
+    /// An ID for the current frame
+    current_frame: u64,
 }
 
 impl Registry {
@@ -39,7 +42,7 @@ impl Registry {
         self.history.current_epoch().time()
     }
 
-    pub fn apply_request<'pool>(&mut self, req: Action) {
+    pub fn apply_request(&mut self, req: Action) {
         let cur_epoch_time = self.current_epoch_time();
 
         if let Some(nobj) = self.history.current_epoch_mut().map.get_mut(&req.dest) {
@@ -48,10 +51,27 @@ impl Registry {
         }
     }
 
-    pub fn update_node_region(&mut self, id: NodeUid, new_region: ScreenRegion) {
-        if let Some(nobj) = self.history.current_epoch_mut().map.get_mut(&id) {
-            nobj.last_known_region = Some(new_region);
+    pub fn update_node_region(&mut self, id: NodeUid, new_region: Option<ScreenRegion>) {
+        let Some(nobj) = self.history.current_epoch_mut().map.get_mut(&id) else {
+            // Node does not exist
+            return;
+        };
+
+        let Some(region) = new_region else {
+            // No information available to update with
+            return;
+        };
+
+        if nobj.last_known_frame != self.current_frame {
+            // Stale data; clear it
+            nobj.last_known_region = None;
+            nobj.last_known_frame = self.current_frame;
         }
+
+        nobj.last_known_region = match nobj.last_known_region {
+            None => Some(region),
+            Some(existing_region) => Some(existing_region.union(region)),
+        };
     }
 }
 
@@ -71,7 +91,7 @@ impl WorldSnapshot {
     fn push(&mut self, new_node: Box<dyn Node>, pool: &mut NodePool) -> NodeUid {
         let uid = NodeUid(self.next_count);
         let new_node_object = NodeObject::new(new_node, pool);
-        self.map.insert(uid, new_node_object);
+        self.map.insert_mut(uid, new_node_object);
 
         self.next_count += 1;
         uid
@@ -83,8 +103,11 @@ struct NodeObject {
     /// A history of the node's previous states for fine-grained rollbacks
     history: HistoryGraph<NodeRef, Action>,
 
-    /// The region at which this node was drawn either last frame or this frame
+    /// The regions at which this node was drawn either last frame or this frame
     pub(crate) last_known_region: Option<ScreenRegion>,
+
+    /// The frame at which [`Self::last_known_regions`] was updated
+    pub(crate) last_known_frame: u64,
 }
 
 impl NodeObject {
@@ -93,13 +116,13 @@ impl NodeObject {
         Self {
             history: HistoryGraph::new(new_ref),
             last_known_region: None,
+            last_known_frame: 0,
         }
     }
 
     pub(crate) fn current<'pool>(&self, pool: &'pool NodePool) -> &'pool dyn Node {
         let cur_epoch = self.history.current_epoch();
-        &**pool
-            .get(cur_epoch.data)
+        pool.get(cur_epoch.data)
             .expect("Reference in use should not be freed")
     }
 
@@ -136,8 +159,8 @@ pub(crate) struct NodePool {
 new_key_type! { struct NodeRef; }
 
 impl NodePool {
-    fn get(&self, nref: NodeRef) -> Option<&Box<dyn Node>> {
-        self.inner.get(nref)
+    fn get(&self, nref: NodeRef) -> Option<&dyn Node> {
+        self.inner.get(nref).map(|n| &**n)
     }
 
     fn insert(&mut self, node: Box<dyn Node>) -> NodeRef {
@@ -146,7 +169,7 @@ impl NodePool {
 
     fn make_mut(&mut self, cur_ref: NodeRef) -> Option<(NodeRef, &mut dyn Node)> {
         if let Some(cur_node) = self.get(cur_ref) {
-            let new_node = cur_node.clone();
+            let new_node = dyn_clone::clone_box(cur_node);
             let new_ref = self.inner.insert(new_node);
             let new_node_mut = &mut **self.inner.get_mut(new_ref).unwrap();
             Some((new_ref, new_node_mut))

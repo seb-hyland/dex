@@ -5,10 +5,10 @@ use serde::{Deserialize, Serialize};
 use utils::match_dyn;
 
 use crate::{
-    DrawContext,
+    AxisConstraint, DrawConstraints, DrawContext, DrawResult, PositionConstraint,
     messages::{
         action::{Action, ActionGroup},
-        request::{Region, Request, TypedRequest, downcast_resp},
+        request::{Region, Request, TypedRequest, TypedRequestBody, downcast_resp},
     },
     pool::{NodeUid, Registry},
 };
@@ -26,31 +26,40 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    // pub fn draw_root(&mut self, ui: &mut Ui, area: Rect) {
-    //     let root_node = self.root_node;
+    pub fn draw_root(&mut self, ui: &mut Ui, area: Rect) {
+        let root_node = self.root_node;
 
-    //     let mut ctx = DrawContext {
-    //         id: root_node,
-    //         ui,
-    //         pos: area.min,
-    //         width: Some(area.width()),
-    //         height: Some(area.height()),
-    //         workspace: self,
-    //     };
-    //     let draw_res = ctx.draw_node(root_node);
+        let constraints = DrawConstraints {
+            pos: PositionConstraint::TopLeft(area.min.into()),
+            x: Some(AxisConstraint::Exactly(area.width())),
+            y: Some(AxisConstraint::Exactly(area.height())),
+            can_request_wrap: false,
+            continuation: None,
+        };
+        let mut ctx = DrawContext {
+            id: root_node,
+            workspace: self,
+            constraints,
+            ui,
+        };
 
-    //     assert!(draw_res.is_some(), "Root node should exist")
-    // }
+        let draw_res = ctx.draw_node(root_node, constraints);
 
-    pub fn message<Resp: Any>(&self, q: TypedRequest<Resp>) -> Option<Resp> {
-        self.message_dyn(q.into()).map(downcast_resp)
+        assert!(draw_res.is_some(), "Root node should exist")
     }
 
-    pub fn message_dyn(&self, q: Request) -> Option<Box<dyn Any>> {
+    pub fn send_request<Resp: Any>(&self, q: TypedRequest<Resp>) -> Option<Resp> {
+        self.send_request_dyn(q.into()).map(downcast_resp)
+    }
+
+    fn send_request_dyn(&self, q: Request) -> Option<Box<dyn Any>> {
         let (dest_node, last_draw_region) = self.registry.get(q.dest)?;
         if q.body.as_any_ref().is::<Region>() {
             // Draw region is being requested
-            Some(Box::new(last_draw_region) as Box<dyn Any>)
+            Some(
+                Box::new(last_draw_region) as Box<<Region as TypedRequestBody>::Response>
+                    as Box<dyn Any>,
+            )
         } else {
             dest_node.request(q.body)
         }
@@ -76,21 +85,22 @@ impl Workspace {
 }
 
 impl<'ctx> DrawContext<'ctx> {
-    // pub fn draw_node(&mut self, id: NodeUid) -> Option<ScreenRegion> {
-    //     let maybe_node = self.w_ctx.workspace.registry.get(id);
-    //     let (node, _) = maybe_node?;
+    pub fn draw_node(&mut self, id: NodeUid, constraints: DrawConstraints) -> Option<DrawResult> {
+        let (node, _) = self.workspace.registry.get(id)?;
+        // Cheap clone of node for display, releasing the borrow on the registry
+        let node_clone = dyn_clone::clone_box(node);
 
-    //     // Cheap clone of active node for display purposes
-    //     let node_clone = dyn_clone::clone_box(node);
-    //     self.w_ctx.id = id;
-    //     let maybe_region = node_clone.draw(self);
+        let mut temp_ctx = DrawContext {
+            id,
+            constraints,
+            ..self.reborrow()
+        };
 
-    //     if let Some(region) = &maybe_region {
-    //         self.workspace
-    //             .registry
-    //             .update_node_region(id, region.clone());
-    //     }
+        let res = node_clone.draw(&mut temp_ctx);
 
-    //     maybe_region
-    // }
+        let maybe_region = res.region();
+        self.workspace.registry.update_node_region(id, maybe_region);
+
+        Some(res)
+    }
 }
