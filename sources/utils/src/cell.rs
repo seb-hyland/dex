@@ -20,6 +20,7 @@ impl<T: Copy> Rigid<T> {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(bound = "")]
 /// A cached, short-lived, reconstructable value.
 pub struct Transient<T> {
     #[serde(skip)]

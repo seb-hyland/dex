@@ -1,7 +1,7 @@
 use dyn_clone::DynClone;
 use egui::Ui;
 
-mod messages;
+pub mod messages;
 mod pool;
 mod region;
 mod theme;
@@ -10,8 +10,8 @@ mod workspace;
 pub mod prelude {
     pub use crate::{
         messages::{
-            action::{Action, ActionBody},
-            request::{Request, RequestBody, Requestable},
+            action::*,
+            request::{Region, Request, RequestBody, Requestable, TypedRequest, TypedRequestBody},
         },
         pool::NodeUid,
         region::{ScreenPos, ScreenRegion, Vector},
@@ -20,8 +20,6 @@ pub mod prelude {
     };
 }
 pub use prelude::*;
-
-use crate::messages::request::{Region, TypedRequest};
 
 #[typetag::serde]
 pub trait Node: 'static + Requestable + DynClone {

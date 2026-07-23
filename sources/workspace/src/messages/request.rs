@@ -27,6 +27,8 @@ pub trait TypedRequestBody: RequestBody {
     type Response: Any;
 }
 
+impl<T> RequestBody for T where T: TypedRequestBody {}
+
 impl<Resp> From<TypedRequest<Resp>> for Request {
     fn from(q: TypedRequest<Resp>) -> Self {
         Self {
@@ -75,7 +77,7 @@ macro_rules! respond_requests {
             $($binding if $binding.as_any_ref().is::<$match_type>() => {
                 let $binding = *$binding.as_any().downcast::<$match_type>().unwrap();
                 // Ensure the response matches the expected type
-                let __resp: <$match_type as $crate::message::query::TypedQueryBody>::Response = $body;
+                let __resp: <$match_type as $crate::messages::request::TypedRequestBody>::Response = $body;
                 ::std::option::Option::Some(::utils::boxed_any!(__resp))
             })*
             _ => None,
@@ -101,8 +103,6 @@ macro_rules! defrequest {
             ".\n\n## Returns\n[`", stringify!($return_type), "`] if the query succeeds.")]
         #[derive(Clone, ::serde::Serialize, ::serde::Deserialize)]
         pub struct $type_name $body
-
-        impl $crate::messages::request::RequestBody for $type_name {}
 
         impl $crate::messages::request::TypedRequestBody for $type_name {
             type Response = $return_type;

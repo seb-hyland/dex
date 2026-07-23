@@ -441,6 +441,7 @@ dependencies = [
  "pyo3",
  "serde",
  "typetag",
+ "utils",
  "workspace",
 ]
 

@@ -9,7 +9,7 @@ use crate::{Node, messages::action::Action, region::ScreenRegion};
     A unique identifier for a node.
     Used for registry lookup and messaging.
 */
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct NodeUid(u64);
 
 /**

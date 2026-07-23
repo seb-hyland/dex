@@ -9,3 +9,4 @@ serde.workspace = true
 workspace.path = "../workspace/"
 typetag.workspace = true
 pyo3.workspace = true
+utils.workspace = true
