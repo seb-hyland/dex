@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use rpds::HashTrieMap;
 use serde::{Deserialize, Serialize};
 use slotmap::{SlotMap, new_key_type};
@@ -58,7 +60,7 @@ impl Registry {
 
     pub(crate) fn get(&self, id: NodeUid) -> Option<(&dyn Node, Option<ScreenRegion>)> {
         let maybe_nobj = self.history.current_epoch().data.map.get(&id);
-        maybe_nobj.map(|nobj| (nobj.current(&self.pool), nobj.last_known_region))
+        maybe_nobj.map(|nobj| (nobj.current(&self.pool), *nobj.last_known_region.borrow()))
     }
 
     pub(crate) fn push(&mut self, action: PushWorkspaceNode) {
@@ -87,8 +89,8 @@ impl Registry {
         }
     }
 
-    pub(crate) fn update_node_region(&mut self, id: NodeUid, new_region: Option<ScreenRegion>) {
-        let Some(nobj) = self.history.current_epoch_mut().map.get_mut(&id) else {
+    pub(crate) fn update_node_region(&self, id: NodeUid, new_region: Option<ScreenRegion>) {
+        let Some(nobj) = self.history.current_epoch().data.map.get(&id) else {
             // Node does not exist
             return;
         };
@@ -98,13 +100,14 @@ impl Registry {
             return;
         };
 
-        if nobj.last_known_frame != self.current_frame {
+        if *nobj.last_known_frame.borrow() != self.current_frame {
             // Stale data; clear it
-            nobj.last_known_region = None;
-            nobj.last_known_frame = self.current_frame;
+            *nobj.last_known_region.borrow_mut() = None;
+            *nobj.last_known_frame.borrow_mut() = self.current_frame;
         }
 
-        nobj.last_known_region = match nobj.last_known_region {
+        let last_known_region = *nobj.last_known_region.borrow();
+        *nobj.last_known_region.borrow_mut() = match last_known_region {
             None => Some(region),
             Some(existing_region) => Some(existing_region.union(region)),
         };
@@ -133,10 +136,10 @@ struct NodeObject {
     history: HistoryGraph<NodeRef, Action>,
 
     /// The regions at which this node was drawn either last frame or this frame
-    pub(crate) last_known_region: Option<ScreenRegion>,
+    pub(crate) last_known_region: RefCell<Option<ScreenRegion>>,
 
     /// The frame at which [`Self::last_known_regions`] was updated
-    pub(crate) last_known_frame: u64,
+    pub(crate) last_known_frame: RefCell<u64>,
 }
 
 impl NodeObject {
@@ -144,8 +147,8 @@ impl NodeObject {
         let new_ref = pool.insert(node);
         Self {
             history: HistoryGraph::new(new_ref),
-            last_known_region: None,
-            last_known_frame: 0,
+            last_known_region: RefCell::new(None),
+            last_known_frame: RefCell::new(0),
         }
     }
 

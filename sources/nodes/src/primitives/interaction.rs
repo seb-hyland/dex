@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use utils::Transient;
 use workspace::prelude::*;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct InteractionBox {
     pub senses_hover: bool,
     pub senses_clicks: bool,

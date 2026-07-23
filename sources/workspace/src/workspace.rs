@@ -38,6 +38,10 @@ impl Workspace {
         }
     }
 
+    pub fn set_root(&mut self, new_root: NodeUid) {
+        self.root_node = new_root;
+    }
+
     pub fn send_request<Resp: Any>(&self, q: TypedRequest<Resp>) -> Option<Resp> {
         self.send_request_dyn(q.into()).map(downcast_resp)
     }
@@ -77,6 +81,9 @@ impl Workspace {
     }
 
     fn draw_root(&mut self, ui: &mut Ui, draw_area: Rect) {
+        // Do not allow drawing outside the area
+        ui.set_clip_rect(draw_area);
+
         let root_node = self.root_node;
 
         let constraints = DrawConstraints {
@@ -93,9 +100,7 @@ impl Workspace {
             ui,
         };
 
-        let draw_res = ctx.draw_workspace_node(root_node, constraints);
-
-        assert!(draw_res.is_some(), "Root node should exist")
+        ctx.draw_workspace_node(root_node, constraints);
     }
 
     fn process_actions(&mut self) {
@@ -134,8 +139,6 @@ impl<'ctx> DrawContext<'ctx> {
         constraints: DrawConstraints,
     ) -> Option<DrawResult> {
         let (node, _) = self.workspace.registry.get(id)?;
-        // Cheap clone of node for display, releasing the borrow on the registry
-        let node_clone = dyn_clone::clone_box(node);
 
         let temp_ctx = DrawContext {
             id: Id::Workspace(id),
@@ -144,7 +147,7 @@ impl<'ctx> DrawContext<'ctx> {
         };
 
         #[allow(deprecated)] // Private call
-        let res = node_clone.draw(temp_ctx);
+        let res = node.draw(temp_ctx);
 
         let maybe_region = res.region();
         self.workspace.registry.update_node_region(id, maybe_region);

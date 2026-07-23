@@ -13,12 +13,30 @@ pub struct CanvasLayout {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-struct CanvasNode {
-    canvas_pos: Pos2,
-    id: NodeUid,
+pub struct CanvasNode {
+    pub canvas_pos: Pos2,
+    pub id: NodeUid,
+}
+
+impl Default for CanvasLayout {
+    fn default() -> Self {
+        Self {
+            children: Vec::new(),
+            drag_interaction: Some({
+                let mut interact = InteractionBox::default();
+                interact.senses_drags = true;
+                interact
+            }),
+            screen_offset: Transient::default(),
+        }
+    }
 }
 
 impl CanvasLayout {
+    pub fn push_child(&mut self, child: CanvasNode) {
+        self.children.push(child);
+    }
+
     fn screen_offset(&self) -> Vector {
         self.screen_offset
             .val()

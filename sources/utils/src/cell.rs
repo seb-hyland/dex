@@ -38,18 +38,19 @@ impl<T> Reset for Transient<T> {
     }
 }
 
+impl<T: Clone> Clone for Transient<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Cell::new(self.inner.get_cloned()),
+        }
+    }
+}
+
 impl<T> Default for Transient<T> {
     fn default() -> Self {
         Self {
             inner: Cell::new(None),
         }
-    }
-}
-
-impl<T> Clone for Transient<T> {
-    fn clone(&self) -> Self {
-        // Reset the cache
-        Self::default()
     }
 }
 

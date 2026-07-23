@@ -75,7 +75,7 @@ pub struct DrawContext<'ctx> {
     pub ui: &'ctx mut Ui,
 
     /// A handle to the workspace in which this node is being drawn
-    pub workspace: &'ctx mut Workspace,
+    pub workspace: &'ctx Workspace,
 }
 
 impl<'ctx> DrawContext<'ctx> {
@@ -97,7 +97,7 @@ impl<'ctx> DrawContext<'ctx> {
         DrawContext {
             id: self.id,
             constraints: self.constraints,
-            workspace: &mut *self.workspace,
+            workspace: self.workspace,
             ui: &mut *self.ui,
         }
     }
