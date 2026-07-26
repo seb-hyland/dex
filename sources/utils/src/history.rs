@@ -1,5 +1,7 @@
+use crate::{self as utils, impl_Reset_noop};
 use petgraph::{Directed, graph::NodeIndex, prelude::StableGraph};
 use serde::{Deserialize, Serialize};
+use utils_proc_macro::Reset;
 use uuid::Uuid;
 
 /**
@@ -9,7 +11,7 @@ use uuid::Uuid;
    For large data structures, consider wrapping it in [`super::Shared`] for structural sharing between shapshots.
    Mutation is then possible through [`super::Shared::make_mut`].
 */
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Reset)]
 pub struct HistoryGraph<T: Clone, Edge> {
     graph: StableGraph<Epoch<T>, Edge, Directed, u32>,
     active_epoch: NodeIndex<u32>,
@@ -59,7 +61,7 @@ impl<T: Clone, Edge> HistoryGraph<T, Edge> {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Reset)]
 pub struct Epoch<T> {
     time: Timestamp,
     pub data: T,
@@ -75,6 +77,8 @@ impl<T> Epoch<T> {
 pub struct Timestamp {
     id: Uuid,
 }
+
+impl_Reset_noop!(Timestamp);
 
 impl Timestamp {
     pub fn now() -> Self {

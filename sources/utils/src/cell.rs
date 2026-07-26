@@ -1,6 +1,13 @@
-use std::{cell::UnsafeCell, rc::Rc};
+use std::{
+    cell::{RefCell, UnsafeCell},
+    hash::Hash,
+    rc::Rc,
+};
 
+use petgraph::{EdgeType, csr::IndexType, prelude::StableGraph};
+use rpds::HashTrieMap;
 use serde::{Deserialize, Serialize};
+use slotmap::SlotMap;
 
 #[derive(Default, Clone)]
 pub struct Rigid<T: Copy>(Rc<Cell<T>>);
@@ -29,12 +36,121 @@ pub struct Transient<T> {
 
 pub trait Reset {
     /// Reset any [`Transient`] values
-    fn reset(&mut self);
+    fn reset(&self);
 }
 
 impl<T> Reset for Transient<T> {
-    fn reset(&mut self) {
-        *self = Self::default();
+    fn reset(&self) {
+        self.inner.set(None);
+    }
+}
+
+#[macro_export]
+macro_rules! impl_Reset_noop {
+    ($($impl_type:ty),* $(,)?) => {
+        $(
+            impl $crate::Reset for $impl_type {
+                #[inline(always)]
+                fn reset(&self) {}
+            }
+        )*
+    };
+}
+
+impl_Reset_noop!(
+    (),
+    bool,
+    char,
+    String,
+    u8,
+    u16,
+    u32,
+    u64,
+    u128,
+    usize,
+    i8,
+    i16,
+    i32,
+    i64,
+    i128,
+    isize,
+    f32,
+    f64,
+    petgraph::stable_graph::NodeIndex<u32>,
+    egui::Color32,
+    egui::Pos2,
+    egui::Vec2,
+    egui::Rect,
+    egui::Stroke,
+    egui::FontId,
+);
+
+impl<T: Reset + ?Sized> Reset for Box<T> {
+    fn reset(&self) {
+        (**self).reset();
+    }
+}
+
+impl<T: Reset> Reset for RefCell<T> {
+    fn reset(&self) {
+        self.borrow().reset();
+    }
+}
+
+impl<T: Reset> Reset for Option<T> {
+    fn reset(&self) {
+        match self {
+            Self::None => {}
+            Self::Some(v) => v.reset(),
+        }
+    }
+}
+
+impl<T: Reset, const N: usize> Reset for [T; N] {
+    fn reset(&self) {
+        for item in self.iter() {
+            item.reset();
+        }
+    }
+}
+
+impl<T: Reset> Reset for &[T] {
+    fn reset(&self) {
+        for item in self.iter() {
+            item.reset();
+        }
+    }
+}
+
+impl<T: Reset> Reset for Vec<T> {
+    fn reset(&self) {
+        for item in self.iter() {
+            item.reset();
+        }
+    }
+}
+
+impl<K: slotmap::Key, V: Reset> Reset for SlotMap<K, V> {
+    fn reset(&self) {
+        for value in self.values() {
+            value.reset();
+        }
+    }
+}
+
+impl<K: Eq + Hash, V: Reset> Reset for HashTrieMap<K, V> {
+    fn reset(&self) {
+        for value in self.values() {
+            value.reset();
+        }
+    }
+}
+
+impl<T: Reset, E, D: EdgeType, I: IndexType> Reset for StableGraph<T, E, D, I> {
+    fn reset(&self) {
+        for node in self.node_weights() {
+            node.reset();
+        }
     }
 }
 

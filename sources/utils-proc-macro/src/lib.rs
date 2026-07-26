@@ -1,20 +1,12 @@
-use quote::quote;
-use synstructure::{AddBounds, BindStyle, Structure, decl_derive};
+use proc_macro::TokenStream;
+use synstructure::decl_derive;
 
-fn reset_derive(mut s: Structure) -> proc_macro2::TokenStream {
-    s.bind_with(|_| BindStyle::RefMut);
-    s.add_bounds(AddBounds::Fields);
+mod dynamic;
+mod reset;
 
-    // Call `reset` on each field
-    let body = s.each(|bi| quote!(::utils::Reset::reset(#bi);));
+decl_derive!([Reset] => reset::reset_derive);
 
-    s.gen_impl(quote! {
-        gen impl ::utils::Reset for @Self {
-            fn reset(&mut self) {
-                match self { #body }
-            }
-        }
-    })
+#[proc_macro_attribute]
+pub fn dynamic(attr_tokens: TokenStream, body_tokens: TokenStream) -> TokenStream {
+    dynamic::dynamic_impl(attr_tokens, body_tokens)
 }
-
-decl_derive!([Reset] => reset_derive);

@@ -3,9 +3,10 @@ use egui::{
     text::{LayoutJob, TextWrapping},
 };
 use serde::{Deserialize, Serialize};
+use utils::Reset;
 use workspace::prelude::*;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Label {
     pub text: String,
     pub singleline: bool,

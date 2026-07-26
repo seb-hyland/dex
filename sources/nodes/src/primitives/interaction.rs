@@ -1,9 +1,9 @@
 use egui::Sense;
 use serde::{Deserialize, Serialize};
-use utils::Transient;
+use utils::{Reset, Transient};
 use workspace::prelude::*;
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Reset, Serialize, Deserialize)]
 pub struct InteractionBox {
     pub senses_hover: bool,
     pub senses_clicks: bool,

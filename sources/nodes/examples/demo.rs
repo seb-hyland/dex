@@ -15,6 +15,7 @@
 //!     `Circle` per data row (all the same colour).
 //!   - a full-panel [`InteractionBox`] (a shared-uid workspace node) that the
 //!     top-level `Scatter` queries with `WasHovered` each frame.
+//!
 //! On hover, the scatter asks the bar chart for its rect (built-in `Region`
 //! request) and draws light `Line` connectors from each dot to its category bar.
 //!
@@ -36,6 +37,7 @@ use nodes::{
         shapes::{Circle, Line, Rect},
     },
 };
+use utils::Reset;
 use workspace::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -128,9 +130,18 @@ fn category_bars(rect: ScreenRegion) -> Vec<(String, u32, ScreenPos, Vector, Scr
             (
                 cat.clone(),
                 *count,
-                ScreenPos { x: center_x - bar_w / 2.0, y: top_y },
-                Vector { x: bar_w, y: height },
-                ScreenPos { x: center_x, y: top_y },
+                ScreenPos {
+                    x: center_x - bar_w / 2.0,
+                    y: top_y,
+                },
+                Vector {
+                    x: bar_w,
+                    y: height,
+                },
+                ScreenPos {
+                    x: center_x,
+                    y: top_y,
+                },
             )
         })
         .collect()
@@ -217,7 +228,7 @@ fn box_geometry(ctx: &DrawContext, width_frac: f32, fallback: Vector) -> (Screen
 
 const BAR_FALLBACK: Vector = Vector { x: 340.0, y: 380.0 };
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Reset, serde::Serialize, serde::Deserialize)]
 struct BarChart;
 
 #[typetag::serde]
@@ -231,7 +242,12 @@ impl Node for BarChart {
         let (origin, size) = box_geometry(&ctx, 0.5, BAR_FALLBACK);
         let rect = ScreenRegion::from_min_size(origin, size);
 
-        place(&mut ctx, &background(size), 0, PositionConstraint::TopLeft(origin));
+        place(
+            &mut ctx,
+            &background(size),
+            0,
+            PositionConstraint::TopLeft(origin),
+        );
         place(
             &mut ctx,
             &label("BarChart: rows per category", 15.0),
@@ -239,7 +255,9 @@ impl Node for BarChart {
             PositionConstraint::TopLeft(origin + Vector { x: 14.0, y: 12.0 }),
         );
 
-        for (i, (cat, count, bar_origin, bar_size, anchor)) in category_bars(rect).into_iter().enumerate() {
+        for (i, (cat, count, bar_origin, bar_size, anchor)) in
+            category_bars(rect).into_iter().enumerate()
+        {
             place(
                 &mut ctx,
                 &Rect {
@@ -255,19 +273,23 @@ impl Node for BarChart {
                 &mut ctx,
                 &label(&count.to_string(), 14.0),
                 100 + i as u64,
-                PositionConstraint::TopLeft(ScreenPos { x: anchor.x - 4.0, y: anchor.y - 20.0 }),
+                PositionConstraint::TopLeft(ScreenPos {
+                    x: anchor.x - 4.0,
+                    y: anchor.y - 20.0,
+                }),
             );
             place(
                 &mut ctx,
                 &label(&cat, 14.0),
                 200 + i as u64,
-                PositionConstraint::TopLeft(ScreenPos { x: anchor.x - 5.0, y: rect.min.y + size.y - PAD + 8.0 }),
+                PositionConstraint::TopLeft(ScreenPos {
+                    x: anchor.x - 5.0,
+                    y: rect.min.y + size.y - PAD + 8.0,
+                }),
             );
         }
 
-        DrawResult::Complete {
-            region: Some(rect),
-        }
+        DrawResult::Complete { region: Some(rect) }
     }
 
     fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
@@ -285,7 +307,7 @@ impl Requestable for BarChart {
 
 const SCATTER_FALLBACK: Vector = Vector { x: 400.0, y: 380.0 };
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Reset, serde::Serialize, serde::Deserialize)]
 struct Scatter {
     /// CanvasLayout holding the dot `Circle`s.
     canvas: NodeUid,
@@ -306,7 +328,12 @@ impl Node for Scatter {
         let (origin, size) = box_geometry(&ctx, 1.0, SCATTER_FALLBACK);
         let rect = ScreenRegion::from_min_size(origin, size);
 
-        place(&mut ctx, &background(size), 0, PositionConstraint::TopLeft(origin));
+        place(
+            &mut ctx,
+            &background(size),
+            0,
+            PositionConstraint::TopLeft(origin),
+        );
         // Dots, via the CanvasLayout (positions were set with push_child).
         draw_filling(&mut ctx, self.canvas, rect);
         place(
@@ -326,47 +353,44 @@ impl Node for Scatter {
             })
             .unwrap_or(false);
 
-        if hovered {
-            if let Some(bar_rect) = ctx
+        if hovered
+            && let Some(bar_rect) = ctx
                 .workspace
                 .send_request(TypedRequest {
                     dest: self.barchart,
                     body: Box::new(Region),
                 })
                 .flatten()
-            {
-                let anchors = category_bars(bar_rect);
-                for (i, (n1, n2, cat)) in DATA.iter().enumerate() {
-                    let Some((.., anchor)) = anchors.iter().find(|(c, ..)| c == cat) else {
-                        continue;
-                    };
-                    // Dot centre = panel origin + its canvas position (+ half the
-                    // radius, since Circle centres on its box).
-                    let cp = dot_canvas_pos(*n1, *n2);
-                    let start = ScreenPos {
-                        x: origin.x + cp.x + DOT_RADIUS / 2.0,
-                        y: origin.y + cp.y + DOT_RADIUS / 2.0,
-                    };
-                    let span = Vector {
-                        x: anchor.x - start.x,
-                        y: anchor.y - start.y,
-                    };
-                    place(
-                        &mut ctx,
-                        &Line {
-                            span,
-                            stroke: Stroke::new(1.5, LINE_COLOR),
-                        },
-                        900 + i as u64,
-                        PositionConstraint::TopLeft(start),
-                    );
-                }
+        {
+            let anchors = category_bars(bar_rect);
+            for (i, (n1, n2, cat)) in DATA.iter().enumerate() {
+                let Some((.., anchor)) = anchors.iter().find(|(c, ..)| c == cat) else {
+                    continue;
+                };
+                // Dot centre = panel origin + its canvas position (+ half the
+                // radius, since Circle centres on its box).
+                let cp = dot_canvas_pos(*n1, *n2);
+                let start = ScreenPos {
+                    x: origin.x + cp.x + DOT_RADIUS / 2.0,
+                    y: origin.y + cp.y + DOT_RADIUS / 2.0,
+                };
+                let span = Vector {
+                    x: anchor.x - start.x,
+                    y: anchor.y - start.y,
+                };
+                place(
+                    &mut ctx,
+                    &Line {
+                        span,
+                        stroke: Stroke::new(1.5, LINE_COLOR),
+                    },
+                    900 + i as u64,
+                    PositionConstraint::TopLeft(start),
+                );
             }
         }
 
-        DrawResult::Complete {
-            region: Some(rect),
-        }
+        DrawResult::Complete { region: Some(rect) }
     }
 
     fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}

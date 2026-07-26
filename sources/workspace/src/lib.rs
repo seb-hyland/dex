@@ -25,9 +25,10 @@ pub mod prelude {
 }
 pub use prelude::*;
 use serde::{Deserialize, Serialize};
+use utils::Reset;
 
 #[typetag::serde]
-pub trait Node: 'static + Requestable + DynClone {
+pub trait Node: 'static + Requestable + DynClone + Reset {
     fn type_name(&self) -> String;
 
     /// Given some context, draw the node on screen

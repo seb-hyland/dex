@@ -1,18 +1,18 @@
 use egui::{Pos2, Vec2};
 use serde::{Deserialize, Serialize};
-use utils::Transient;
+use utils::{Reset, Transient};
 use workspace::{messages::request::TypedRequestable, prelude::*};
 
 use crate::primitives::interaction::{InteractionBox, WasDragged};
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct CanvasLayout {
     children: Vec<CanvasNode>,
     drag_interaction: Option<InteractionBox>,
     screen_offset: Transient<Vector>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct CanvasNode {
     pub canvas_pos: Pos2,
     pub id: NodeUid,

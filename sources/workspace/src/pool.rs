@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use rpds::HashTrieMap;
 use serde::{Deserialize, Serialize};
 use slotmap::{SlotMap, new_key_type};
-use utils::{HistoryGraph, Timestamp};
+use utils::{HistoryGraph, Reset, Timestamp, impl_Reset_noop};
 use uuid::Uuid;
 
 use crate::{Node, messages::action::Action, region::ScreenRegion, workspace::PushWorkspaceNode};
@@ -15,6 +15,8 @@ use crate::{Node, messages::action::Action, region::ScreenRegion, workspace::Pus
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct NodeUid(Uuid);
 
+impl_Reset_noop!(NodeUid);
+
 impl NodeUid {
     pub(crate) fn new() -> Self {
         Self(Uuid::new_v4())
@@ -24,7 +26,7 @@ impl NodeUid {
 /**
    A historical registry of all nodes and their changes over time.
 */
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Reset)]
 pub struct Registry {
     /// An owned pool of all nodes that exist, at any time, in any place.
     pool: NodePool,
@@ -118,7 +120,7 @@ impl Registry {
    An instance of [`WorldSnapshot`] represents a snapshot of the workspace at a point in time.
    It is structurally shared and CoW, so cloning it is cheap.
 */
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Reset, Serialize, Deserialize)]
 struct WorldSnapshot {
     map: HashTrieMap<NodeUid, NodeObject>,
 }
@@ -130,7 +132,7 @@ impl WorldSnapshot {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Reset)]
 struct NodeObject {
     /// A history of the node's previous states for fine-grained rollbacks
     history: HistoryGraph<NodeRef, Action>,
@@ -183,12 +185,13 @@ impl NodeObject {
    [`NodeRef`]s should never be used directly; the public API is [`NodeUid`]s.
    A [`NodeUid`] may point to different [`NodeRef`]s at different points in time (i.e., if it is replaced).
 */
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, Reset)]
 pub(crate) struct NodePool {
     inner: SlotMap<NodeRef, Box<dyn Node>>,
 }
 
 new_key_type! { struct NodeRef; }
+impl_Reset_noop!(NodeRef);
 
 impl NodePool {
     fn get(&self, nref: NodeRef) -> Option<&dyn Node> {

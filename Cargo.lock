@@ -3410,9 +3410,12 @@ name = "utils"
 version = "0.1.0"
 dependencies = [
  "dyn-clone",
+ "egui",
  "petgraph",
+ "rpds",
  "serde",
  "serde_json",
+ "slotmap",
  "utils-proc-macro",
  "uuid",
 ]

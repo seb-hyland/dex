@@ -1,8 +1,9 @@
 use egui::{Color32, Mesh, Shape, Stroke, StrokeKind};
 use serde::{Deserialize, Serialize};
+use utils::Reset;
 use workspace::prelude::*;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Rect {
     pub size: Vector,
     pub corner_radius: f32,
@@ -54,7 +55,7 @@ impl Requestable for Rect {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Circle {
     pub radius: f32,
     pub fill_color: Color32,
@@ -103,7 +104,7 @@ impl Requestable for Circle {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Triangle {
     pub vectors: [Vector; 2],
     pub color: Color32,
@@ -159,7 +160,7 @@ impl Requestable for Triangle {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Line {
     pub span: Vector,
     pub stroke: Stroke,

@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
+use utils::Reset;
 use workspace::prelude::*;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct HorizontalLayout {
     pub children: Vec<NodeUid>,
     pub allow_wrap: bool,

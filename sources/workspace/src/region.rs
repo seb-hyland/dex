@@ -2,6 +2,7 @@ use std::ops::{Add, Div, Sub};
 
 use egui::{Pos2, Rect, Vec2};
 use serde::{Deserialize, Serialize};
+use utils::impl_Reset_noop;
 
 /**
     A position in screen-space.
@@ -179,3 +180,5 @@ impl Vector {
         rect.size().into()
     }
 }
+
+impl_Reset_noop!(ScreenPos, ScreenRegion, Vector);
