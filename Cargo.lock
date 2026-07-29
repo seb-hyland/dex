@@ -658,6 +658,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "core"
+version = "0.1.0"
+dependencies = [
+ "dyn-clone",
+ "egui",
+ "oneshot",
+ "rpds",
+ "serde",
+ "slotmap",
+ "typetag",
+ "utils",
+ "uuid",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1932,13 +1947,13 @@ dependencies = [
 name = "nodes"
 version = "0.1.0"
 dependencies = [
+ "core",
  "eframe",
  "egui",
  "pyo3",
  "serde",
  "typetag",
  "utils",
- "workspace",
 ]
 
 [[package]]
@@ -2293,6 +2308,12 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "oneshot"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe21416a02c693fb9f980befcb230ecc70b0b3d1cc4abf88b9675c4c1457f0c"
 
 [[package]]
 name = "orbclient"
@@ -4254,20 +4275,6 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
-
-[[package]]
-name = "workspace"
-version = "0.1.0"
-dependencies = [
- "dyn-clone",
- "egui",
- "rpds",
- "serde",
- "slotmap",
- "typetag",
- "utils",
- "uuid",
-]
 
 [[package]]
 name = "writeable"

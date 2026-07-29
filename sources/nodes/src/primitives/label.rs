@@ -1,10 +1,10 @@
+use core::prelude::*;
 use egui::{
     Color32, FontId, Pos2, Rect,
     text::{LayoutJob, TextWrapping},
 };
 use serde::{Deserialize, Serialize};
 use utils::Reset;
-use workspace::prelude::*;
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Label {

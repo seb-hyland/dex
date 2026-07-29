@@ -3,6 +3,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use dyn_clone::DynClone;
 use egui::Ui;
 
+mod compute;
 mod constraints;
 pub mod messages;
 mod pool;
@@ -28,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use utils::Reset;
 
 #[typetag::serde]
-pub trait Node: 'static + Requestable + DynClone + Reset {
+pub trait Node: Requestable + Reset + 'static + DynClone + Send {
     fn type_name(&self) -> String;
 
     /// Given some context, draw the node on screen

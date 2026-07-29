@@ -1,5 +1,5 @@
 [package]
-name = "workspace"
+name = "core"
 version = "0.1.0"
 edition = "2024"
 
@@ -12,3 +12,4 @@ slotmap.workspace = true
 typetag.workspace = true
 utils.workspace = true
 uuid.workspace = true
+oneshot = { version = "0.2.1", features = ["std"] }

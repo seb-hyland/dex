@@ -1,7 +1,7 @@
+use core::prelude::*;
 use egui::{Color32, Mesh, Shape, Stroke, StrokeKind};
 use serde::{Deserialize, Serialize};
 use utils::Reset;
-use workspace::prelude::*;
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Rect {

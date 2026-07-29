@@ -1,6 +1,6 @@
+use core::prelude::*;
 use serde::{Deserialize, Serialize};
 use utils::Reset;
-use workspace::prelude::*;
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct HorizontalLayout {

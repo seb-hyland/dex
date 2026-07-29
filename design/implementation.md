@@ -47,6 +47,7 @@ Synchronous operations that may request data from a node
 ### Actions
 
 Requested history-defining operations
+
 - Transient mutations that can be discarded/reconstructed are done via queries
 - Asynchronous and do not have a return value
 - Buffered and processed at frame end
@@ -61,11 +62,23 @@ Requested history-defining operations
 - Control-flow lines can be created between any node and a transform node's argument node
 - A global control-flow graph exists: creating a control-flow line updates it
 - When `exec` is called on a transform (asynchronous action run in background thread), it executes, then
-informs the control-flow graph where the execution occured and the modified result node
+  informs the control-flow graph where the execution occured and the modified result node
   - The result node may have been replaced
   - The control-flow graph requests execution on downstream nodes
 
+## Background executor
+
+- Execution is a function that returns a `Vec<Action>` (the execution effects)
+- The workspace holds a "blackboard" of mutated nodes
+  - Helps with invalidation of arbitrary other nodes that care
+    - Lambdas can check for invalidation of their output
+  - Blackboard is "wiped" every few frames? (todo: is 1 frame okay, cleaned at end?)
+- The execution system must be able to map the requester node to each computation
+  - Requester nodes must be able to kill their previous computations if a new invalidation has occured
+  - Effects will be commited simultaneously at compute-end (transaction) IFF no kill flag has been set
+
 # Saving
+
 - Ref-counted values require custom serialization so as not to duplicate on write
 - Strategy:
   - On write:

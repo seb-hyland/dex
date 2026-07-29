@@ -1,7 +1,7 @@
+use core::{messages::request::TypedRequestable, prelude::*};
 use egui::{Pos2, Vec2};
 use serde::{Deserialize, Serialize};
 use utils::{Reset, Transient};
-use workspace::{messages::request::TypedRequestable, prelude::*};
 
 use crate::primitives::interaction::{InteractionBox, WasDragged};
 
@@ -38,10 +38,7 @@ impl CanvasLayout {
     }
 
     fn screen_offset(&self) -> Vector {
-        self.screen_offset
-            .val()
-            .map(|d| *d)
-            .unwrap_or(Vector::splat(0.0))
+        self.screen_offset.val().unwrap_or(Vector::splat(0.0))
     }
 
     fn canvas_to_screen(&self, canvas_pos: Pos2) -> Pos2 {

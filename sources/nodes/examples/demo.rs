@@ -24,6 +24,7 @@
 //! Note also that `InteractionBox` is drawn directly (sized) rather than pushed
 //! onto the canvas, because `CanvasLayout` gives its children no size.
 
+use core::prelude::*;
 use eframe::egui;
 use egui::{Color32, FontId, Pos2, Stroke};
 use nodes::{
@@ -38,7 +39,6 @@ use nodes::{
     },
 };
 use utils::Reset;
-use workspace::prelude::*;
 
 // ---------------------------------------------------------------------------
 // Hardcoded data: (numeric1, numeric2, categorical)

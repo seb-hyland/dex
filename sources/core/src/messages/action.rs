@@ -28,7 +28,7 @@ impl Clone for Action {
 type ActionDescription = Cow<'static, str>;
 
 #[typetag::serde]
-pub trait ActionBody: AsAny + DynClone {}
+pub trait ActionBody: AsAny + DynClone + Send {}
 
 /**
     A special marker type that represents a series of actions.

@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 egui.workspace = true
 serde.workspace = true
-workspace.path = "../workspace/"
+core.path = "../core/"
 typetag.workspace = true
 pyo3.workspace = true
 utils.workspace = true
