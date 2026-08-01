@@ -1,5 +1,5 @@
 use std::{
-    cell::{Ref, RefCell},
+    cell::{Ref, RefCell, RefMut},
     hash::Hash,
 };
 
@@ -21,8 +21,29 @@ impl<T> Transient<T> {
         self.inner.borrow()
     }
 
+    pub fn val_or_else(&self, f: impl FnOnce() -> T) -> Ref<'_, T> {
+        self.set_if_none(f);
+        Ref::map(self.val(), |r| r.as_ref().unwrap())
+    }
+
+    pub fn val_mut(&self) -> RefMut<'_, Option<T>> {
+        self.inner.borrow_mut()
+    }
+
+    pub fn val_mut_or_else(&self, f: impl FnOnce() -> T) -> RefMut<'_, T> {
+        self.set_if_none(f);
+        RefMut::map(self.val_mut(), |r| r.as_mut().unwrap())
+    }
+
     pub fn set(&self, val: T) {
         *self.inner.borrow_mut() = Some(val);
+    }
+
+    fn set_if_none(&self, f: impl FnOnce() -> T) {
+        let is_none = self.inner.borrow().is_none();
+        if is_none {
+            self.set(f());
+        }
     }
 }
 

@@ -16,7 +16,10 @@ pub mod prelude {
         constraints::*,
         messages::{
             action::*,
-            request::{Region, Request, RequestBody, Requestable, TypedRequest, TypedRequestBody},
+            request::{
+                Region, Request, RequestBody, Requestable, TypedRequest, TypedRequestBody,
+                TypedRequestable,
+            },
         },
         pool::NodeUid,
         region::{ScreenPos, ScreenRegion, Vector},
@@ -33,8 +36,8 @@ pub trait Node: Requestable + Reset + 'static + DynClone + Send {
     fn type_name(&self) -> String;
 
     /// Given some context, draw the node on screen
-    #[doc(hidden)]
     #[deprecated = "This should never be called directly. Use `DrawContext::draw_node` or `DrawContext::draw_workspace_node` instead."]
+    // This deprecation attribute prevents direct `<instance>.draw(ctx)` calls
     fn draw(&self, ctx: DrawContext) -> DrawResult;
 
     /// Resolve an action

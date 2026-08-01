@@ -1,12 +1,12 @@
 use std::any::Any;
 
-use egui::{Rect, Ui};
+use egui::{Rect, Ui, UiBuilder};
 use serde::{Deserialize, Serialize};
 use utils::{Timestamp, match_dyn};
 
 use crate::{
     ActionBody, AxisConstraint, DrawConstraints, DrawContext, DrawResult, Id, LocalId, Node,
-    PositionConstraint,
+    PositionConstraint, ScreenRegion, Vector, WrapConstraints,
     messages::{
         action::{Action, ActionGroup},
         request::{Region, Request, TypedRequest, TypedRequestBody, downcast_resp},
@@ -90,8 +90,8 @@ impl Workspace {
             pos: PositionConstraint::TopLeft(draw_area.min.into()),
             x: Some(AxisConstraint::Exactly(draw_area.width())),
             y: Some(AxisConstraint::Exactly(draw_area.height())),
-            can_request_wrap: false,
-            continuation: None,
+            wrap: WrapConstraints::NotAllowed,
+            should_clip: true,
         };
         let mut ctx = DrawContext {
             id: Id::Workspace(root_node),
@@ -140,16 +140,57 @@ impl<'ctx> DrawContext<'ctx> {
     ) -> Option<DrawResult> {
         let (node, _) = self.workspace.registry.get(id)?;
 
-        let temp_ctx = DrawContext {
-            id: Id::Workspace(id),
-            constraints,
-            ..self.reborrow()
+        let clip_x = constraints
+            .x
+            .map(|x_ax| x_ax.provided_value())
+            .unwrap_or(f32::INFINITY);
+        let clip_y = constraints
+            .y
+            .map(|y_ax| y_ax.provided_value())
+            .unwrap_or(f32::INFINITY);
+        let clip_size = Vector {
+            x: clip_x,
+            y: clip_y,
+        };
+        let clip_region = match constraints.pos {
+            PositionConstraint::Center(c) => ScreenRegion::from_center_size(c, clip_size),
+            PositionConstraint::TopLeft(tl) => ScreenRegion::from_min_size(tl, clip_size),
         };
 
-        #[allow(deprecated)] // Private call
-        let res = node.draw(temp_ctx);
+        let res = if constraints.should_clip {
+            // Draw within a new child UI that is clipped
 
-        let maybe_region = res.region();
+            let mut child_ui = self.ui.new_child(UiBuilder::new());
+            child_ui.set_clip_rect(clip_region.into());
+
+            let temp_ctx = DrawContext {
+                id: Id::Workspace(id),
+                ui: &mut child_ui,
+                constraints,
+                ..self.reborrow()
+            };
+
+            #[allow(deprecated)] // Private call
+            node.draw(temp_ctx)
+        } else {
+            let temp_ctx = DrawContext {
+                id: Id::Workspace(id),
+                constraints,
+                ..self.reborrow()
+            };
+
+            #[allow(deprecated)] // Private call
+            node.draw(temp_ctx)
+        };
+
+        let maybe_region = res.region().and_then(|reg| {
+            if constraints.should_clip {
+                // Clip the output region to match the actual drawn area
+                reg.intersect(clip_region)
+            } else {
+                Some(reg)
+            }
+        });
         self.workspace.registry.update_node_region(id, maybe_region);
 
         Some(res)

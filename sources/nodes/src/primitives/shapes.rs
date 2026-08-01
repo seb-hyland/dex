@@ -1,4 +1,4 @@
-use core::prelude::*;
+use dex_core::prelude::*;
 use egui::{Color32, Mesh, Shape, Stroke, StrokeKind};
 use serde::{Deserialize, Serialize};
 use utils::Reset;
@@ -23,13 +23,13 @@ impl Node for Rect {
 
         let fits = ctx.constraints.fits(self.size);
         if !fits {
-            return if ctx.constraints.already_wrapped() {
-                DrawResult::Complete { region: None }
-            } else {
+            return if ctx.constraints.wrap.can_retry_on_newline() {
                 DrawResult::Wrap {
                     region: None,
                     continuation: 0,
                 }
+            } else {
+                DrawResult::Complete { region: None }
             };
         }
 
@@ -76,13 +76,13 @@ impl Node for Circle {
         let fits = ctx.constraints.fits(bounding_size);
 
         if !fits {
-            return if ctx.constraints.already_wrapped() {
-                DrawResult::Complete { region: None }
-            } else {
+            return if ctx.constraints.wrap.can_retry_on_newline() {
                 DrawResult::Wrap {
                     region: None,
                     continuation: 0,
                 }
+            } else {
+                DrawResult::Complete { region: None }
             };
         }
 
@@ -127,13 +127,13 @@ impl Node for Triangle {
 
         let fits = ctx.constraints.fits(bounding_size);
         if !fits {
-            return if ctx.constraints.already_wrapped() {
-                DrawResult::Complete { region: None }
-            } else {
+            return if ctx.constraints.wrap.can_retry_on_newline() {
                 DrawResult::Wrap {
                     region: None,
                     continuation: 0,
                 }
+            } else {
+                DrawResult::Complete { region: None }
             };
         }
 
@@ -178,13 +178,13 @@ impl Node for Line {
 
         let fits = ctx.constraints.fits(self.span);
         if !fits {
-            return if ctx.constraints.already_wrapped() {
-                DrawResult::Complete { region: None }
-            } else {
+            return if ctx.constraints.wrap.can_retry_on_newline() {
                 DrawResult::Wrap {
                     region: None,
                     continuation: 0,
                 }
+            } else {
+                DrawResult::Complete { region: None }
             };
         }
 

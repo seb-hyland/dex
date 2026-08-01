@@ -1,4 +1,4 @@
-use core::{messages::request::TypedRequestable, prelude::*};
+use dex_core::prelude::*;
 use egui::{Pos2, Vec2};
 use serde::{Deserialize, Serialize};
 use utils::{Reset, Transient};
@@ -58,8 +58,8 @@ impl CanvasLayout {
             pos: PositionConstraint::TopLeft(child_screen_pos),
             x: None,
             y: None,
-            can_request_wrap: false,
-            continuation: None,
+            wrap: WrapConstraints::NotAllowed,
+            should_clip: false,
         };
         ctx.draw_workspace_node(child.id, constraints)
     }
@@ -97,8 +97,8 @@ impl Node for CanvasLayout {
                     pos: PositionConstraint::TopLeft(origin),
                     x: Some(AxisConstraint::Exactly(avail_x)),
                     y: Some(AxisConstraint::Exactly(avail_y)),
-                    can_request_wrap: false,
-                    continuation: None,
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip: true,
                 },
             );
 

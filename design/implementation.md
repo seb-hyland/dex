@@ -34,6 +34,11 @@
     - Histories have an associated UUID generated when a message is sent
       - This UUID is recorded in both the global and local history to identify them
       - Time-ordered UUID
+- Some nodes may need to wrap across multiple lines
+  - The following wrap cases exist:
+    - Wrap to newline because not enough space exists on this line
+      - This should not be allowed if at start of line after already requesting a wrap
+    - Draw some on this line, then wrap to newline because content is not finished
 
 ## Messaging
 

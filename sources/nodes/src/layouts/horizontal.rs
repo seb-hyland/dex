@@ -1,4 +1,4 @@
-use core::prelude::*;
+use dex_core::prelude::*;
 use serde::{Deserialize, Serialize};
 use utils::Reset;
 
@@ -55,7 +55,7 @@ impl Node for HorizontalLayout {
            - `false` otherwise
         */
         #[must_use]
-        fn start_newline(
+        fn start_newline_still_has_space(
             cur_line_width: &mut f32,
             cur_line_highest_element: &mut f32,
             cur_used_height: &mut f32,
@@ -114,7 +114,7 @@ impl Node for HorizontalLayout {
         for child in &self.children {
             if avail_w - cur_line_width <= 0.0 {
                 // No space left in line
-                if start_newline(
+                if start_newline_still_has_space(
                     &mut cur_line_width,
                     &mut cur_line_highest_element,
                     &mut consumed_height,
@@ -138,8 +138,15 @@ impl Node for HorizontalLayout {
                 ),
                 x: Some(AxisConstraint::AtMost(avail_w - cur_line_width)),
                 y: Some(AxisConstraint::AtMost(avail_h - consumed_height)),
-                can_request_wrap: self.allow_wrap,
-                continuation: None,
+                wrap: if self.allow_wrap {
+                    WrapConstraints::CanRequest {
+                        at_start_of_line: cur_line_width == 0.0,
+                        continuation: None,
+                    }
+                } else {
+                    WrapConstraints::NotAllowed
+                },
+                should_clip: ctx.constraints.should_clip,
             };
             let Some(mut child_draw_res) = ctx.draw_workspace_node(*child, constraints) else {
                 // This child no longer exists
@@ -154,10 +161,12 @@ impl Node for HorizontalLayout {
                 &mut cur_line_highest_element,
             );
 
-            while let DrawResult::Wrap { continuation, .. } = child_draw_res {
+            while self.allow_wrap
+                && let DrawResult::Wrap { continuation, .. } = child_draw_res
+            {
                 // Need to draw again on a new line
 
-                if start_newline(
+                if start_newline_still_has_space(
                     &mut cur_line_width,
                     &mut cur_line_highest_element,
                     &mut consumed_height,
@@ -180,8 +189,11 @@ impl Node for HorizontalLayout {
                     ),
                     x: Some(AxisConstraint::AtMost(avail_w - cur_line_width)),
                     y: Some(AxisConstraint::AtMost(avail_h - consumed_height)),
-                    can_request_wrap: self.allow_wrap,
-                    continuation: Some(continuation),
+                    wrap: WrapConstraints::CanRequest {
+                        at_start_of_line: true,
+                        continuation: Some(continuation),
+                    },
+                    should_clip: ctx.constraints.should_clip,
                 };
                 let child_continuation_draw_res = ctx
                     .draw_workspace_node(*child, constraints)

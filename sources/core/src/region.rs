@@ -122,6 +122,17 @@ impl ScreenRegion {
     pub fn union(self, other: ScreenRegion) -> Self {
         Self::from(Rect::from(self).union(other.into()))
     }
+
+    pub fn intersect(self, other: ScreenRegion) -> Option<Self> {
+        let origin_rect = Rect::from(self);
+        let clip_rect = Rect::from(other);
+
+        if !origin_rect.intersects(clip_rect) {
+            None
+        } else {
+            Some(Self::from(origin_rect.intersect(clip_rect)))
+        }
+    }
 }
 
 /**

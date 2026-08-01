@@ -24,10 +24,8 @@
 //! Note also that `InteractionBox` is drawn directly (sized) rather than pushed
 //! onto the canvas, because `CanvasLayout` gives its children no size.
 
-use core::prelude::*;
-use eframe::egui;
-use egui::{Color32, FontId, Pos2, Stroke};
-use nodes::{
+use dex_core::prelude::*;
+use dex_nodes::{
     layouts::{
         canvas::{CanvasLayout, CanvasNode},
         horizontal::HorizontalLayout,
@@ -38,6 +36,8 @@ use nodes::{
         shapes::{Circle, Line, Rect},
     },
 };
+use eframe::egui;
+use egui::{Color32, FontId, Pos2, Stroke};
 use utils::Reset;
 
 // ---------------------------------------------------------------------------
@@ -160,8 +160,8 @@ fn place<N: Node>(ctx: &mut DrawContext, node: &N, key: u64, pos: PositionConstr
             pos,
             x: None,
             y: None,
-            can_request_wrap: false,
-            continuation: None,
+            wrap: WrapConstraints::NotAllowed,
+            should_clip: true,
         },
     );
 }
@@ -175,8 +175,8 @@ fn draw_filling(ctx: &mut DrawContext, id: NodeUid, rect: ScreenRegion) {
             pos: PositionConstraint::TopLeft(rect.min),
             x: Some(AxisConstraint::Exactly(size.x)),
             y: Some(AxisConstraint::Exactly(size.y)),
-            can_request_wrap: false,
-            continuation: None,
+            wrap: WrapConstraints::NotAllowed,
+            should_clip: true,
         },
     );
 }

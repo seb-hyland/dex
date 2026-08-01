@@ -1,4 +1,4 @@
-use core::prelude::*;
+use dex_core::prelude::*;
 use egui::Sense;
 use serde::{Deserialize, Serialize};
 use utils::{Reset, Transient};

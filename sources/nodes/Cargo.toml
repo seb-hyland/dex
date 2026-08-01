@@ -1,17 +1,15 @@
 [package]
-name = "nodes"
+name = "dex-nodes"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 egui.workspace = true
 serde.workspace = true
-core.path = "../core/"
+dex-core.path = "../core/"
 typetag.workspace = true
 pyo3.workspace = true
 utils.workspace = true
 
 [dev-dependencies]
-# Only used by `examples/demo.rs` to open a window and drive the workspace.
-# Pinned to the same egui minor as the workspace so the `Ui`/`Rect` types unify.
 eframe = "0.35.0"
