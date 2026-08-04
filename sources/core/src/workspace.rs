@@ -1,12 +1,13 @@
-use std::any::Any;
+use std::{any::Any, sync::mpsc};
 
 use egui::{Rect, Ui, UiBuilder};
 use serde::{Deserialize, Serialize};
-use utils::{Timestamp, match_dyn};
+use utils::match_dyn;
 
 use crate::{
     ActionBody, AxisConstraint, DrawConstraints, DrawContext, DrawResult, Id, LocalId, Node,
     PositionConstraint, ScreenRegion, Vector, WrapConstraints,
+    compute::scheduler::{ComputeScheduler, ComputeSchedulerHandle, ComputeTask},
     messages::{
         action::{Action, ActionGroup},
         request::{Region, Request, TypedRequest, TypedRequestBody, downcast_resp},
@@ -14,27 +15,33 @@ use crate::{
     pool::{NodeUid, Registry},
 };
 
-#[derive(Serialize, Deserialize)]
 pub struct Workspace {
     /// The top-level display node
     root_node: NodeUid,
 
-    /// A queue of unprocessed requests
-    actions: Vec<Action>,
-
     /// A historical registry for the workspace
     registry: Registry,
+
+    /// A sender for actions
+    action_sender: mpsc::Sender<Action>,
+    /// A queue of unprocessed actions
+    actions: mpsc::Receiver<Action>,
+
+    /// A background scheduler for compute-intensive tasks
+    scheduler: ComputeSchedulerHandle,
 }
 
 impl Workspace {
     pub fn new_with_root(root: Box<dyn Node>) -> Self {
         let (registry, root_node) = Registry::new(root);
-        let requests = Vec::new();
+        let (action_tx, action_recv) = mpsc::channel();
 
         Self {
             root_node,
-            actions: requests,
             registry,
+            action_sender: action_tx.clone(),
+            actions: action_recv,
+            scheduler: ComputeScheduler::spawn(action_tx),
         }
     }
 
@@ -59,19 +66,14 @@ impl Workspace {
         }
     }
 
-    pub fn insert_node(&mut self, node: Box<dyn Node>) -> NodeUid {
+    pub fn insert_node(&self, node: Box<dyn Node>) -> NodeUid {
         let uid = NodeUid::new();
-        self.actions.push(Action {
+        self.submit_action(Action {
             dest: None,
-            brand: Timestamp::now(),
             description: format!("Inserted node of type {}", node.type_name()).into(),
             body: Box::new(PushWorkspaceNode { node, uid }),
         });
         uid
-    }
-
-    pub fn submit_action(&mut self, action: Action) {
-        self.actions.push(action);
     }
 
     pub fn draw_frame(&mut self, ui: &mut Ui, draw_area: Rect) {
@@ -103,9 +105,14 @@ impl Workspace {
         ctx.draw_workspace_node(root_node, constraints);
     }
 
+    pub fn submit_action(&self, action: Action) {
+        self.action_sender
+            .send(action)
+            .expect("Actions should not fail to send!");
+    }
+
     fn process_actions(&mut self) {
-        let actions: Vec<_> = self.actions.drain(..).collect();
-        for act in actions {
+        while let Ok(act) = self.actions.try_recv() {
             self.registry.start_epoch(act.clone());
 
             match_dyn! { act.body,
@@ -120,6 +127,14 @@ impl Workspace {
                 _ => self.registry.apply_action(act)
             }
         }
+    }
+
+    pub fn submit_task(&self, task: ComputeTask) {
+        self.scheduler.submit_task(task);
+    }
+
+    pub fn cancel_all_tasks_for(&self, uid: NodeUid) {
+        self.scheduler.cancel_all_tasks_for(uid);
     }
 }
 

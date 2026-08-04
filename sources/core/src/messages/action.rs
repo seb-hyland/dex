@@ -2,14 +2,13 @@ use std::borrow::Cow;
 
 use dyn_clone::DynClone;
 use serde::{Deserialize, Serialize};
-use utils::{AsAny, Timestamp};
+use utils::AsAny;
 
 use crate::pool::NodeUid;
 
 #[derive(Serialize, Deserialize)]
 pub struct Action {
     pub dest: Option<NodeUid>,
-    pub brand: Timestamp,
     pub description: ActionDescription,
     pub body: Box<dyn ActionBody>,
 }
@@ -18,7 +17,6 @@ impl Clone for Action {
     fn clone(&self) -> Self {
         Self {
             dest: self.dest,
-            brand: self.brand,
             description: self.description.clone(),
             body: dyn_clone::clone_box(&*self.body),
         }

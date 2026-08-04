@@ -4,7 +4,7 @@ use egui::{
     text::{LayoutJob, TextWrapping},
 };
 use serde::{Deserialize, Serialize};
-use utils::{Reset, Transient};
+use utils::{Reset, Transient, match_dyn};
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Label {
@@ -262,17 +262,31 @@ impl Node for LabelEditable {
         let rect = Rect::from_min_size(origin.into(), size.into());
 
         let mut buf_mut = self.buf.val_mut_or_else(|| self.value.clone());
+        let editor_id = egui::Id::new(ctx.id);
         let editor = if self.singleline {
             TextEdit::singleline(&mut *buf_mut)
         } else {
             TextEdit::multiline(&mut *buf_mut)
         }
-        .id(egui::Id::new(ctx.id))
+        .id(editor_id)
         .frame(Frame::NONE)
         .margin(Margin::ZERO)
         .font(self.font.clone())
         .text_color(self.color)
         .desired_width(block_w);
+
+        if ctx
+            .ui
+            .memory_mut(|mem| mem.had_focus_last_frame(editor_id) && !mem.has_focus(editor_id))
+            && let Some(v) = &*self.buf.val()
+            && let Id::Workspace(uid) = ctx.id
+        {
+            ctx.workspace.submit_action(Action {
+                dest: Some(uid),
+                description: "Updated editable label's stored value on focus loss".into(),
+                body: Box::new(SetText { value: v.clone() }),
+            });
+        }
 
         // Insert the widget flush inside the computed block.
         ctx.ui.scope_builder(
@@ -288,7 +302,12 @@ impl Node for LabelEditable {
         }
     }
 
-    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
+    fn handle_action(&mut self, r: Box<dyn ActionBody>) {
+        match_dyn! { r,
+            s: SetText => self.value = s.value,
+            _ => {}
+        }
+    }
 }
 
 impl Requestable for LabelEditable {
@@ -296,3 +315,11 @@ impl Requestable for LabelEditable {
         None
     }
 }
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SetText {
+    value: String,
+}
+
+#[typetag::serde]
+impl ActionBody for SetText {}
