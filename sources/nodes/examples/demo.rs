@@ -32,8 +32,8 @@ use dex_nodes::{
     },
     primitives::{
         interaction::{InteractionBox, WasHovered},
-        label::Label,
         shapes::{Circle, Line, Rect},
+        text::Label,
     },
 };
 use eframe::egui;

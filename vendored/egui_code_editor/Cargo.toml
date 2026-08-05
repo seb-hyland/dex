@@ -1,0 +1,30 @@
+[package]
+name = "egui_code_editor"
+authors = ["Roman Chumak <p4ymak@yandex.ru>"]
+version = "0.3.7"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/p4ymak/egui_code_editor"
+description = "egui Code Editor widget with numbered lines, syntax highlighting and auto-completion.."
+readme = "README.md"
+categories = ["gui", "text-editors"]
+keywords = ["GUI", "editor", "egui", "highlighting", "syntax"]
+
+[lib]
+doctest = false
+name = "egui_code_editor"
+
+[dependencies]
+egui = { version = "0.35", optional = true }
+opener = { version = "0.8.5", optional = true }
+serde = { version = "1", optional = true }
+
+[dev-dependencies]
+colorful = "0.3"
+eframe = "0.35"
+
+[features]
+default = ["editor", "egui"]
+editor = []
+egui = ["dep:egui", "dep:opener"]
+serde = ["dep:serde"]

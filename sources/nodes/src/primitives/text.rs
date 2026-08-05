@@ -3,6 +3,7 @@ use egui::{
     Align, Color32, FontId, Frame, Layout, Margin, Pos2, Rect, TextEdit, UiBuilder,
     text::{LayoutJob, TextWrapping},
 };
+use egui_code_editor::{CodeEditor as CodeEditorWidget, ColorTheme, DEFAULT_THEMES, Syntax};
 use serde::{Deserialize, Serialize};
 use utils::{Reset, Transient, match_dyn};
 
@@ -190,6 +191,14 @@ impl Requestable for Label {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SetText {
+    value: String,
+}
+
+#[typetag::serde]
+impl ActionBody for SetText {}
+
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct LabelEditable {
     pub value: String,
@@ -275,6 +284,7 @@ impl Node for LabelEditable {
         .text_color(self.color)
         .desired_width(block_w);
 
+        // Update on focus loss
         if ctx
             .ui
             .memory_mut(|mem| mem.had_focus_last_frame(editor_id) && !mem.has_focus(editor_id))
@@ -316,10 +326,150 @@ impl Requestable for LabelEditable {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-pub struct SetText {
-    value: String,
+#[derive(Clone, Reset, Serialize, Deserialize)]
+pub struct CodeEditor {
+    pub value: String,
+    buf: Transient<String>,
+
+    pub font_size: f32,
+    pub rows: usize,
+    pub numlines: bool,
+
+    /// Colour theme, matched by name against [`DEFAULT_THEMES`] (e.g. "Gruvbox")
+    pub theme: String,
+    /// Highlighting language (e.g. "rust", "python")
+    pub language: String,
 }
 
 #[typetag::serde]
-impl ActionBody for SetText {}
+impl Node for CodeEditor {
+    fn type_name(&self) -> String {
+        "Code Editor".to_owned()
+    }
+
+    fn draw(&self, ctx: DrawContext) -> DrawResult {
+        let avail_w = ctx.constraints.x.map(|a| a.provided_value());
+        let avail_h = ctx.constraints.y.map(|a| a.provided_value());
+
+        // Since a monospace font is used, we can reason about fit by determining the width of a single character
+        let probe = LayoutJob::simple_singleline(
+            "0".to_owned(),
+            FontId::monospace(self.font_size),
+            Color32::WHITE,
+        );
+        let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(probe));
+        let row_h = galley.rows[0].height();
+        let char_w = galley.rect.width();
+
+        // Vertical fit --------------------------------------------------
+        if let Some(h) = avail_h
+            && row_h > h
+            && ctx.constraints.wrap.can_retry_on_newline()
+        {
+            return DrawResult::Wrap {
+                region: None,
+                continuation: 0,
+            };
+        }
+
+        // Horizontal fit --------------------------------------------------
+        const MIN_COLS: f32 = 8.0;
+        let min_w = char_w * MIN_COLS;
+        if let Some(w) = avail_w
+            && w < min_w
+            // Draw anyways if no retry possibility
+            && ctx.constraints.wrap.can_retry_on_newline()
+        {
+            return DrawResult::Wrap {
+                region: None,
+                continuation: 0,
+            };
+        }
+
+        // Determine editor size and region
+        const FALLBACK_WIDTH: f32 = 400.0;
+        let block_w = avail_w.unwrap_or(FALLBACK_WIDTH);
+        let block_h = avail_h.unwrap_or(row_h * self.rows.max(1) as f32);
+        let size = Vector {
+            x: block_w,
+            y: block_h,
+        };
+        let origin = ctx.constraints.pos.to_top_left(size);
+        let rect = Rect::from_min_size(origin.into(), size.into());
+
+        let syntax = syntax_for(&self.language);
+        let editor_id = egui::Id::new(ctx.id);
+        let mut editor = CodeEditorWidget::default()
+            .with_id(editor_id)
+            .with_fontsize(self.font_size)
+            .with_rows(self.rows)
+            .with_numlines(self.numlines)
+            .with_theme(theme_for(&self.theme))
+            .desired_width(block_w);
+
+        // Update on focus loss
+        if ctx
+            .ui
+            .memory_mut(|mem| mem.had_focus_last_frame(editor_id) && !mem.has_focus(editor_id))
+            && let Some(v) = &*self.buf.val()
+            && let Id::Workspace(uid) = ctx.id
+        {
+            ctx.workspace.submit_action(Action {
+                dest: Some(uid),
+                description: "Updated editable label's stored value on focus loss".into(),
+                body: Box::new(SetText { value: v.clone() }),
+            });
+        }
+
+        let mut buf_mut = self.buf.val_mut_or_else(|| self.value.clone());
+        let drawn = ctx.ui.scope_builder(
+            UiBuilder::new()
+                .max_rect(rect)
+                .id_salt(ctx.id)
+                .layout(Layout::top_down(Align::Min)),
+            |ui| {
+                editor.show(ui, &mut *buf_mut, &syntax);
+            },
+        );
+
+        let drawn_region: ScreenRegion = rect.intersect(drawn.response.rect).into();
+        DrawResult::Complete {
+            region: Some(drawn_region),
+        }
+    }
+
+    fn handle_action(&mut self, r: Box<dyn ActionBody>) {
+        match_dyn! { r,
+            s: SetText => self.value = s.value,
+            _ => {}
+        }
+    }
+}
+
+impl Requestable for CodeEditor {
+    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
+        None
+    }
+}
+
+/// Resolve a theme name against the bundled themes, defaulting to Gruvbox.
+fn theme_for(name: &str) -> ColorTheme {
+    DEFAULT_THEMES
+        .iter()
+        .copied()
+        .find(|t| t.name().eq_ignore_ascii_case(name))
+        .unwrap_or(ColorTheme::GRUVBOX)
+}
+
+/// Resolve a language name to a highlighting syntax, defaulting to plain text.
+fn syntax_for(language: &str) -> Syntax {
+    match language.to_ascii_lowercase().as_str() {
+        "rust" | "rs" => Syntax::rust(),
+        "python" | "py" => Syntax::python(),
+        "lua" => Syntax::lua(),
+        "sql" => Syntax::sql(),
+        "asm" => Syntax::asm(),
+        "shell" | "sh" | "bash" => Syntax::shell(),
+        _ => Syntax::default(),
+    }
+}
