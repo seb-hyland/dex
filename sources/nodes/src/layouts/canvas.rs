@@ -1,7 +1,7 @@
 use dex_core::prelude::*;
 use egui::{Pos2, Vec2};
 use serde::{Deserialize, Serialize};
-use utils::{Reset, Transient};
+use utils::{Reset, Transient, match_dyn};
 
 use crate::primitives::interaction::{InteractionBox, WasDragged};
 
@@ -121,7 +121,16 @@ impl Node for CanvasLayout {
         }
     }
 
-    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
+    fn handle_action(&mut self, r: Box<dyn ActionBody>) {
+        match_dyn! { r,
+            m: MoveChild => {
+                if let Some(child) = self.children.iter_mut().find(|c| c.id == m.child) {
+                    child.canvas_pos += Vec2::from(m.delta);
+                }
+            },
+            _ => {}
+        }
+    }
 }
 
 impl Requestable for CanvasLayout {
@@ -129,3 +138,15 @@ impl Requestable for CanvasLayout {
         None
     }
 }
+
+/**
+   Move a canvas child by [`delta`](Self::delta) in canvas-space.
+*/
+#[derive(Clone, Serialize, Deserialize)]
+pub struct MoveChild {
+    pub child: NodeUid,
+    pub delta: Vector,
+}
+
+#[typetag::serde]
+impl ActionBody for MoveChild {}

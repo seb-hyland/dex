@@ -12,9 +12,9 @@ use crate::primitives::shapes::Line;
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct LambdaEditor {
     active: LambdaLang,
-    /// Must be an instance of [`crate::primitives::text::CodeEditor`]
+    /// Must be an instance of [`CodeEditor`](crate::primitives::text::CodeEditor)
     steel: NodeUid,
-    /// Must be an instance of [`crate::primitives::text::CodeEditor`]
+    /// Must be an instance of [`CodeEditor`](crate::primitives::text::CodeEditor)
     python: NodeUid,
 }
 
@@ -52,9 +52,9 @@ pub enum LambdaLang {
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct LambdaArg {
-    /// Must be an instance of [`crate::primitives::text::LabelEditable`]
+    /// Must be an instance of [`LabelEditable`](crate::primitives::text::LabelEditable)
     label: NodeUid,
-    /// Must be an instance of [`crate::primitives::text::LabelEditable`]
+    /// Must be an instance of [`LabelEditable`](crate::primitives::text::LabelEditable)
     param_name: NodeUid,
 }
 
@@ -209,7 +209,7 @@ fn resolve_origin(ctx: &mut DrawContext, fallback: Vector) -> ScreenPos {
     match ctx.constraints.pos {
         PositionConstraint::TopLeft(tl) => tl,
         PositionConstraint::Center(_) => {
-            let last_known_size = ctx.last_frame_location().map(|reg| reg.size());
+            let last_known_size = ctx.this_node_last_frame_location().map(|reg| reg.size());
             let estimate = match last_known_size {
                 Some(s) => s,
                 None => {

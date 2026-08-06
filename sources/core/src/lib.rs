@@ -40,6 +40,10 @@ pub trait Node: Requestable + Reset + 'static + DynClone + Send {
     // This deprecation attribute prevents direct `<instance>.draw(ctx)` calls
     fn draw(&self, ctx: DrawContext) -> DrawResult;
 
+    fn menu_sidebar(&self) -> Option<Box<dyn Node>> {
+        None
+    }
+
     /// Resolve an action
     fn handle_action(&mut self, r: Box<dyn ActionBody>);
 }
@@ -84,11 +88,14 @@ pub struct DrawContext<'ctx> {
 }
 
 impl<'ctx> DrawContext<'ctx> {
-    pub fn last_frame_location(&self) -> Option<ScreenRegion> {
-        let workspace_id = self.id.into_workspace_id()?;
+    pub fn this_node_last_frame_location(&self) -> Option<ScreenRegion> {
+        self.last_frame_location_of(self.id.into_workspace_id()?)
+    }
+
+    pub fn last_frame_location_of(&self, id: NodeUid) -> Option<ScreenRegion> {
         self.workspace
             .send_request(TypedRequest {
-                dest: workspace_id,
+                dest: id,
                 body: Box::new(Region),
             })
             .flatten()

@@ -31,7 +31,7 @@ impl Node for VerticalLayout {
         let origin = match ctx.constraints.pos {
             PositionConstraint::TopLeft(tl) => tl,
             PositionConstraint::Center(_) => {
-                let last_known_size = ctx.last_frame_location().map(|reg| reg.size());
+                let last_known_size = ctx.this_node_last_frame_location().map(|reg| reg.size());
                 let last_size_estimate = match last_known_size {
                     Some(s) => s,
                     None => {

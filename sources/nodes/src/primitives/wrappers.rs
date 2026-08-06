@@ -3,6 +3,7 @@ use egui::{Color32, Stroke};
 use serde::{Deserialize, Serialize};
 use utils::{Reset, Transient, match_dyn};
 
+use crate::layouts::canvas::MoveChild;
 use crate::primitives::interaction::{InteractionBox, WasDragged};
 use crate::primitives::shapes::Rect;
 
@@ -26,8 +27,7 @@ impl Resizable {
     }
 }
 
-/// A single draggable resize handle along the border of a [`Resizable`]
-struct Handle {
+struct ResizeHandle {
     /// Stable key used to derive this handle's [`LocalId`]
     key: &'static str,
     origin: ScreenPos,
@@ -70,7 +70,7 @@ impl Node for Resizable {
         let bottom = origin.y + size.y - HANDLE_THICKNESS;
         let handles = [
             // Corners
-            Handle {
+            ResizeHandle {
                 key: "tl",
                 origin,
                 size: Vector {
@@ -80,7 +80,7 @@ impl Node for Resizable {
                 h_mul: -1.0,
                 v_mul: -1.0,
             },
-            Handle {
+            ResizeHandle {
                 key: "tr",
                 origin: ScreenPos {
                     x: right,
@@ -93,7 +93,7 @@ impl Node for Resizable {
                 h_mul: 1.0,
                 v_mul: -1.0,
             },
-            Handle {
+            ResizeHandle {
                 key: "bl",
                 origin: ScreenPos {
                     x: origin.x,
@@ -106,7 +106,7 @@ impl Node for Resizable {
                 h_mul: -1.0,
                 v_mul: 1.0,
             },
-            Handle {
+            ResizeHandle {
                 key: "br",
                 origin: ScreenPos {
                     x: right,
@@ -120,7 +120,7 @@ impl Node for Resizable {
                 v_mul: 1.0,
             },
             // Edges (spanning between the corners)
-            Handle {
+            ResizeHandle {
                 key: "top",
                 origin: ScreenPos {
                     x: origin.x + HANDLE_THICKNESS,
@@ -133,7 +133,7 @@ impl Node for Resizable {
                 h_mul: 0.0,
                 v_mul: -1.0,
             },
-            Handle {
+            ResizeHandle {
                 key: "bottom",
                 origin: ScreenPos {
                     x: origin.x + HANDLE_THICKNESS,
@@ -146,7 +146,7 @@ impl Node for Resizable {
                 h_mul: 0.0,
                 v_mul: 1.0,
             },
-            Handle {
+            ResizeHandle {
                 key: "left",
                 origin: ScreenPos {
                     x: origin.x,
@@ -159,7 +159,7 @@ impl Node for Resizable {
                 h_mul: -1.0,
                 v_mul: 0.0,
             },
-            Handle {
+            ResizeHandle {
                 key: "right",
                 origin: ScreenPos {
                     x: right,
@@ -272,3 +272,137 @@ pub struct SetSize {
 
 #[typetag::serde]
 impl ActionBody for SetSize {}
+
+/**
+   A wrapper to make a child of a [`CanvasLayout`](crate::layouts::canvas::CanvasLayout) draggable to move it.
+*/
+#[derive(Clone, Reset, Serialize, Deserialize)]
+pub struct Movable {
+    /// The canvas that owns this element.
+    pub parent: NodeUid,
+    pub child: NodeUid,
+    pending: Transient<Vector>,
+}
+
+impl Movable {
+    pub fn new(parent: NodeUid, child: NodeUid) -> Self {
+        Self {
+            parent,
+            child,
+            pending: Transient::default(),
+        }
+    }
+}
+
+#[typetag::serde]
+impl Node for Movable {
+    fn type_name(&self) -> String {
+        "Movable".into()
+    }
+
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
+        let last_child_region = ctx.last_frame_location_of(self.child);
+        let region = last_child_region.unwrap_or_else(|| {
+            let origin = ctx.constraints.pos.to_top_left(Vector::splat(0.0));
+            ScreenRegion::from_min_size(origin, Vector::splat(0.0))
+        });
+
+        const OFFSET: Vector = Vector { x: 3.0, y: 0.0 };
+        let handle_origin = region.min - OFFSET;
+        let size = region.size();
+
+        // Draw the drag handle ----------------------------------------
+        const HANDLE_SIZE: f32 = 14.0;
+        let handle_size = Vector::splat(HANDLE_SIZE);
+        let handle_constraints = DrawConstraints {
+            pos: PositionConstraint::TopLeft(handle_origin),
+            x: Some(AxisConstraint::Exactly(handle_size.x)),
+            y: Some(AxisConstraint::Exactly(handle_size.y)),
+            wrap: WrapConstraints::NotAllowed,
+            should_clip: false,
+        };
+        let handle = Rect {
+            size: handle_size,
+            corner_radius: 3.0,
+            fill_color: Color32::from_rgba_unmultiplied(120, 160, 255, 210),
+            border: Stroke::new(1.0, Color32::from_rgb(90, 120, 220)),
+        };
+        ctx.draw_node(
+            &handle,
+            LocalId::from_cons(ctx.id, "handle"),
+            handle_constraints,
+        );
+
+        let mut sensor = InteractionBox::default();
+        sensor.senses_drags = true;
+        ctx.draw_node(
+            &sensor,
+            LocalId::from_cons(ctx.id, "handle sensor"),
+            handle_constraints,
+        );
+        let drag = sensor.request_typed(Box::new(WasDragged)).flatten();
+
+        match drag {
+            Some(delta) => {
+                // This node is being dragged!
+
+                let accumulated = (*self.pending.val()).unwrap_or(Vector::splat(0.0)) + delta;
+                self.pending.set(accumulated);
+
+                // Draw the child at preview location
+                let child_constraints = DrawConstraints {
+                    pos: PositionConstraint::TopLeft(region.min + accumulated),
+                    x: Some(AxisConstraint::Exactly(size.x)),
+                    y: Some(AxisConstraint::Exactly(size.y)),
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip: false,
+                };
+                ctx.draw_workspace_node(self.child, child_constraints);
+            }
+            None => {
+                // No active drag
+
+                let mut child_pos;
+
+                // If a drag just finished, inform the parent canvas
+                if let Some(delta) = *self.pending.val() {
+                    *self.pending.val_mut() = None;
+                    if let Id::Workspace(uid) = ctx.id {
+                        ctx.workspace.submit_action(Action {
+                            dest: Some(self.parent),
+                            description: "Moved element".into(),
+                            body: Box::new(MoveChild { child: uid, delta }),
+                        });
+                    }
+
+                    // For this frame, still draw at preview location
+                    child_pos = region.min + delta;
+                } else {
+                    child_pos = region.min;
+                }
+
+                // Draw the child
+                let child_constraints = DrawConstraints {
+                    pos: PositionConstraint::TopLeft(child_pos),
+                    x: Some(AxisConstraint::Exactly(size.x)),
+                    y: Some(AxisConstraint::Exactly(size.y)),
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip: false,
+                };
+                ctx.draw_workspace_node(self.child, child_constraints);
+            }
+        }
+
+        DrawResult::Complete {
+            region: Some(region),
+        }
+    }
+
+    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
+}
+
+impl Requestable for Movable {
+    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
+        None
+    }
+}
