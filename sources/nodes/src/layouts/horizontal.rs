@@ -2,9 +2,11 @@ use dex_core::prelude::*;
 use serde::{Deserialize, Serialize};
 use utils::Reset;
 
+use crate::layouts::LayoutChild;
+
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct HorizontalLayout {
-    pub children: Vec<NodeUid>,
+    pub children: Vec<LayoutChild>,
     pub allow_wrap: bool,
     pub wrap_spacing: f32,
 }
@@ -111,7 +113,8 @@ impl Node for HorizontalLayout {
             *cur_line_highest_element = cur_line_highest_element.max(consumed_size.y);
         }
 
-        for child in &self.children {
+        for (idx, child) in self.children.iter().enumerate() {
+            let local_id = LocalId::from_cons(ctx.id, idx);
             if avail_w - cur_line_width <= 0.0 {
                 // No space left in line
                 if start_newline_still_has_space(
@@ -148,7 +151,7 @@ impl Node for HorizontalLayout {
                 },
                 should_clip: ctx.constraints.should_clip,
             };
-            let Some(mut child_draw_res) = ctx.draw_workspace_node(*child, constraints) else {
+            let Some(mut child_draw_res) = child.draw(&mut ctx, local_id, constraints) else {
                 // This child no longer exists
                 // TODO: delete it
                 continue;
@@ -195,8 +198,8 @@ impl Node for HorizontalLayout {
                     },
                     should_clip: ctx.constraints.should_clip,
                 };
-                let child_continuation_draw_res = ctx
-                    .draw_workspace_node(*child, constraints)
+                let child_continuation_draw_res = child
+                    .draw(&mut ctx, local_id, constraints)
                     .expect("Child should not be deleted mid-draw");
 
                 let maybe_region = child_continuation_draw_res.region();

@@ -446,7 +446,7 @@ fn build_workspace() -> Workspace {
     // Static root: bar chart on the left, scatter on the right (drawn last, so
     // its hover connector lines land on top).
     let root_uid = ws.insert_node(Box::new(HorizontalLayout {
-        children: vec![bar_uid, scatter_uid],
+        children: vec![bar_uid.into(), scatter_uid.into()],
         allow_wrap: false,
         wrap_spacing: 0.0,
     }));

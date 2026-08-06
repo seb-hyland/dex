@@ -213,7 +213,7 @@ impl<'ctx> DrawContext<'ctx> {
 
     pub fn draw_node(
         &mut self,
-        node: &impl Node,
+        node: &(impl Node + ?Sized),
         id: LocalId,
         constraints: DrawConstraints,
     ) -> DrawResult {
