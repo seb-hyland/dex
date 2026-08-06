@@ -169,6 +169,17 @@ impl Add for Vector {
     }
 }
 
+impl Sub for Vector {
+    type Output = Vector;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self {
+            x: self.x - rhs.x,
+            y: self.y - rhs.y,
+        }
+    }
+}
+
 impl Div<f32> for Vector {
     type Output = Vector;
 

@@ -108,7 +108,7 @@ impl Node for CanvasLayout {
 
             if let Some(drag_delta) = drag_res {
                 // Update the offset
-                self.screen_offset.set(self.screen_offset() + drag_delta);
+                self.screen_offset.set(self.screen_offset() - drag_delta);
             }
         }
 
