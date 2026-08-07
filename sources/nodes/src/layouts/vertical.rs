@@ -75,7 +75,7 @@ impl Node for VerticalLayout {
                 should_clip: ctx.constraints.should_clip,
             };
 
-            let local_id = NodeUid::new_local(ctx.id, idx);
+            let local_id = NodeUid::new_local(ctx.node.id, idx);
             if let Some(region) = child
                 .draw(&mut ctx, local_id, constraints)
                 .and_then(|res| res.region())

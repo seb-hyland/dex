@@ -17,6 +17,7 @@ pub struct Transient<T> {
 }
 
 impl<T> Transient<T> {
+    #[track_caller]
     pub fn val(&self) -> Ref<'_, Option<T>> {
         self.inner.borrow()
     }
@@ -26,6 +27,7 @@ impl<T> Transient<T> {
         Ref::map(self.val(), |r| r.as_ref().unwrap())
     }
 
+    #[track_caller]
     pub fn val_mut(&self) -> RefMut<'_, Option<T>> {
         self.inner.borrow_mut()
     }
@@ -49,6 +51,7 @@ impl<T> Transient<T> {
 
 pub trait Reset {
     /// Reset any [`Transient`] values
+    /// This is called sparingly; only on history 'resets'. It is NOT called between frames.
     fn reset(&self);
 }
 

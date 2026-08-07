@@ -16,6 +16,17 @@ pub struct Label {
     pub color: Color32,
 }
 
+impl Label {
+    pub fn new(text: String) -> Self {
+        Self {
+            text,
+            singleline: true,
+            font: FontId::proportional(16.0),
+            color: Color32::BLACK,
+        }
+    }
+}
+
 #[typetag::serde]
 impl Node for Label {
     fn type_name(&self) -> String {
@@ -197,6 +208,19 @@ pub struct LabelEditable {
     pub color: Color32,
 }
 
+impl LabelEditable {
+    pub fn new(value: String) -> Self {
+        Self {
+            value,
+            buf: Transient::default(),
+            singleline: true,
+            shrink_to_text: true,
+            font: FontId::proportional(16.0),
+            color: Color32::BLACK,
+        }
+    }
+}
+
 #[typetag::serde]
 impl Node for LabelEditable {
     fn type_name(&self) -> String {
@@ -214,14 +238,26 @@ impl Node for LabelEditable {
         let content_w = galley.rect.width();
         let row_h = galley.rows[0].height();
 
+        // When the parent demands an exact size fill it; otherwise size to the content.
+        let exact_w = match ctx.constraints.x {
+            Some(AxisConstraint::Exactly(w)) => Some(w),
+            _ => None,
+        };
+        let exact_h = match ctx.constraints.y {
+            Some(AxisConstraint::Exactly(h)) => Some(h),
+            _ => None,
+        };
+
         // Horizontal fit --------------------------------------------------
         let min_w = row_h; // if field is empty, make a square the height of one row
         const CARET_PADDING: f32 = 2.0; // padding size so cursor remains visible
-        let mut block_w = if self.shrink_to_text {
-            (content_w + CARET_PADDING).max(min_w)
-        } else {
-            avail_w.unwrap_or((content_w + CARET_PADDING).max(min_w))
-        };
+        let mut block_w = exact_w.unwrap_or_else(|| {
+            if self.shrink_to_text {
+                (content_w + CARET_PADDING).max(min_w)
+            } else {
+                avail_w.unwrap_or((content_w + CARET_PADDING).max(min_w))
+            }
+        });
 
         if let Some(w) = avail_w
             && block_w > w
@@ -251,13 +287,14 @@ impl Node for LabelEditable {
 
         let size = Vector {
             x: block_w,
-            y: row_h,
+            y: exact_h.unwrap_or(row_h),
         };
         let origin = ctx.constraints.pos.to_top_left(size);
+
         let rect = Rect::from_min_size(origin.into(), size.into());
 
         let mut buf_mut = self.buf.val_mut_or_else(|| self.value.clone());
-        let editor_id = egui::Id::new(ctx.id);
+        let editor_id = egui::Id::new(ctx.node.id);
         let editor = if self.singleline {
             TextEdit::singleline(&mut *buf_mut)
         } else {
@@ -268,6 +305,8 @@ impl Node for LabelEditable {
         .margin(Margin::ZERO)
         .font(self.font.clone())
         .text_color(self.color)
+        .horizontal_align(Align::Center)
+        .vertical_align(Align::Center)
         .desired_width(block_w);
 
         // Update on focus loss
@@ -286,7 +325,7 @@ impl Node for LabelEditable {
         ctx.ui.scope_builder(
             UiBuilder::new()
                 .max_rect(rect)
-                .id_salt(ctx.id)
+                .id_salt(ctx.node.id)
                 .layout(Layout::left_to_right(Align::Min)),
             |ui| ui.add(editor),
         );
@@ -375,7 +414,7 @@ impl Node for CodeEditor {
         let rect = Rect::from_min_size(origin.into(), size.into());
 
         let syntax = syntax_for(&self.language);
-        let editor_id = egui::Id::new(ctx.id);
+        let editor_id = egui::Id::new(ctx.node.id);
         let mut editor = CodeEditorWidget::default()
             .with_id(editor_id)
             .with_fontsize(self.font_size)
@@ -400,7 +439,7 @@ impl Node for CodeEditor {
         let drawn = ctx.ui.scope_builder(
             UiBuilder::new()
                 .max_rect(rect)
-                .id_salt(ctx.id)
+                .id_salt(ctx.node.id)
                 .layout(Layout::top_down(Align::Min)),
             |ui| {
                 editor.show(ui, &mut *buf_mut, &syntax);

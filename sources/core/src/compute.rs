@@ -130,11 +130,14 @@ impl ComputeScheduler {
                     };
                     self.active_workers.push(worker_info);
 
-                    worker.response.send(ComputeTaskContext {
-                        ctask: task,
-                        kill_recv,
-                        complete_tx,
-                    });
+                    worker
+                        .response
+                        .send(ComputeTaskContext {
+                            ctask: task,
+                            kill_recv,
+                            complete_tx,
+                        })
+                        .expect("Sends should not fail");
                 }
             }
         }

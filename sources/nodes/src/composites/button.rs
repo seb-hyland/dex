@@ -69,14 +69,21 @@ impl Node for Button {
             pos: PositionConstraint::TopLeft(content_origin),
             x: avail_w.map(|w| AxisConstraint::AtMost((w - 2.0 * padding).max(0.0))),
             y: avail_h.map(|h| AxisConstraint::AtMost((h - 2.0 * padding).max(0.0))),
-            wrap: WrapConstraints::NotAllowed,
+            wrap: ctx.constraints.wrap,
             should_clip: ctx.constraints.should_clip,
         };
         let label_result = ctx.draw_node(
             &self.label,
-            NodeUid::new_local(ctx.id, "button label"),
+            NodeUid::new_local(ctx.node.id, "button label"),
             label_constraints,
         );
+        // If the label couldn't fit and requested a new line, pass that request up.
+        if let DrawResult::Wrap { continuation, .. } = label_result {
+            return DrawResult::Wrap {
+                region: None,
+                continuation,
+            };
+        }
         let label_size = label_result
             .region()
             .map(|r| r.size())
@@ -102,18 +109,23 @@ impl Node for Button {
         };
         ctx.draw_node(
             &border,
-            NodeUid::new_local(ctx.id, "button border"),
+            NodeUid::new_local(ctx.node.id, "button border"),
             box_constraints,
         );
 
         ctx.draw_node(
             &self.interaction,
-            NodeUid::new_local(ctx.id, "button interaction"),
+            NodeUid::new_local(ctx.node.id, "button interaction"),
             box_constraints,
         );
-        let clicked = self.interaction.request(WasClicked).unwrap_or(false);
+        let clicked = self
+            .interaction
+            .request(WasClicked, ctx.node)
+            .unwrap_or(false);
         if clicked {
-            ctx.workspace.submit_action_dyn(self.onclick_action.clone());
+            ctx.node
+                .workspace
+                .submit_action_dyn(self.onclick_action.clone());
         }
 
         DrawResult::Complete {

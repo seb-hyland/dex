@@ -14,6 +14,7 @@ pub struct InteractionBox {
 #[derive(Clone, Serialize, Deserialize)]
 struct LastFrameInteractions {
     hovered: bool,
+    contains_pointer: bool,
     clicked: bool,
     dragged: Option<Vector>,
 }
@@ -67,9 +68,10 @@ impl Node for InteractionBox {
 
         let resp = ctx
             .ui
-            .interact(region.into(), egui::Id::new(ctx.id), self.to_sense());
+            .interact(region.into(), egui::Id::new(ctx.node.id), self.to_sense());
         self.cache.set(LastFrameInteractions {
             hovered: resp.hovered(),
+            contains_pointer: resp.contains_pointer(),
             clicked: resp.clicked(),
             dragged: resp.dragged().then_some(resp.drag_delta().into()),
         });
@@ -84,6 +86,7 @@ defhandlers! { InteractionBox {
     requests: [
         WasClicked => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.clicked) },
         WasHovered => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.hovered) },
+        ContainsPointer => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.contains_pointer) },
         WasDragged => (this, _q): Option<Vector> { this.cache.val().as_ref().and_then(|i| i.dragged) },
     ],
 }}

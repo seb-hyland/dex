@@ -34,13 +34,15 @@ pub trait Node: RequestableDyn + ActionHandler + Reset + 'static + DynClone + Se
     // This deprecation attribute prevents direct `<instance>.draw(ctx)` calls
     fn draw(&self, ctx: DrawContext) -> DrawResult;
 
-    fn menu_sidebar(&self) -> Option<Box<dyn Node>> {
+    fn draw_sidebar(&self, _ctx: DrawContext) -> Option<Box<dyn Node>> {
         None
     }
 
     fn deref_target(&self) -> Option<NodeUid> {
         None
     }
+
+    fn on_delete(&self, _ctx: NodeContext) {}
 }
 
 dyn_clone::clone_trait_object!(Node);
@@ -67,24 +69,28 @@ impl DrawResult {
     }
 }
 
+/// A node's context for its place in the world.
+#[derive(Clone, Copy)]
+pub struct NodeContext<'ctx> {
+    pub id: NodeUid,
+    pub workspace: &'ctx Workspace,
+}
+
 #[non_exhaustive]
 pub struct DrawContext<'ctx> {
-    /// The unique identifier of the node being drawn
-    pub id: NodeUid,
+    /// The identity and workspace handle of the node being drawn.
+    pub node: NodeContext<'ctx>,
 
-    /// A set of constraints to determine draw sizing
+    /// A set of constraints to determine draw sizing.
     pub constraints: DrawConstraints,
 
-    /// A UI surface to draw on
+    /// A surface to draw on.
     pub ui: &'ctx mut Ui,
-
-    /// A handle to the workspace in which this node is being drawn
-    pub workspace: &'ctx Workspace,
 }
 
 impl<'ctx> DrawContext<'ctx> {
     pub fn this_node_last_frame_location(&self) -> Option<ScreenRegion> {
-        self.last_frame_location_of(self.id)
+        self.last_frame_location_of(self.node.id)
     }
 
     pub fn submit_action_for_self<N, A>(&self, body: A, description: impl Into<Cow<'static, str>>)
@@ -92,14 +98,15 @@ impl<'ctx> DrawContext<'ctx> {
         N: Node + ?Sized,
         A: ActionFor<N> + 'static,
     {
-        if self.id.is_workspace() {
-            self.workspace
-                .submit_action(self.id.cast::<N>(), description, body);
+        if self.node.id.is_workspace() {
+            self.node
+                .workspace
+                .submit_action(self.node.id.cast::<N>(), description, body);
         }
     }
 
     pub fn last_frame_location_of(&self, id: NodeUid) -> Option<ScreenRegion> {
-        self.workspace.send_request(id, Region).flatten()
+        self.node.workspace.last_draw_region_of(id)
     }
 
     pub fn request_skip_frame(&self) {
@@ -108,9 +115,8 @@ impl<'ctx> DrawContext<'ctx> {
 
     pub(crate) fn reborrow<'rb>(&'rb mut self) -> DrawContext<'rb> {
         DrawContext {
-            id: self.id,
+            node: self.node,
             constraints: self.constraints,
-            workspace: self.workspace,
             ui: &mut *self.ui,
         }
     }

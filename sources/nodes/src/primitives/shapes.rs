@@ -45,7 +45,6 @@ impl Node for Rect {
             region: Some(region),
         }
     }
-
 }
 
 defhandlers! { Rect {} }
@@ -64,11 +63,13 @@ impl Node for Circle {
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {
-        let size_vector = Vector::splat(self.radius);
+        let size_vector = Vector::splat(
+            // Diameter
+            self.radius * 2.0,
+        );
         let center = ctx.constraints.pos.to_center(size_vector);
 
-        let bounding_size = Vector::splat(/* Diameter */ self.radius * 2.0);
-        let fits = ctx.constraints.fits(bounding_size);
+        let fits = ctx.constraints.fits(size_vector);
 
         if !fits {
             return if ctx.constraints.wrap.can_retry_on_newline() {
@@ -89,7 +90,6 @@ impl Node for Circle {
             region: Some(ScreenRegion::from_center_size(center, size_vector)),
         }
     }
-
 }
 
 defhandlers! { Circle {} }
@@ -140,7 +140,6 @@ impl Node for Triangle {
             region: Some(ScreenRegion::from_min_size(origin, bounding_size)),
         }
     }
-
 }
 
 defhandlers! { Triangle {} }
@@ -181,7 +180,6 @@ impl Node for Line {
             region: Some(ScreenRegion::from_min_max(start, end)),
         }
     }
-
 }
 
 defhandlers! { Line {} }

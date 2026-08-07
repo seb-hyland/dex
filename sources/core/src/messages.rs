@@ -5,7 +5,7 @@ use dyn_clone::DynClone;
 use serde::{Deserialize, Serialize};
 use utils::AsAny;
 
-use crate::{Node, pool::NodeUid, region::ScreenRegion};
+use crate::{Node, NodeContext, pool::NodeUid};
 
 // ======================================================================
 // Actions
@@ -48,7 +48,11 @@ impl ActionBody for ActionGroup {}
 /// Erased action dispatch.
 pub trait ActionHandler {
     /// Returns [`Some`] with the action if it was not understood, so it can be forwarded.
-    fn handle_action(&mut self, body: Box<dyn ActionBody>) -> Option<Box<dyn ActionBody>>;
+    fn handle_action(
+        &mut self,
+        body: Box<dyn ActionBody>,
+        ctx: NodeContext,
+    ) -> Option<Box<dyn ActionBody>>;
 }
 
 /// Compile-time proof that an action type is accepted by node type `N`.
@@ -80,23 +84,28 @@ impl<T> RequestBody for T where T: TypedRequestBody {}
 /// Erased request dispatch.
 pub trait RequestableDyn {
     /// Returns [`Err`] with the request if it was not answered, so it can be forwarded.
-    fn request_dyn(&self, body: Box<dyn RequestBody>)
-    -> Result<Box<dyn Any>, Box<dyn RequestBody>>;
+    fn request_dyn(
+        &self,
+        body: Box<dyn RequestBody>,
+        ctx: NodeContext,
+    ) -> Result<Box<dyn Any>, Box<dyn RequestBody>>;
 }
 
 /// Query a node instance directly.
 pub trait Requestable: Node {
-    fn request<R>(&self, body: R) -> Option<R::Response>
+    fn request<R>(&self, body: R, ctx: NodeContext) -> Option<R::Response>
     where
         R: RequestFor<Self> + 'static;
 }
 
 impl<T: Node + ?Sized> Requestable for T {
-    fn request<R>(&self, body: R) -> Option<R::Response>
+    fn request<R>(&self, body: R, ctx: NodeContext) -> Option<R::Response>
     where
         R: RequestFor<Self> + 'static,
     {
-        self.request_dyn(Box::new(body)).ok().map(downcast_resp)
+        self.request_dyn(Box::new(body), ctx)
+            .ok()
+            .map(downcast_resp)
     }
 }
 
@@ -120,17 +129,25 @@ impl<R: TypedRequestBody> RequestFor<dyn Node> for R {}
 // ======================================================================
 
 /**
-    Declare a node's typed action and request handlers in one place. Each entry
-    defines its message struct, wires up the routing trait ([`ActionFor`] /
-    [`RequestFor`]), and supplies the handler body, whose first binding names the
-    node and second the decoded message. Use `extern_actions` / `extern_requests`
-    for a message type defined elsewhere (e.g. shared between nodes).
+    Declare a node's action and request handlers.
 
     ```ignore
-    defhandlers! { MyNode {
-        actions: [ SetSize { size: Vector } => (this, s) { this.size = s.size } ],
-        requests: [ GetSize => (this, _q): Vector { this.size } ],
-    }}
+    defhandlers! {
+        MyNode {
+            actions: [
+                SetSize {
+                    size: Vector
+                } => (this, s) {
+                    this.size = s.size
+                }
+            ],
+            requests: [
+                GetSize => (this, _q): Vector {
+                    this.size
+                }
+            ],
+        }
+    }
     ```
 */
 #[macro_export]
@@ -139,19 +156,19 @@ macro_rules! defhandlers {
         $node:ty {
             // Defines an action struct and trait impl
             $( actions: [ $(
-                $a_name:ident $({ $($af:ident : $aty:ty),* $(,)? })? => ( $aself:ident, $ab:pat_param ) $abody:block
+                $a_name:ident $({ $($af:ident : $aty:ty),* $(,)? })? => ( $aself:ident, $ab:pat_param $(, $actx:ident )? ) $abody:block
             ),* $(,)? ] $(,)? )?
             // Trait impls an action for an extern struct
             $( extern_actions: [ $(
-                $ea_name:ty => ( $eaself:ident, $eab:pat_param ) $eabody:block
+                $ea_name:ty => ( $eaself:ident, $eab:pat_param $(, $eactx:ident )? ) $eabody:block
             ),* $(,)? ] $(,)? )?
             // Defines a request struct and trait impl
             $( requests: [ $(
-                $r_name:ident $({ $($rf:ident : $rty:ty),* $(,)? })? => ( $rself:ident, $rb:pat_param ) : $rret:ty $rbody:block
+                $r_name:ident $({ $($rf:ident : $rty:ty),* $(,)? })? => ( $rself:ident, $rb:pat_param $(, $rctx:ident )? ) : $rret:ty $rbody:block
             ),* $(,)? ] $(,)? )?
             // Trait impls a request for an extern struct
             $( extern_requests: [ $(
-                $er_name:ty => ( $erself:ident, $erb:pat_param ) : $erret:ty $erbody:block
+                $er_name:ty => ( $erself:ident, $erb:pat_param $(, $erctx:ident )? ) : $erret:ty $erbody:block
             ),* $(,)? ] $(,)? )?
         }
     ) => {
@@ -172,19 +189,22 @@ macro_rules! defhandlers {
             fn handle_action(
                 &mut self,
                 r: ::std::boxed::Box<dyn $crate::messages::ActionBody>,
+                ctx: $crate::NodeContext,
             ) -> ::std::option::Option<::std::boxed::Box<dyn $crate::messages::ActionBody>> {
                 $($(
-                    if r.as_any_ref().is::<$a_name>() {
+                    if (*r).as_any_ref().is::<$a_name>() {
                         let $ab = *r.as_any().downcast::<$a_name>().unwrap();
                         let $aself = &mut *self;
+                        $( let $actx = ctx; )?
                         $abody
                         return ::std::option::Option::None;
                     }
                 )*)?
                 $($(
-                    if r.as_any_ref().is::<$ea_name>() {
+                    if (*r).as_any_ref().is::<$ea_name>() {
                         let $eab = *r.as_any().downcast::<$ea_name>().unwrap();
                         let $eaself = &mut *self;
+                        $( let $eactx = ctx; )?
                         $eabody
                         return ::std::option::Option::None;
                     }
@@ -211,22 +231,25 @@ macro_rules! defhandlers {
             fn request_dyn(
                 &self,
                 body: ::std::boxed::Box<dyn $crate::messages::RequestBody>,
+                ctx: $crate::NodeContext,
             ) -> ::std::result::Result<
                 ::std::boxed::Box<dyn ::std::any::Any>,
                 ::std::boxed::Box<dyn $crate::messages::RequestBody>,
             > {
                 $($(
-                    if body.as_any_ref().is::<$r_name>() {
+                    if (*body).as_any_ref().is::<$r_name>() {
                         let $rb = *body.as_any().downcast::<$r_name>().unwrap();
                         let $rself = &*self;
+                        $( let $rctx = ctx; )?
                         let __resp: $rret = $rbody;
                         return ::std::result::Result::Ok(::utils::boxed_any!(__resp));
                     }
                 )*)?
                 $($(
-                    if body.as_any_ref().is::<$er_name>() {
+                    if (*body).as_any_ref().is::<$er_name>() {
                         let $erb = *body.as_any().downcast::<$er_name>().unwrap();
                         let $erself = &*self;
+                        $( let $erctx = ctx; )?
                         let __resp: $erret = $erbody;
                         return ::std::result::Result::Ok(::utils::boxed_any!(__resp));
                     }
@@ -245,15 +268,4 @@ macro_rules! defhandlers {
         #[derive(Clone, ::serde::Serialize, ::serde::Deserialize)]
         pub struct $name;
     };
-}
-
-// ======================================================================
-// Builtins
-// ======================================================================
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Region;
-
-impl TypedRequestBody for Region {
-    type Response = Option<ScreenRegion>;
 }

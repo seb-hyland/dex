@@ -114,7 +114,7 @@ impl Node for HorizontalLayout {
         }
 
         for (idx, child) in self.children.iter().enumerate() {
-            let local_id = NodeUid::new_local(ctx.id, idx);
+            let local_id = NodeUid::new_local(ctx.node.id, idx);
             if avail_w - cur_line_width <= 0.0 {
                 // No space left in line
                 if start_newline_still_has_space(

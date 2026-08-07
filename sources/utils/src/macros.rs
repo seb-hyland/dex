@@ -8,7 +8,7 @@ macro_rules! match_dyn {
         _ => $rest:expr $(,)?
     ) => {
         match $matched_item {
-            $($binding if $binding.as_any_ref().is::<$match_type>() => {
+            $($binding if (*$binding).as_any_ref().is::<$match_type>() => {
                 let $binding = *$binding.as_any().downcast::<$match_type>().unwrap();
                 $body
             })*

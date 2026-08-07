@@ -2,13 +2,13 @@ use std::{any::Any, borrow::Cow, sync::mpsc};
 
 use egui::{Rect, Ui, UiBuilder};
 use serde::{Deserialize, Serialize};
-use utils::{AsAny, match_dyn};
+use utils::match_dyn;
 
 use crate::{
     ActionBody, ActionFor, AxisConstraint, DrawConstraints, DrawContext, DrawResult, Node,
-    PositionConstraint, RequestFor, ScreenRegion, Vector, WrapConstraints,
+    NodeContext, PositionConstraint, RequestFor, ScreenRegion, Vector, WrapConstraints,
     compute::{ComputeScheduler, ComputeSchedulerHandle, ComputeTask},
-    messages::{Action, ActionGroup, Region, Request, TypedRequestBody, downcast_resp},
+    messages::{Action, ActionGroup, Request, downcast_resp},
     pool::{NodeUid, Registry},
 };
 
@@ -74,17 +74,21 @@ impl Workspace {
         .map(downcast_resp)
     }
 
+    /// The screen region a node last drew into last frame.
+    pub fn last_draw_region_of(&self, id: NodeUid) -> Option<ScreenRegion> {
+        self.registry.get(id).and_then(|(_, region)| region)
+    }
+
     fn send_request_dyn(&self, mut q: Request) -> Option<Box<dyn Any>> {
         loop {
             // Get the request target
-            let (dest_node, last_draw_region) = self.registry.get(q.dest)?;
-            if q.body.as_any_ref().is::<Region>() {
-                // Draw region is being requested
-                return Some(Box::new(last_draw_region)
-                    as Box<<Region as TypedRequestBody>::Response>
-                    as Box<dyn Any>);
-            }
-            match dest_node.request_dyn(q.body) {
+            let dest = q.dest;
+            let (dest_node, _) = self.registry.get(dest)?;
+            let ctx = NodeContext {
+                id: dest,
+                workspace: self,
+            };
+            match dest_node.request_dyn(q.body, ctx) {
                 Ok(resp) => return Some(resp),
                 Err(body) => {
                     // Not answered here; dereference to the child, if any, and try again
@@ -95,26 +99,32 @@ impl Workspace {
         }
     }
 
-    pub fn insert_node(&self, node: Box<dyn Node>) -> NodeUid {
+    pub fn insert_node<T: Node>(&self, node: Box<T>) -> NodeUid<T> {
+        self.insert_node_dyn(node).cast()
+    }
+
+    pub fn insert_node_dyn(&self, node: Box<dyn Node>) -> NodeUid {
         let uid = NodeUid::new();
+
         self.submit_action_dyn(Action {
             dest: NodeUid::nil(),
             description: format!("Inserted node of type {}", node.type_name()).into(),
-            body: Box::new(PushWorkspaceNode { node, uid }),
+            body: Box::new(PushWorkspaceNode {
+                node,
+                uid: uid.erase(),
+            }),
         });
+
         uid
     }
 
-    pub fn draw_frame(&mut self, ui: &mut Ui, draw_area: Rect) {
-        self.draw_root(ui, draw_area);
+    pub fn draw_frame(&mut self, ui: &mut Ui, draw_area: Rect, sidebar_area: Rect) {
+        self.draw_root(ui, draw_area, sidebar_area);
         self.process_actions();
         self.registry.tick_frame();
     }
 
-    fn draw_root(&mut self, ui: &mut Ui, draw_area: Rect) {
-        // Do not allow drawing outside the area
-        ui.set_clip_rect(draw_area);
-
+    fn draw_root(&mut self, ui: &mut Ui, draw_area: Rect, sidebar_area: Rect) {
         let root_node = self.root_node;
 
         let constraints = DrawConstraints {
@@ -125,13 +135,56 @@ impl Workspace {
             should_clip: true,
         };
         let mut ctx = DrawContext {
-            id: root_node,
-            workspace: self,
+            node: NodeContext {
+                id: root_node,
+                workspace: self,
+            },
             constraints,
             ui,
         };
-
         ctx.draw_workspace_node(root_node, constraints);
+
+        let sidebar_constraints = DrawConstraints {
+            pos: PositionConstraint::TopLeft(sidebar_area.min.into()),
+            x: Some(AxisConstraint::Exactly(sidebar_area.width())),
+            y: Some(AxisConstraint::Exactly(sidebar_area.height())),
+            wrap: WrapConstraints::NotAllowed,
+            should_clip: true,
+        };
+        let sidebar_id = NodeUid::new_local(self.root_node, "root sidebar");
+        let mut ctx = DrawContext {
+            node: NodeContext {
+                id: root_node,
+                workspace: self,
+            },
+            constraints: sidebar_constraints,
+            ui,
+        };
+        if let Some((root, _)) = self.registry.get(root_node)
+            && let Some(sidebar_node) = root.draw_sidebar(ctx.reborrow())
+        {
+            ctx.draw_node(&*sidebar_node, sidebar_id, sidebar_constraints);
+        }
+    }
+
+    /// Delete a node from the workspace; its [`Node::on_delete`] handler will run.
+    pub fn delete_node(&self, uid: NodeUid) {
+        self.submit_action_dyn(Action {
+            dest: NodeUid::nil(),
+            description: "Deleted node".into(),
+            body: Box::new(RemoveWorkspaceNode { uid }),
+        });
+    }
+
+    fn remove_node(&mut self, uid: NodeUid) {
+        // Run cleanup before removing the node.
+        if let Some(node) = self.registry.clone_node(uid) {
+            node.on_delete(NodeContext {
+                id: uid,
+                workspace: self,
+            });
+        }
+        self.registry.remove(uid);
     }
 
     pub fn submit_action_dyn(&self, action: Action) {
@@ -147,14 +200,52 @@ impl Workspace {
             match_dyn! { act.body,
                 req_group: ActionGroup => {
                     for req in req_group.actions {
-                        self.registry.apply_action(req);
+                        self.apply_action(req);
                     }
                 },
                 push_action: PushWorkspaceNode => {
                     self.registry.push(push_action);
                 },
-                _ => self.registry.apply_action(act)
+                remove_action: RemoveWorkspaceNode => {
+                    self.remove_node(remove_action.uid);
+                },
+                _ => self.apply_action(act),
             }
+        }
+    }
+
+    /// Route an action to its destination node, forwarding it down the
+    /// dereference chain while it goes unhandled.
+    fn apply_action(&mut self, mut action: Action) {
+        loop {
+            let dest = action.dest;
+            let Some(mut node) = self.registry.clone_node(dest) else {
+                return;
+            };
+
+            let ctx = NodeContext {
+                id: dest,
+                workspace: self,
+            };
+            let leftover = node.handle_action(dyn_clone::clone_box(&*action.body), ctx);
+            self.registry.commit_node(dest, action.clone(), node);
+
+            let Some(body) = leftover else {
+                // The action was understood and handled
+                return;
+            };
+            // Not understood here; dereference to the child, if any, and retry
+            let Some((n, _)) = self.registry.get(dest) else {
+                return;
+            };
+            let Some(target) = n.deref_target() else {
+                return;
+            };
+            action = Action {
+                dest: target,
+                description: action.description,
+                body,
+            };
         }
     }
 
@@ -176,13 +267,22 @@ pub(crate) struct PushWorkspaceNode {
 #[typetag::serde]
 impl ActionBody for PushWorkspaceNode {}
 
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct RemoveWorkspaceNode {
+    pub uid: NodeUid,
+}
+
+#[typetag::serde]
+impl ActionBody for RemoveWorkspaceNode {}
+
 impl<'ctx> DrawContext<'ctx> {
     pub fn draw_workspace_node<T: ?Sized>(
         &mut self,
         id: NodeUid<T>,
         constraints: DrawConstraints,
     ) -> Option<DrawResult> {
-        let (node, _) = self.workspace.registry.get(id.erase())?;
+        let workspace = self.node.workspace;
+        let (node, _) = workspace.registry.get(id.erase())?;
 
         let clip_x = constraints
             .x
@@ -208,17 +308,22 @@ impl<'ctx> DrawContext<'ctx> {
             child_ui.set_clip_rect(clip_region.into());
 
             let temp_ctx = DrawContext {
-                id: id.erase(),
+                node: NodeContext {
+                    id: id.erase(),
+                    workspace,
+                },
                 ui: &mut child_ui,
                 constraints,
-                ..self.reborrow()
             };
 
             #[allow(deprecated)] // Private call
             node.draw(temp_ctx)
         } else {
             let temp_ctx = DrawContext {
-                id: id.erase(),
+                node: NodeContext {
+                    id: id.erase(),
+                    workspace,
+                },
                 constraints,
                 ..self.reborrow()
             };
@@ -235,7 +340,7 @@ impl<'ctx> DrawContext<'ctx> {
                 Some(reg)
             }
         });
-        self.workspace
+        workspace
             .registry
             .update_node_region(id.erase(), maybe_region);
 
@@ -248,8 +353,9 @@ impl<'ctx> DrawContext<'ctx> {
         id: NodeUid,
         constraints: DrawConstraints,
     ) -> DrawResult {
+        let workspace = self.node.workspace;
         let temp_ctx = DrawContext {
-            id,
+            node: NodeContext { id, workspace },
             constraints,
             ..self.reborrow()
         };

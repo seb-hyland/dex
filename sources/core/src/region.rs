@@ -169,6 +169,17 @@ impl Add for Vector {
     }
 }
 
+impl Add<f32> for Vector {
+    type Output = Vector;
+
+    fn add(self, rhs: f32) -> Self::Output {
+        Self {
+            x: self.x + rhs,
+            y: self.y + rhs,
+        }
+    }
+}
+
 impl Sub for Vector {
     type Output = Vector;
 
@@ -200,6 +211,13 @@ impl Vector {
         let pos2_points: Vec<_> = points.iter().map(|p| Pos2::from(*p)).collect();
         let rect = Rect::from_points(&pos2_points);
         rect.size().into()
+    }
+
+    pub fn to_screen_pos(self) -> ScreenPos {
+        ScreenPos {
+            x: self.x,
+            y: self.y,
+        }
     }
 }
 

@@ -177,6 +177,10 @@ impl Registry {
             .push(action.node, action.uid, &mut self.pool);
     }
 
+    pub(crate) fn remove(&mut self, uid: NodeUid) {
+        self.history.current_epoch_mut().map.remove_mut(&uid);
+    }
+
     pub(crate) fn start_epoch(&mut self, edge: Action) {
         let ts = Timestamp::now();
         self.history.start_epoch(edge, ts);
@@ -186,34 +190,18 @@ impl Registry {
         self.history.current_epoch().time()
     }
 
-    pub(crate) fn apply_action(&mut self, mut req: Action) {
-        loop {
-            let cur_epoch_time = self.current_epoch_time();
+    /// Clone the node currently registered at `dest`, if any.
+    pub(crate) fn clone_node(&self, dest: NodeUid) -> Option<Box<dyn Node>> {
+        let nobj = self.history.current_epoch().data.map.get(&dest)?;
+        Some(dyn_clone::clone_box(nobj.current(&self.pool)))
+    }
 
-            let dest = req.dest;
-            let Some(nobj) = self.history.current_epoch_mut().map.get_mut(&dest) else {
-                // Unknown destination; discard
-                return;
-            };
+    /// Commit `node` as the new current state of `dest`, recording `edge` in the node's history.
+    pub(crate) fn commit_node(&mut self, dest: NodeUid, edge: Action, node: Box<dyn Node>) {
+        let cur_epoch_time = self.current_epoch_time();
 
-            let node_mut = nobj.make_mut(req.clone(), cur_epoch_time, &mut self.pool);
-            let Some(unhandled) = node_mut.handle_action(req.body) else {
-                // The action was understood and handled
-                return;
-            };
-
-            // Not understood here; dereference to the child, if any, and try again
-            let Some((node, _)) = self.get(dest) else {
-                return;
-            };
-            let Some(target) = node.deref_target() else {
-                return;
-            };
-            req = Action {
-                dest: target,
-                description: req.description,
-                body: unhandled,
-            };
+        if let Some(nobj) = self.history.current_epoch_mut().map.get_mut(&dest) {
+            nobj.commit(node, edge, cur_epoch_time, &mut self.pool);
         }
     }
 
@@ -286,21 +274,19 @@ impl NodeObject {
             .expect("Reference in use should not be freed")
     }
 
-    pub(crate) fn make_mut<'pool>(
+    /// Record `node` as this object's current state, starting a new history epoch labelled with `edge`
+    pub(crate) fn commit(
         &mut self,
-        req: Action,
+        node: Box<dyn Node>,
+        edge: Action,
         epoch_ts: Timestamp,
-        pool: &'pool mut NodePool,
-    ) -> &'pool mut dyn Node {
-        self.history.start_epoch(req, epoch_ts);
+        pool: &mut NodePool,
+    ) {
+        self.history.start_epoch(edge, epoch_ts);
         let cur_epoch_mut = self.history.current_epoch_mut();
-        let (new_node_ref, node_mut) = pool
-            .make_mut(*cur_epoch_mut)
-            .expect("Reference in use should not be freed");
 
         // Point this object's reference within the current epoch to the new node
-        *cur_epoch_mut = new_node_ref;
-        node_mut
+        *cur_epoch_mut = pool.insert(node);
     }
 }
 
@@ -327,16 +313,5 @@ impl NodePool {
     #[must_use]
     fn insert(&mut self, node: Box<dyn Node>) -> NodeRef {
         self.inner.insert(node)
-    }
-
-    fn make_mut(&mut self, cur_ref: NodeRef) -> Option<(NodeRef, &mut dyn Node)> {
-        if let Some(cur_node) = self.get(cur_ref) {
-            let new_node = dyn_clone::clone_box(cur_node);
-            let new_ref = self.inner.insert(new_node);
-            let new_node_mut = &mut **self.inner.get_mut(new_ref).unwrap();
-            Some((new_ref, new_node_mut))
-        } else {
-            None
-        }
     }
 }

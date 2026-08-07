@@ -178,7 +178,7 @@ impl Node for Lambda {
 
         ctx.draw_node(
             &body,
-            NodeUid::new_local(ctx.id, "lambda body"),
+            NodeUid::new_local(ctx.node.id, "lambda body"),
             constraints,
         )
     }
