@@ -114,7 +114,7 @@ impl Node for HorizontalLayout {
         }
 
         for (idx, child) in self.children.iter().enumerate() {
-            let local_id = LocalId::from_cons(ctx.id, idx);
+            let local_id = NodeUid::new_local(ctx.id, idx);
             if avail_w - cur_line_width <= 0.0 {
                 // No space left in line
                 if start_newline_still_has_space(
@@ -220,12 +220,6 @@ impl Node for HorizontalLayout {
 
         compute_draw_res(origin, max_line_width, consumed_height)
     }
-
-    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
-impl Requestable for HorizontalLayout {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
-    }
-}
+defhandlers! { HorizontalLayout {} }

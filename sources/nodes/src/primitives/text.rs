@@ -5,7 +5,7 @@ use egui::{
 };
 use egui_code_editor::{CodeEditor as CodeEditorWidget, ColorTheme, DEFAULT_THEMES, Syntax};
 use serde::{Deserialize, Serialize};
-use utils::{Reset, Transient, match_dyn};
+use utils::{Reset, Transient};
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Label {
@@ -46,8 +46,6 @@ impl Node for Label {
             self.draw_multiline(ctx, &remaining, start, avail_w, avail_h)
         }
     }
-
-    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
 impl Label {
@@ -185,19 +183,7 @@ impl Label {
     }
 }
 
-impl Requestable for Label {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct SetText {
-    value: String,
-}
-
-#[typetag::serde]
-impl ActionBody for SetText {}
+defhandlers! { Label {} }
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct LabelEditable {
@@ -289,13 +275,11 @@ impl Node for LabelEditable {
             .ui
             .memory_mut(|mem| mem.had_focus_last_frame(editor_id) && !mem.has_focus(editor_id))
             && let Some(v) = &*self.buf.val()
-            && let Id::Workspace(uid) = ctx.id
         {
-            ctx.workspace.submit_action(Action {
-                dest: Some(uid),
-                description: "Updated editable label's stored value on focus loss".into(),
-                body: Box::new(SetText { value: v.clone() }),
-            });
+            ctx.submit_action_for_self::<Self, _>(
+                SetText { value: v.clone() },
+                "Updated editable label's stored value on focus loss",
+            );
         }
 
         // Insert the widget flush inside the computed block.
@@ -311,20 +295,13 @@ impl Node for LabelEditable {
             region: Some(ScreenRegion::from_min_size(origin, size)),
         }
     }
-
-    fn handle_action(&mut self, r: Box<dyn ActionBody>) {
-        match_dyn! { r,
-            s: SetText => self.value = s.value,
-            _ => {}
-        }
-    }
 }
 
-impl Requestable for LabelEditable {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
-    }
-}
+defhandlers! { LabelEditable {
+    actions: [
+        SetText { value: String } => (this, s) { this.value = s.value },
+    ],
+}}
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct CodeEditor {
@@ -412,13 +389,11 @@ impl Node for CodeEditor {
             .ui
             .memory_mut(|mem| mem.had_focus_last_frame(editor_id) && !mem.has_focus(editor_id))
             && let Some(v) = &*self.buf.val()
-            && let Id::Workspace(uid) = ctx.id
         {
-            ctx.workspace.submit_action(Action {
-                dest: Some(uid),
-                description: "Updated editable label's stored value on focus loss".into(),
-                body: Box::new(SetText { value: v.clone() }),
-            });
+            ctx.submit_action_for_self::<Self, _>(
+                SetText { value: v.clone() },
+                "Updated editable label's stored value on focus loss",
+            );
         }
 
         let mut buf_mut = self.buf.val_mut_or_else(|| self.value.clone());
@@ -437,20 +412,13 @@ impl Node for CodeEditor {
             region: Some(drawn_region),
         }
     }
-
-    fn handle_action(&mut self, r: Box<dyn ActionBody>) {
-        match_dyn! { r,
-            s: SetText => self.value = s.value,
-            _ => {}
-        }
-    }
 }
 
-impl Requestable for CodeEditor {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
-    }
-}
+defhandlers! { CodeEditor {
+    extern_actions: [
+        SetText => (this, s) { this.value = s.value },
+    ],
+}}
 
 /// Resolve a theme name against the bundled themes, defaulting to Gruvbox.
 fn theme_for(name: &str) -> ColorTheme {

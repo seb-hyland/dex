@@ -1,7 +1,7 @@
 use dex_core::prelude::*;
 use egui::{Color32, Stroke};
 use serde::{Deserialize, Serialize};
-use utils::{Reset, Transient, match_dyn};
+use utils::{Reset, Transient};
 
 use crate::layouts::canvas::MoveChild;
 use crate::primitives::interaction::{InteractionBox, WasDragged};
@@ -28,7 +28,7 @@ impl Resizable {
 }
 
 struct ResizeHandle {
-    /// Stable key used to derive this handle's [`LocalId`]
+    /// Stable key used to derive this handle's local [`NodeUid`]
     key: &'static str,
     origin: ScreenPos,
     size: Vector,
@@ -187,11 +187,11 @@ impl Node for Resizable {
             };
             ctx.draw_node(
                 &sensor,
-                LocalId::from_cons(ctx.id, handle.key),
+                NodeUid::new_local(ctx.id, handle.key),
                 handle_constraints,
             );
 
-            if let Some(delta) = sensor.request_typed(Box::new(WasDragged)).flatten() {
+            if let Some(delta) = sensor.request(WasDragged).flatten() {
                 active_handle = Some((handle.h_mul, handle.v_mul, delta));
             }
         }
@@ -224,7 +224,7 @@ impl Node for Resizable {
                 };
                 ctx.draw_node(
                     &ghost,
-                    LocalId::from_cons(ctx.id, "ghost"),
+                    NodeUid::new_local(ctx.id, "ghost"),
                     ghost_constraints,
                 );
             }
@@ -235,13 +235,10 @@ impl Node for Resizable {
                 let pending = *self.pending.val();
                 if let Some(new_size) = pending {
                     *self.pending.val_mut() = None;
-                    if let Id::Workspace(uid) = ctx.id {
-                        ctx.workspace.submit_action(Action {
-                            dest: Some(uid),
-                            description: "Resized element".into(),
-                            body: Box::new(SetSize { size: new_size }),
-                        });
-                    }
+                    ctx.submit_action_for_self::<Self, _>(
+                        SetSize { size: new_size },
+                        "Resized element",
+                    );
                 }
             }
         }
@@ -251,27 +248,16 @@ impl Node for Resizable {
         }
     }
 
-    fn handle_action(&mut self, r: Box<dyn ActionBody>) {
-        match_dyn! { r,
-            s: SetSize => self.size = s.size,
-            _ => {}
-        }
+    fn deref_target(&self) -> Option<NodeUid> {
+        Some(self.child)
     }
 }
 
-impl Requestable for Resizable {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct SetSize {
-    pub size: Vector,
-}
-
-#[typetag::serde]
-impl ActionBody for SetSize {}
+defhandlers! { Resizable {
+    actions: [
+        SetSize { size: Vector } => (this, s) { this.size = s.size },
+    ],
+}}
 
 /**
    A wrapper to make a child of a [`CanvasLayout`](crate::layouts::canvas::CanvasLayout) draggable to move it.
@@ -329,7 +315,7 @@ impl Node for Movable {
         };
         ctx.draw_node(
             &handle,
-            LocalId::from_cons(ctx.id, "handle"),
+            NodeUid::new_local(ctx.id, "handle"),
             handle_constraints,
         );
 
@@ -337,10 +323,10 @@ impl Node for Movable {
         sensor.senses_drags = true;
         ctx.draw_node(
             &sensor,
-            LocalId::from_cons(ctx.id, "handle sensor"),
+            NodeUid::new_local(ctx.id, "handle sensor"),
             handle_constraints,
         );
-        let drag = sensor.request_typed(Box::new(WasDragged)).flatten();
+        let drag = sensor.request(WasDragged).flatten();
 
         match drag {
             Some(delta) => {
@@ -367,12 +353,15 @@ impl Node for Movable {
                 // If a drag just finished, inform the parent canvas
                 if let Some(delta) = *self.pending.val() {
                     *self.pending.val_mut() = None;
-                    if let Id::Workspace(uid) = ctx.id {
-                        ctx.workspace.submit_action(Action {
-                            dest: Some(self.parent),
-                            description: "Moved element".into(),
-                            body: Box::new(MoveChild { child: uid, delta }),
-                        });
+                    if ctx.id.is_workspace() {
+                        ctx.workspace.submit_action(
+                            self.parent,
+                            "Moved element",
+                            MoveChild {
+                                child: ctx.id,
+                                delta,
+                            },
+                        );
                     }
 
                     // For this frame, still draw at preview location
@@ -398,11 +387,10 @@ impl Node for Movable {
         }
     }
 
-    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
-}
-
-impl Requestable for Movable {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
+    fn deref_target(&self) -> Option<NodeUid> {
+        // Messages we do not understand fall through to the wrapped child.
+        Some(self.child)
     }
 }
+
+defhandlers! { Movable {} }

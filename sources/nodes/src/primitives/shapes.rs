@@ -46,14 +46,9 @@ impl Node for Rect {
         }
     }
 
-    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
-impl Requestable for Rect {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
-    }
-}
+defhandlers! { Rect {} }
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Circle {
@@ -95,14 +90,9 @@ impl Node for Circle {
         }
     }
 
-    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
-impl Requestable for Circle {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
-    }
-}
+defhandlers! { Circle {} }
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Triangle {
@@ -151,14 +141,9 @@ impl Node for Triangle {
         }
     }
 
-    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
-impl Requestable for Triangle {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
-    }
-}
+defhandlers! { Triangle {} }
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Line {
@@ -197,11 +182,6 @@ impl Node for Line {
         }
     }
 
-    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
-impl Requestable for Line {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
-    }
-}
+defhandlers! { Line {} }

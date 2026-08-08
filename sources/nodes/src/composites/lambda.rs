@@ -8,14 +8,13 @@ use crate::layouts::LayoutChild;
 use crate::layouts::horizontal::HorizontalLayout;
 use crate::layouts::vertical::VerticalLayout;
 use crate::primitives::shapes::Line;
+use crate::primitives::text::{CodeEditor, LabelEditable};
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct LambdaEditor {
     active: LambdaLang,
-    /// Must be an instance of [`CodeEditor`](crate::primitives::text::CodeEditor)
-    steel: NodeUid,
-    /// Must be an instance of [`CodeEditor`](crate::primitives::text::CodeEditor)
-    python: NodeUid,
+    steel: NodeUid<CodeEditor>,
+    python: NodeUid<CodeEditor>,
 }
 
 #[typetag::serde]
@@ -26,23 +25,23 @@ impl Node for LambdaEditor {
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
         // Delegate entirely to whichever code editor is currently active.
-        let active = match self.active {
-            LambdaLang::Steel => self.steel,
-            LambdaLang::Python => self.python,
-        };
+        let active = self
+            .deref_target()
+            .expect("Deref to active editor should be implemented");
         let constraints = ctx.constraints;
         ctx.draw_workspace_node(active, constraints)
             .unwrap_or(DrawResult::Complete { region: None })
     }
 
-    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
-}
-
-impl Requestable for LambdaEditor {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
+    fn deref_target(&self) -> Option<NodeUid> {
+        Some(match self.active {
+            LambdaLang::Steel => self.steel.erase(),
+            LambdaLang::Python => self.python.erase(),
+        })
     }
 }
+
+defhandlers! { LambdaEditor {} }
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub enum LambdaLang {
@@ -52,10 +51,8 @@ pub enum LambdaLang {
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct LambdaArg {
-    /// Must be an instance of [`LabelEditable`](crate::primitives::text::LabelEditable)
-    label: NodeUid,
-    /// Must be an instance of [`LabelEditable`](crate::primitives::text::LabelEditable)
-    param_name: NodeUid,
+    label: NodeUid<LabelEditable>,
+    param_name: NodeUid<LabelEditable>,
 }
 
 #[typetag::serde]
@@ -82,7 +79,7 @@ impl Node for LambdaArg {
             should_clip: ctx.constraints.should_clip,
         };
         let label_region = ctx
-            .draw_workspace_node(self.label, label_constraints)
+            .draw_workspace_node(self.label.erase(), label_constraints)
             .and_then(|r| r.region());
         let label_size = label_region
             .map(|r| r.size())
@@ -118,24 +115,14 @@ impl Node for LambdaArg {
             region: Some(region),
         }
     }
-
-    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
-impl Requestable for LambdaArg {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
-    }
-}
+defhandlers! { LambdaArg {} }
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Lambda {
-    /// Arguments taken by this [`Lambda`]
-    /// Must be instances of [`LambdaArg`]
-    args: Vec<NodeUid>,
-
-    /// Must be an instance of [`LambdaEditor`]
-    editor: NodeUid,
+    args: Vec<NodeUid<LambdaArg>>,
+    editor: NodeUid<LambdaEditor>,
 }
 
 #[typetag::serde]
@@ -172,6 +159,7 @@ impl Node for Lambda {
                         .args
                         .iter()
                         .copied()
+                        .map(NodeUid::erase)
                         .map(LayoutChild::Workspace)
                         .collect(),
                     allow_wrap: true,
@@ -184,25 +172,19 @@ impl Node for Lambda {
                     },
                     stroke: Stroke::new(DIVIDER_THICKNESS, Color32::GRAY),
                 }),
-                LayoutChild::Workspace(self.editor),
+                LayoutChild::Workspace(self.editor.erase()),
             ],
         };
 
         ctx.draw_node(
             &body,
-            LocalId::from_cons(ctx.id, "lambda body"),
+            NodeUid::new_local(ctx.id, "lambda body"),
             constraints,
         )
     }
-
-    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
-impl Requestable for Lambda {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
-    }
-}
+defhandlers! { Lambda {} }
 
 /// Resolve the top-left origin for a content-sized node, with a fallback "guess" size
 fn resolve_origin(ctx: &mut DrawContext, fallback: Vector) -> ScreenPos {

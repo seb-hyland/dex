@@ -33,7 +33,7 @@ impl LayoutChild {
     pub fn draw(
         &self,
         ctx: &mut DrawContext,
-        local_id: LocalId,
+        local_id: NodeUid,
         constraints: DrawConstraints,
     ) -> Option<DrawResult> {
         match self {

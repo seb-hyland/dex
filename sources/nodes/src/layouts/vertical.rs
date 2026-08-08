@@ -75,7 +75,7 @@ impl Node for VerticalLayout {
                 should_clip: ctx.constraints.should_clip,
             };
 
-            let local_id = LocalId::from_cons(ctx.id, idx);
+            let local_id = NodeUid::new_local(ctx.id, idx);
             if let Some(region) = child
                 .draw(&mut ctx, local_id, constraints)
                 .and_then(|res| res.region())
@@ -97,12 +97,6 @@ impl Node for VerticalLayout {
             )),
         }
     }
-
-    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
-impl Requestable for VerticalLayout {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
-    }
-}
+defhandlers! { VerticalLayout {} }

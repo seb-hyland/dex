@@ -152,7 +152,7 @@ fn category_bars(rect: ScreenRegion) -> Vec<(String, u32, ScreenPos, Vector, Scr
 // ---------------------------------------------------------------------------
 
 fn place<N: Node>(ctx: &mut DrawContext, node: &N, key: u64, pos: PositionConstraint) {
-    let id = LocalId::from_cons(ctx.id, key);
+    let id = NodeUid::new_local(ctx.id, key);
     let _ = ctx.draw_node(
         node,
         id,
@@ -291,15 +291,9 @@ impl Node for BarChart {
 
         DrawResult::Complete { region: Some(rect) }
     }
-
-    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
-impl Requestable for BarChart {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
-    }
-}
+defhandlers! { BarChart {} }
 
 // ---------------------------------------------------------------------------
 // Scatter (right panel) — canvas of dots + a queried InteractionBox
@@ -347,20 +341,11 @@ impl Node for Scatter {
         draw_filling(&mut ctx, self.interaction, rect);
         let hovered = ctx
             .workspace
-            .send_request(TypedRequest {
-                dest: self.interaction,
-                body: Box::new(WasHovered),
-            })
+            .send_request(self.interaction, WasHovered)
             .unwrap_or(false);
 
         if hovered
-            && let Some(bar_rect) = ctx
-                .workspace
-                .send_request(TypedRequest {
-                    dest: self.barchart,
-                    body: Box::new(Region),
-                })
-                .flatten()
+            && let Some(bar_rect) = ctx.workspace.send_request(self.barchart, Region).flatten()
         {
             let anchors = category_bars(bar_rect);
             for (i, (n1, n2, cat)) in DATA.iter().enumerate() {
@@ -392,15 +377,9 @@ impl Node for Scatter {
 
         DrawResult::Complete { region: Some(rect) }
     }
-
-    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
-impl Requestable for Scatter {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
-    }
-}
+defhandlers! { Scatter {} }
 
 // ---------------------------------------------------------------------------
 // App wiring

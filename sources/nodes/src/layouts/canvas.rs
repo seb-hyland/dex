@@ -1,7 +1,7 @@
 use dex_core::prelude::*;
 use egui::{Pos2, Vec2};
 use serde::{Deserialize, Serialize};
-use utils::{Reset, Transient, match_dyn};
+use utils::{Reset, Transient};
 
 use crate::primitives::interaction::{InteractionBox, WasDragged};
 
@@ -92,7 +92,7 @@ impl Node for CanvasLayout {
         if let Some(interact) = &self.drag_interaction {
             ctx.draw_node(
                 interact,
-                LocalId::from_cons(ctx.id, "background drag"),
+                NodeUid::new_local(ctx.id, "background drag"),
                 DrawConstraints {
                     pos: PositionConstraint::TopLeft(origin),
                     x: Some(AxisConstraint::Exactly(avail_x)),
@@ -103,7 +103,7 @@ impl Node for CanvasLayout {
             );
 
             let drag_res = interact
-                .request_typed(Box::new(WasDragged))
+                .request(WasDragged)
                 .expect("Message should be understood");
 
             if let Some(drag_delta) = drag_res {
@@ -121,23 +121,17 @@ impl Node for CanvasLayout {
         }
     }
 
-    fn handle_action(&mut self, r: Box<dyn ActionBody>) {
-        match_dyn! { r,
-            m: MoveChild => {
-                if let Some(child) = self.children.iter_mut().find(|c| c.id == m.child) {
-                    child.canvas_pos += Vec2::from(m.delta);
-                }
-            },
-            _ => {}
-        }
-    }
 }
 
-impl Requestable for CanvasLayout {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
-    }
-}
+defhandlers! { CanvasLayout {
+    extern_actions: [
+        MoveChild => (this, m) {
+            if let Some(child) = this.children.iter_mut().find(|c| c.id == m.child) {
+                child.canvas_pos += Vec2::from(m.delta);
+            }
+        },
+    ],
+}}
 
 /**
    Move a canvas child by [`delta`](Self::delta) in canvas-space.

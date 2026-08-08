@@ -1,4 +1,4 @@
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::borrow::Cow;
 
 use dyn_clone::DynClone;
 use egui::Ui;
@@ -14,25 +14,19 @@ mod workspace;
 pub mod prelude {
     pub use crate::{
         constraints::*,
-        messages::{
-            action::*,
-            request::{
-                Region, Request, RequestBody, Requestable, TypedRequest, TypedRequestBody,
-                TypedRequestable,
-            },
-        },
+        messages::*,
         pool::NodeUid,
         region::{ScreenPos, ScreenRegion, Vector},
         workspace::Workspace,
         *,
     };
+    pub use utils::AsAny;
 }
 pub use prelude::*;
-use serde::{Deserialize, Serialize};
 use utils::Reset;
 
 #[typetag::serde]
-pub trait Node: Requestable + Reset + 'static + DynClone + Send {
+pub trait Node: RequestableDyn + ActionHandler + Reset + 'static + DynClone + Send {
     fn type_name(&self) -> String;
 
     /// Given some context, draw the node on screen
@@ -44,8 +38,9 @@ pub trait Node: Requestable + Reset + 'static + DynClone + Send {
         None
     }
 
-    /// Resolve an action
-    fn handle_action(&mut self, r: Box<dyn ActionBody>);
+    fn deref_target(&self) -> Option<NodeUid> {
+        None
+    }
 }
 
 dyn_clone::clone_trait_object!(Node);
@@ -75,7 +70,7 @@ impl DrawResult {
 #[non_exhaustive]
 pub struct DrawContext<'ctx> {
     /// The unique identifier of the node being drawn
-    pub id: Id,
+    pub id: NodeUid,
 
     /// A set of constraints to determine draw sizing
     pub constraints: DrawConstraints,
@@ -89,16 +84,22 @@ pub struct DrawContext<'ctx> {
 
 impl<'ctx> DrawContext<'ctx> {
     pub fn this_node_last_frame_location(&self) -> Option<ScreenRegion> {
-        self.last_frame_location_of(self.id.into_workspace_id()?)
+        self.last_frame_location_of(self.id)
+    }
+
+    pub fn submit_action_for_self<N, A>(&self, body: A, description: impl Into<Cow<'static, str>>)
+    where
+        N: Node + ?Sized,
+        A: ActionFor<N> + 'static,
+    {
+        if self.id.is_workspace() {
+            self.workspace
+                .submit_action(self.id.cast::<N>(), description, body);
+        }
     }
 
     pub fn last_frame_location_of(&self, id: NodeUid) -> Option<ScreenRegion> {
-        self.workspace
-            .send_request(TypedRequest {
-                dest: id,
-                body: Box::new(Region),
-            })
-            .flatten()
+        self.workspace.send_request(id, Region).flatten()
     }
 
     pub fn request_skip_frame(&self) {
@@ -112,36 +113,5 @@ impl<'ctx> DrawContext<'ctx> {
             workspace: self.workspace,
             ui: &mut *self.ui,
         }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
-pub enum Id {
-    Workspace(NodeUid),
-    Local(LocalId),
-}
-
-impl Id {
-    pub fn into_workspace_id(self) -> Option<NodeUid> {
-        match self {
-            Self::Workspace(id) => Some(id),
-            _ => None,
-        }
-    }
-}
-
-/**
-   A stable, local ID for parent-owned nodes.
-   Typically produced from a hash of the parent ID and some stable identifier (e.g., field name)
-*/
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
-pub struct LocalId(u64);
-
-impl LocalId {
-    pub fn from_cons(car: impl Hash, cdr: impl Hash) -> Self {
-        let mut hasher = DefaultHasher::new();
-        car.hash(&mut hasher);
-        cdr.hash(&mut hasher);
-        Self(hasher.finish())
     }
 }

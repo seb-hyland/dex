@@ -1,26 +1,132 @@
-use std::cell::RefCell;
+use std::{
+    cell::RefCell,
+    fmt,
+    hash::{DefaultHasher, Hash, Hasher},
+    marker::PhantomData,
+};
 
 use rpds::HashTrieMap;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use slotmap::{SlotMap, new_key_type};
 use utils::{HistoryGraph, Reset, Timestamp, impl_Reset_noop};
 use uuid::Uuid;
 
-use crate::{Node, messages::action::Action, region::ScreenRegion, workspace::PushWorkspaceNode};
+use crate::{Node, messages::Action, region::ScreenRegion, workspace::PushWorkspaceNode};
 
 /**
     A unique identifier for a node.
     Used for registry lookup and messaging.
+
+    The type parameter records the node type as a compile-time only tag.
 */
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
-pub struct NodeUid(Uuid);
+pub struct NodeUid<T: ?Sized = dyn Node> {
+    id: Uuid,
+    _marker: PhantomData<fn() -> T>,
+}
 
-impl_Reset_noop!(NodeUid);
-
-impl NodeUid {
+impl<T: ?Sized> NodeUid<T> {
+    /// A fresh, random (v4) id for a workspace (registry-resident) node.
     pub(crate) fn new() -> Self {
-        Self(Uuid::new_v4())
+        Self {
+            id: Uuid::new_v4(),
+            _marker: PhantomData,
+        }
     }
+
+    /// The nil id, used as an action's destination when there is no target node (the workspace itself is the target).
+    pub fn nil() -> Self {
+        Self {
+            id: Uuid::nil(),
+            _marker: PhantomData,
+        }
+    }
+
+    /// A stable, deterministic id for a parent-owned node, derived from the `parent` id and a stable ident.
+    pub fn new_local(parent: NodeUid, ident: impl Hash) -> Self {
+        let mut hasher = DefaultHasher::new();
+        ident.hash(&mut hasher);
+        let name = hasher.finish().to_le_bytes();
+        Self {
+            id: Uuid::new_v5(&parent.id, &name),
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn erase(self) -> NodeUid {
+        NodeUid {
+            id: self.id,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn cast<U: ?Sized>(self) -> NodeUid<U> {
+        NodeUid {
+            id: self.id,
+            _marker: PhantomData,
+        }
+    }
+
+    /**
+       ## Returns
+       - `true` for a workspace-owned node
+       - `false` for a local node
+    */
+    pub fn is_workspace(self) -> bool {
+        self.id.get_version_num() == 4
+    }
+}
+
+/*
+    Trait impls ----------------------------------------
+    (written manually to ignore the tag field)
+*/
+
+impl<T: ?Sized> Clone for NodeUid<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: ?Sized> Copy for NodeUid<T> {}
+
+impl<T: ?Sized> PartialEq for NodeUid<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl<T: ?Sized> Eq for NodeUid<T> {}
+
+impl<T: ?Sized> Hash for NodeUid<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl<T: ?Sized> fmt::Debug for NodeUid<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "NodeUid({})", self.id)
+    }
+}
+
+impl<T: ?Sized> Serialize for NodeUid<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.id.serialize(serializer)
+    }
+}
+
+impl<'de, T: ?Sized> Deserialize<'de> for NodeUid<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self {
+            id: Uuid::deserialize(deserializer)?,
+            _marker: PhantomData,
+        })
+    }
+}
+
+impl<T: ?Sized> Reset for NodeUid<T> {
+    #[inline(always)]
+    fn reset(&self) {}
 }
 
 /**
@@ -80,14 +186,34 @@ impl Registry {
         self.history.current_epoch().time()
     }
 
-    pub(crate) fn apply_action(&mut self, req: Action) {
-        let cur_epoch_time = self.current_epoch_time();
+    pub(crate) fn apply_action(&mut self, mut req: Action) {
+        loop {
+            let cur_epoch_time = self.current_epoch_time();
 
-        if let Some(dest) = req.dest
-            && let Some(nobj) = self.history.current_epoch_mut().map.get_mut(&dest)
-        {
+            let dest = req.dest;
+            let Some(nobj) = self.history.current_epoch_mut().map.get_mut(&dest) else {
+                // Unknown destination; discard
+                return;
+            };
+
             let node_mut = nobj.make_mut(req.clone(), cur_epoch_time, &mut self.pool);
-            node_mut.handle_action(req.body);
+            let Some(unhandled) = node_mut.handle_action(req.body) else {
+                // The action was understood and handled
+                return;
+            };
+
+            // Not understood here; dereference to the child, if any, and try again
+            let Some((node, _)) = self.get(dest) else {
+                return;
+            };
+            let Some(target) = node.deref_target() else {
+                return;
+            };
+            req = Action {
+                dest: target,
+                description: req.description,
+                body: unhandled,
+            };
         }
     }
 

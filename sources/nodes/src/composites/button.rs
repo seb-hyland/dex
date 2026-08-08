@@ -74,7 +74,7 @@ impl Node for Button {
         };
         let label_result = ctx.draw_node(
             &self.label,
-            LocalId::from_cons(ctx.id, "button label"),
+            NodeUid::new_local(ctx.id, "button label"),
             label_constraints,
         );
         let label_size = label_result
@@ -102,29 +102,24 @@ impl Node for Button {
         };
         ctx.draw_node(
             &border,
-            LocalId::from_cons(ctx.id, "button border"),
+            NodeUid::new_local(ctx.id, "button border"),
             box_constraints,
         );
 
         ctx.draw_node(
             &self.interaction,
-            LocalId::from_cons(ctx.id, "button interaction"),
+            NodeUid::new_local(ctx.id, "button interaction"),
             box_constraints,
         );
-        let clicked = self
-            .interaction
-            .request_typed(Box::new(WasClicked))
-            .unwrap_or(false);
+        let clicked = self.interaction.request(WasClicked).unwrap_or(false);
         if clicked {
-            ctx.workspace.submit_action(self.onclick_action.clone());
+            ctx.workspace.submit_action_dyn(self.onclick_action.clone());
         }
 
         DrawResult::Complete {
             region: Some(ScreenRegion::from_min_size(origin, button_size)),
         }
     }
-
-    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
 impl Reset for Button {
@@ -134,8 +129,4 @@ impl Reset for Button {
     }
 }
 
-impl Requestable for Button {
-    fn request(&self, _body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        None
-    }
-}
+defhandlers! { Button {} }

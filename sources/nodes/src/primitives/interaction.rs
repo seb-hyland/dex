@@ -78,31 +78,12 @@ impl Node for InteractionBox {
             region: Some(region),
         }
     }
-
-    fn handle_action(&mut self, _r: Box<dyn ActionBody>) {}
 }
 
-pub struct WasClicked;
-impl TypedRequestBody for WasClicked {
-    type Response = bool;
-}
-
-pub struct WasHovered;
-impl TypedRequestBody for WasHovered {
-    type Response = bool;
-}
-
-pub struct WasDragged;
-impl TypedRequestBody for WasDragged {
-    type Response = Option<Vector>;
-}
-
-impl Requestable for InteractionBox {
-    fn request(&self, body: Box<dyn RequestBody>) -> Option<Box<dyn std::any::Any>> {
-        respond_requests! { body,
-            q: WasClicked => self.cache.val().as_ref().is_some_and(|i| i.clicked),
-            q: WasHovered => self.cache.val().as_ref().is_some_and(|i| i.hovered),
-            q: WasDragged => self.cache.val().as_ref().and_then(|i| i.dragged),
-        }
-    }
-}
+defhandlers! { InteractionBox {
+    requests: [
+        WasClicked => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.clicked) },
+        WasHovered => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.hovered) },
+        WasDragged => (this, _q): Option<Vector> { this.cache.val().as_ref().and_then(|i| i.dragged) },
+    ],
+}}

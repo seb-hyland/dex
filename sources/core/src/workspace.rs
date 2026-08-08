@@ -1,17 +1,14 @@
-use std::{any::Any, sync::mpsc};
+use std::{any::Any, borrow::Cow, sync::mpsc};
 
 use egui::{Rect, Ui, UiBuilder};
 use serde::{Deserialize, Serialize};
-use utils::match_dyn;
+use utils::{AsAny, match_dyn};
 
 use crate::{
-    ActionBody, AxisConstraint, DrawConstraints, DrawContext, DrawResult, Id, LocalId, Node,
-    PositionConstraint, ScreenRegion, Vector, WrapConstraints,
+    ActionBody, ActionFor, AxisConstraint, DrawConstraints, DrawContext, DrawResult, Node,
+    PositionConstraint, RequestFor, ScreenRegion, Vector, WrapConstraints,
     compute::{ComputeScheduler, ComputeSchedulerHandle, ComputeTask},
-    messages::{
-        action::{Action, ActionGroup},
-        request::{Region, Request, TypedRequest, TypedRequestBody, downcast_resp},
-    },
+    messages::{Action, ActionGroup, Region, Request, TypedRequestBody, downcast_resp},
     pool::{NodeUid, Registry},
 };
 
@@ -49,27 +46,59 @@ impl Workspace {
         self.root_node = new_root;
     }
 
-    pub fn send_request<Resp: Any>(&self, q: TypedRequest<Resp>) -> Option<Resp> {
-        self.send_request_dyn(q.into()).map(downcast_resp)
+    pub fn submit_action<N, A>(
+        &self,
+        dest: NodeUid<N>,
+        description: impl Into<Cow<'static, str>>,
+        body: A,
+    ) where
+        N: Node + ?Sized,
+        A: ActionFor<N> + 'static,
+    {
+        self.submit_action_dyn(Action {
+            dest: dest.erase(),
+            description: description.into(),
+            body: Box::new(body),
+        });
     }
 
-    fn send_request_dyn(&self, q: Request) -> Option<Box<dyn Any>> {
-        let (dest_node, last_draw_region) = self.registry.get(q.dest)?;
-        if q.body.as_any_ref().is::<Region>() {
-            // Draw region is being requested
-            Some(
-                Box::new(last_draw_region) as Box<<Region as TypedRequestBody>::Response>
-                    as Box<dyn Any>,
-            )
-        } else {
-            dest_node.request(q.body)
+    pub fn send_request<N, R>(&self, dest: NodeUid<N>, body: R) -> Option<R::Response>
+    where
+        N: Node + ?Sized,
+        R: RequestFor<N> + 'static,
+    {
+        self.send_request_dyn(Request {
+            dest: dest.erase(),
+            body: Box::new(body),
+        })
+        .map(downcast_resp)
+    }
+
+    fn send_request_dyn(&self, mut q: Request) -> Option<Box<dyn Any>> {
+        loop {
+            // Get the request target
+            let (dest_node, last_draw_region) = self.registry.get(q.dest)?;
+            if q.body.as_any_ref().is::<Region>() {
+                // Draw region is being requested
+                return Some(Box::new(last_draw_region)
+                    as Box<<Region as TypedRequestBody>::Response>
+                    as Box<dyn Any>);
+            }
+            match dest_node.request_dyn(q.body) {
+                Ok(resp) => return Some(resp),
+                Err(body) => {
+                    // Not answered here; dereference to the child, if any, and try again
+                    let target = dest_node.deref_target()?;
+                    q = Request { dest: target, body };
+                }
+            }
         }
     }
 
     pub fn insert_node(&self, node: Box<dyn Node>) -> NodeUid {
         let uid = NodeUid::new();
-        self.submit_action(Action {
-            dest: None,
+        self.submit_action_dyn(Action {
+            dest: NodeUid::nil(),
             description: format!("Inserted node of type {}", node.type_name()).into(),
             body: Box::new(PushWorkspaceNode { node, uid }),
         });
@@ -96,7 +125,7 @@ impl Workspace {
             should_clip: true,
         };
         let mut ctx = DrawContext {
-            id: Id::Workspace(root_node),
+            id: root_node,
             workspace: self,
             constraints,
             ui,
@@ -105,7 +134,7 @@ impl Workspace {
         ctx.draw_workspace_node(root_node, constraints);
     }
 
-    pub fn submit_action(&self, action: Action) {
+    pub fn submit_action_dyn(&self, action: Action) {
         self.action_sender
             .send(action)
             .expect("Actions should not fail to send!");
@@ -148,12 +177,12 @@ pub(crate) struct PushWorkspaceNode {
 impl ActionBody for PushWorkspaceNode {}
 
 impl<'ctx> DrawContext<'ctx> {
-    pub fn draw_workspace_node(
+    pub fn draw_workspace_node<T: ?Sized>(
         &mut self,
-        id: NodeUid,
+        id: NodeUid<T>,
         constraints: DrawConstraints,
     ) -> Option<DrawResult> {
-        let (node, _) = self.workspace.registry.get(id)?;
+        let (node, _) = self.workspace.registry.get(id.erase())?;
 
         let clip_x = constraints
             .x
@@ -179,7 +208,7 @@ impl<'ctx> DrawContext<'ctx> {
             child_ui.set_clip_rect(clip_region.into());
 
             let temp_ctx = DrawContext {
-                id: Id::Workspace(id),
+                id: id.erase(),
                 ui: &mut child_ui,
                 constraints,
                 ..self.reborrow()
@@ -189,7 +218,7 @@ impl<'ctx> DrawContext<'ctx> {
             node.draw(temp_ctx)
         } else {
             let temp_ctx = DrawContext {
-                id: Id::Workspace(id),
+                id: id.erase(),
                 constraints,
                 ..self.reborrow()
             };
@@ -206,7 +235,9 @@ impl<'ctx> DrawContext<'ctx> {
                 Some(reg)
             }
         });
-        self.workspace.registry.update_node_region(id, maybe_region);
+        self.workspace
+            .registry
+            .update_node_region(id.erase(), maybe_region);
 
         Some(res)
     }
@@ -214,11 +245,11 @@ impl<'ctx> DrawContext<'ctx> {
     pub fn draw_node(
         &mut self,
         node: &(impl Node + ?Sized),
-        id: LocalId,
+        id: NodeUid,
         constraints: DrawConstraints,
     ) -> DrawResult {
         let temp_ctx = DrawContext {
-            id: Id::Local(id),
+            id,
             constraints,
             ..self.reborrow()
         };

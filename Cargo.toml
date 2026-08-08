@@ -14,4 +14,4 @@ slotmap = { version = "1.1.1", features = ["serde"] }
 typetag = "0.2.22"
 utils.path = "sources/utils/"
 utils-proc-macro.path = "sources/utils-proc-macro/"
-uuid = { version = "1.23.4", features = ["serde", "v4", "v7"] }
+uuid = { version = "1.23.4", features = ["serde", "v4", "v5", "v7"] }
