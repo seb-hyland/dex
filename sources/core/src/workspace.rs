@@ -7,7 +7,7 @@ use utils::match_dyn;
 use crate::{
     ActionBody, AxisConstraint, DrawConstraints, DrawContext, DrawResult, Id, LocalId, Node,
     PositionConstraint, ScreenRegion, Vector, WrapConstraints,
-    compute::scheduler::{ComputeScheduler, ComputeSchedulerHandle, ComputeTask},
+    compute::{ComputeScheduler, ComputeSchedulerHandle, ComputeTask},
     messages::{
         action::{Action, ActionGroup},
         request::{Region, Request, TypedRequest, TypedRequestBody, downcast_resp},
