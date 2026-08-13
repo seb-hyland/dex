@@ -7,17 +7,20 @@ use crate::{
     layouts::{
         LayoutChild,
         canvas::{
-            layout::AddChild,
+            layout::AddCanvasItem,
             nodes::shapes::{CanvasCircle, CanvasRect},
         },
+        desktops::Desktops,
         horizontal::HorizontalLayout,
     },
     primitives::text::{Label, LabelEditable},
 };
 
 #[derive(Clone, Copy, Reset, Serialize, Deserialize)]
-pub(super) struct CanvasSidebar {
-    pub(super) parent: NodeUid,
+pub struct CanvasSidebar {
+    /// The owning [`Desktops`]. Insert actions are addressed here and forwarded
+    /// to its active canvas via [`Desktops`]'s deref target.
+    pub desktops: NodeUid<Desktops>,
 }
 
 #[typetag::serde]
@@ -38,9 +41,9 @@ impl Node for CanvasSidebar {
                 LayoutChild::Local(Box::new(Button::new(
                     Label::new(child.type_name()),
                     Action {
-                        dest: self.parent,
+                        dest: self.desktops.erase(),
                         description: "Insert new node".into(),
-                        body: Box::new(AddChild { child }),
+                        body: Box::new(AddCanvasItem { child }),
                     },
                 )))
             })

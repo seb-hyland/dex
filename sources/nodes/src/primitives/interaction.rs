@@ -16,7 +16,10 @@ struct LastFrameInteractions {
     hovered: bool,
     contains_pointer: bool,
     clicked: bool,
+    double_clicked: bool,
     dragged: Option<Vector>,
+    drag_pos: Option<Vector>,
+    drag_stopped: bool,
 }
 
 impl InteractionBox {
@@ -73,7 +76,14 @@ impl Node for InteractionBox {
             hovered: resp.hovered(),
             contains_pointer: resp.contains_pointer(),
             clicked: resp.clicked(),
+            double_clicked: resp.double_clicked(),
             dragged: resp.dragged().then_some(resp.drag_delta().into()),
+            drag_pos: resp
+                .dragged()
+                .then(|| resp.interact_pointer_pos())
+                .flatten()
+                .map(|p| Vector { x: p.x, y: p.y }),
+            drag_stopped: resp.drag_stopped(),
         });
 
         DrawResult::Complete {
@@ -85,8 +95,11 @@ impl Node for InteractionBox {
 defhandlers! { InteractionBox {
     requests: [
         WasClicked => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.clicked) },
+        WasDoubleClicked => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.double_clicked) },
         WasHovered => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.hovered) },
         ContainsPointer => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.contains_pointer) },
         WasDragged => (this, _q): Option<Vector> { this.cache.val().as_ref().and_then(|i| i.dragged) },
+        DragPointerPos => (this, _q): Option<Vector> { this.cache.val().as_ref().and_then(|i| i.drag_pos) },
+        WasDragReleased => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.drag_stopped) },
     ],
 }}

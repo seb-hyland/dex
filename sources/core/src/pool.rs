@@ -25,8 +25,8 @@ pub struct NodeUid<T: ?Sized = dyn Node> {
 }
 
 impl<T: ?Sized> NodeUid<T> {
-    /// A fresh, random (v4) id for a workspace (registry-resident) node.
-    pub(crate) fn new() -> Self {
+    /// A fresh id for a workspace node.
+    pub fn new_workspace() -> Self {
         Self {
             id: Uuid::new_v4(),
             _marker: PhantomData,
@@ -149,7 +149,7 @@ impl Registry {
         let mut pool = NodePool::default();
         let mut snapshot = WorldSnapshot::default();
 
-        let root_id = NodeUid::new();
+        let root_id = NodeUid::new_workspace();
         snapshot.push(root_node, root_id, &mut pool);
 
         (
@@ -160,6 +160,16 @@ impl Registry {
             },
             root_id,
         )
+    }
+
+    /// An empty registry, holding no nodes. Nodes are added synchronously with
+    /// [`Registry::push`] during workspace construction.
+    pub(crate) fn empty() -> Self {
+        Self {
+            pool: NodePool::default(),
+            history: HistoryGraph::new(WorldSnapshot::default()),
+            current_frame: 0,
+        }
     }
 
     pub(crate) fn tick_frame(&mut self) {

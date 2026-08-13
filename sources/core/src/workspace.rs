@@ -42,6 +42,36 @@ impl Workspace {
         }
     }
 
+    /// A workspace with no nodes and no root yet. Populate it synchronously with
+    /// [`Workspace::insert_node_now`] and finish with [`Workspace::set_root`].
+    /// Intended for building the initial node graph before the frame loop.
+    pub fn new_empty() -> Self {
+        let (action_tx, action_recv) = mpsc::channel();
+
+        Self {
+            root_node: NodeUid::nil(),
+            registry: Registry::empty(),
+            action_sender: action_tx.clone(),
+            actions: action_recv,
+            scheduler: ComputeScheduler::spawn(action_tx),
+        }
+    }
+
+    /// Insert a node into the registry immediately, without going through the action queue.
+    pub fn insert_node_now<T: Node>(&mut self, node: Box<T>) -> NodeUid<T> {
+        let uid = NodeUid::new_workspace();
+        self.insert_node_now_at(uid, node);
+        uid
+    }
+
+    /// Insert a node under a caller-chosen id (minted with [`NodeUid::new_workspace`]).
+    pub fn insert_node_now_at<T: Node>(&mut self, uid: NodeUid<T>, node: Box<T>) {
+        self.registry.push(PushWorkspaceNode {
+            node,
+            uid: uid.erase(),
+        });
+    }
+
     pub fn set_root(&mut self, new_root: NodeUid) {
         self.root_node = new_root;
     }
@@ -104,7 +134,7 @@ impl Workspace {
     }
 
     pub fn insert_node_dyn(&self, node: Box<dyn Node>) -> NodeUid {
-        let uid = NodeUid::new();
+        let uid = NodeUid::new_workspace();
 
         self.submit_action_dyn(Action {
             dest: NodeUid::nil(),
@@ -118,13 +148,13 @@ impl Workspace {
         uid
     }
 
-    pub fn draw_frame(&mut self, ui: &mut Ui, draw_area: Rect, sidebar_area: Rect) {
-        self.draw_root(ui, draw_area, sidebar_area);
+    pub fn draw_frame(&mut self, ui: &mut Ui, draw_area: Rect) {
+        self.draw_root(ui, draw_area);
         self.process_actions();
         self.registry.tick_frame();
     }
 
-    fn draw_root(&mut self, ui: &mut Ui, draw_area: Rect, sidebar_area: Rect) {
+    fn draw_root(&mut self, ui: &mut Ui, draw_area: Rect) {
         let root_node = self.root_node;
 
         let constraints = DrawConstraints {
@@ -143,28 +173,6 @@ impl Workspace {
             ui,
         };
         ctx.draw_workspace_node(root_node, constraints);
-
-        let sidebar_constraints = DrawConstraints {
-            pos: PositionConstraint::TopLeft(sidebar_area.min.into()),
-            x: Some(AxisConstraint::Exactly(sidebar_area.width())),
-            y: Some(AxisConstraint::Exactly(sidebar_area.height())),
-            wrap: WrapConstraints::NotAllowed,
-            should_clip: true,
-        };
-        let sidebar_id = NodeUid::new_local(self.root_node, "root sidebar");
-        let mut ctx = DrawContext {
-            node: NodeContext {
-                id: root_node,
-                workspace: self,
-            },
-            constraints: sidebar_constraints,
-            ui,
-        };
-        if let Some((root, _)) = self.registry.get(root_node)
-            && let Some(sidebar_node) = root.draw_sidebar(ctx.reborrow())
-        {
-            ctx.draw_node(&*sidebar_node, sidebar_id, sidebar_constraints);
-        }
     }
 
     /// Delete a node from the workspace; its [`Node::on_delete`] handler will run.

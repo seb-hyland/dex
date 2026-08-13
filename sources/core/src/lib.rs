@@ -34,10 +34,6 @@ pub trait Node: RequestableDyn + ActionHandler + Reset + 'static + DynClone + Se
     // This deprecation attribute prevents direct `<instance>.draw(ctx)` calls
     fn draw(&self, ctx: DrawContext) -> DrawResult;
 
-    fn draw_sidebar(&self, _ctx: DrawContext) -> Option<Box<dyn Node>> {
-        None
-    }
-
     fn deref_target(&self) -> Option<NodeUid> {
         None
     }

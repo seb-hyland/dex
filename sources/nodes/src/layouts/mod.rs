@@ -1,5 +1,7 @@
 pub mod canvas;
+pub mod desktops;
 pub mod horizontal;
+pub mod horizontal_dnd;
 pub mod vertical;
 
 use dex_core::prelude::*;

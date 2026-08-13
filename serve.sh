@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-dx serve -p gui --hotpatch
+dx serve -p dex --hotpatch

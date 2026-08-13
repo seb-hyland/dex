@@ -3,18 +3,18 @@ use serde::{Deserialize, Serialize};
 use utils::{Reset, Transient};
 
 use crate::{
-    layouts::canvas::{nodes::CanvasNode, sidebar::CanvasSidebar},
+    layouts::canvas::nodes::CanvasNode,
     primitives::interaction::{InteractionBox, WasDragged},
 };
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
-pub struct CanvasLayout {
+pub struct Canvas {
     children: Vec<NodeUid<CanvasNode>>,
     drag_interaction: Option<InteractionBox>,
     screen_offset: Transient<Vector>,
 }
 
-impl Default for CanvasLayout {
+impl Default for Canvas {
     fn default() -> Self {
         Self {
             children: Vec::new(),
@@ -28,7 +28,7 @@ impl Default for CanvasLayout {
     }
 }
 
-impl CanvasLayout {
+impl Canvas {
     pub fn push_child(&mut self, child: NodeUid<CanvasNode>) {
         self.children.push(child);
     }
@@ -39,7 +39,7 @@ impl CanvasLayout {
 }
 
 #[typetag::serde]
-impl Node for CanvasLayout {
+impl Node for Canvas {
     fn type_name(&self) -> String {
         "Canvas".into()
     }
@@ -62,11 +62,6 @@ impl Node for CanvasLayout {
         };
         let origin = ctx.constraints.pos.to_top_left(size);
         let region = ScreenRegion::from_min_size(origin, size);
-
-        // Paint the canvas background.
-        ctx.ui
-            .painter()
-            .rect_filled(region.into(), 0.0, egui::Color32::WHITE);
 
         if let Some(interact) = &self.drag_interaction {
             ctx.draw_node(
@@ -109,17 +104,11 @@ impl Node for CanvasLayout {
             region: Some(region),
         }
     }
-
-    fn draw_sidebar(&self, ctx: DrawContext) -> Option<Box<dyn Node>> {
-        Some(Box::new(CanvasSidebar {
-            parent: ctx.node.id,
-        }))
-    }
 }
 
-defhandlers! { CanvasLayout {
+defhandlers! { Canvas {
     actions: [
-        AddChild { child: Box<dyn Node> } => (this, a, ctx) {
+        AddCanvasItem { child: Box<dyn Node> } => (this, a, ctx) {
             const DEFAULT_CHILD_SIZE: Vector = Vector { x: 160.0, y: 40.0 };
 
             let child_id = ctx.workspace.insert_node_dyn(a.child);

@@ -204,6 +204,10 @@ pub struct LabelEditable {
     pub singleline: bool,
     pub shrink_to_text: bool,
 
+    pub interactive: bool,
+    /// Grab focus when this node becomes interactive and lock back to non-interactive on focus loss.
+    pub auto_lock: bool,
+
     pub font: FontId,
     pub color: Color32,
 }
@@ -215,8 +219,76 @@ impl LabelEditable {
             buf: Transient::default(),
             singleline: true,
             shrink_to_text: true,
+            interactive: true,
+            auto_lock: false,
             font: FontId::proportional(16.0),
             color: Color32::BLACK,
+        }
+    }
+
+    /// A label that starts as static text, becomes editable on [`SetInteractive`], and locks again on focus loss.
+    pub fn click_to_edit(value: String) -> Self {
+        Self {
+            interactive: false,
+            auto_lock: true,
+            ..Self::new(value)
+        }
+    }
+
+    /// Render the committed value as static, non-interactive text.
+    fn draw_static(&self, ctx: DrawContext) -> DrawResult {
+        let job = LayoutJob::simple_singleline(self.value.clone(), self.font.clone(), self.color);
+        let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job));
+        let content_w = galley.rect.width();
+        let row_h = galley.rows[0].height();
+
+        let avail_w = ctx.constraints.x.map(|a| a.provided_value());
+        let exact_w = match ctx.constraints.x {
+            Some(AxisConstraint::Exactly(w)) => Some(w),
+            _ => None,
+        };
+        let exact_h = match ctx.constraints.y {
+            Some(AxisConstraint::Exactly(h)) => Some(h),
+            _ => None,
+        };
+
+        const CARET_PADDING: f32 = 2.0;
+        let min_w = row_h;
+        let mut block_w = exact_w.unwrap_or_else(|| {
+            if self.shrink_to_text {
+                (content_w + CARET_PADDING).max(min_w)
+            } else {
+                avail_w.unwrap_or((content_w + CARET_PADDING).max(min_w))
+            }
+        });
+
+        if let Some(w) = avail_w
+            && block_w > w
+        {
+            if ctx.constraints.wrap.can_retry_on_newline() {
+                return DrawResult::Wrap {
+                    region: None,
+                    continuation: 0,
+                };
+            } else {
+                block_w = w;
+            }
+        }
+
+        let size = Vector {
+            x: block_w,
+            y: exact_h.unwrap_or(row_h),
+        };
+        let origin = ctx.constraints.pos.to_top_left(size);
+        // Mirror the editor's centered alignment.
+        let text_pos = Pos2 {
+            x: origin.x + ((block_w - content_w) * 0.5).max(0.0),
+            y: origin.y + (size.y - row_h) * 0.5,
+        };
+        ctx.ui.painter().galley(text_pos, galley, self.color);
+
+        DrawResult::Complete {
+            region: Some(ScreenRegion::from_min_size(origin, size)),
         }
     }
 }
@@ -228,6 +300,10 @@ impl Node for LabelEditable {
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {
+        if !self.interactive {
+            return self.draw_static(ctx);
+        }
+
         let avail_w = ctx.constraints.x.map(|a| a.provided_value());
         let avail_h = ctx.constraints.y.map(|a| a.provided_value());
 
@@ -309,26 +385,44 @@ impl Node for LabelEditable {
         .vertical_align(Align::Center)
         .desired_width(block_w);
 
-        // Update on focus loss
-        if ctx
-            .ui
-            .memory_mut(|mem| mem.had_focus_last_frame(editor_id) && !mem.has_focus(editor_id))
-            && let Some(v) = &*self.buf.val()
-        {
-            ctx.submit_action_for_self::<Self, _>(
-                SetText { value: v.clone() },
-                "Updated editable label's stored value on focus loss",
-            );
+        if self.auto_lock {
+            // A freshly-activated click-to-edit label grabs focus so typing works immediately.
+            let known = ctx.ui.memory(|mem| {
+                mem.has_focus(editor_id) ||
+                    // Do not want to re-focus if focus was just dropped
+                    mem.had_focus_last_frame(editor_id)
+            });
+            if !known {
+                ctx.ui.memory_mut(|mem| mem.request_focus(editor_id));
+            }
         }
 
         // Insert the widget flush inside the computed block.
-        ctx.ui.scope_builder(
-            UiBuilder::new()
-                .max_rect(rect)
-                .id_salt(ctx.node.id)
-                .layout(Layout::left_to_right(Align::Min)),
-            |ui| ui.add(editor),
-        );
+        let editor_response = ctx
+            .ui
+            .scope_builder(
+                UiBuilder::new()
+                    .max_rect(rect)
+                    .id_salt(ctx.node.id)
+                    .layout(Layout::left_to_right(Align::Min)),
+                |ui| ui.add(editor),
+            )
+            .inner;
+
+        if editor_response.lost_focus() {
+            ctx.submit_action_for_self::<Self, _>(
+                SetText {
+                    value: buf_mut.clone(),
+                },
+                "Updated editable label's stored value on focus loss",
+            );
+            if self.auto_lock {
+                ctx.submit_action_for_self::<Self, _>(
+                    SetInteractive { on: false },
+                    "Locked click-to-edit label on focus loss",
+                );
+            }
+        }
 
         DrawResult::Complete {
             region: Some(ScreenRegion::from_min_size(origin, size)),
@@ -339,6 +433,10 @@ impl Node for LabelEditable {
 defhandlers! { LabelEditable {
     actions: [
         SetText { value: String } => (this, s) { this.value = s.value },
+        SetInteractive { on: bool } => (this, s) { this.interactive = s.on },
+    ],
+    requests: [
+        IsInteractive => (this, _q): bool { this.interactive },
     ],
 }}
 
