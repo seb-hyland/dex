@@ -1,5 +1,5 @@
 use dex_core::prelude::*;
-use egui::{Color32, Mesh, Shape, Stroke, StrokeKind};
+use egui::{Color32, Mesh, Painter, Shape, Stroke, StrokeKind};
 use serde::{Deserialize, Serialize};
 use utils::Reset;
 
@@ -11,43 +11,20 @@ pub struct Rect {
     pub border: Stroke,
 }
 
-#[typetag::serde]
-impl Node for Rect {
-    fn type_name(&self) -> String {
-        "Rectangle".into()
-    }
-
-    fn draw(&self, ctx: DrawContext) -> DrawResult {
-        let origin = ctx.constraints.pos.to_top_left(self.size);
-        let region = ScreenRegion::from_min_size(origin, self.size);
-
-        let fits = ctx.constraints.fits(self.size);
-        if !fits {
-            return if ctx.constraints.wrap.can_retry_on_newline() {
-                DrawResult::Wrap {
-                    region: None,
-                    continuation: 0,
-                }
-            } else {
-                DrawResult::Complete { region: None }
-            };
-        }
-
-        ctx.ui.painter().rect(
+impl Rect {
+    /// Paint the rectangle with its top-left corner at `top_left`.
+    pub fn paint(&self, painter: &Painter, top_left: ScreenPos) -> ScreenRegion {
+        let region = ScreenRegion::from_min_size(top_left, self.size);
+        painter.rect(
             region.into(),
             self.corner_radius,
             self.fill_color,
             self.border,
             StrokeKind::Middle,
         );
-
-        DrawResult::Complete {
-            region: Some(region),
-        }
+        region
     }
 }
-
-defhandlers! { Rect {} }
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Circle {
@@ -56,43 +33,13 @@ pub struct Circle {
     pub border: Stroke,
 }
 
-#[typetag::serde]
-impl Node for Circle {
-    fn type_name(&self) -> String {
-        "Circle".into()
-    }
-
-    fn draw(&self, ctx: DrawContext) -> DrawResult {
-        let size_vector = Vector::splat(
-            // Diameter
-            self.radius * 2.0,
-        );
-        let center = ctx.constraints.pos.to_center(size_vector);
-
-        let fits = ctx.constraints.fits(size_vector);
-
-        if !fits {
-            return if ctx.constraints.wrap.can_retry_on_newline() {
-                DrawResult::Wrap {
-                    region: None,
-                    continuation: 0,
-                }
-            } else {
-                DrawResult::Complete { region: None }
-            };
-        }
-
-        ctx.ui
-            .painter()
-            .circle(center.into(), self.radius, self.fill_color, self.border);
-
-        DrawResult::Complete {
-            region: Some(ScreenRegion::from_center_size(center, size_vector)),
-        }
+impl Circle {
+    /// Paint the circle centred at `center`.
+    pub fn paint(&self, painter: &Painter, center: ScreenPos) -> ScreenRegion {
+        painter.circle(center.into(), self.radius, self.fill_color, self.border);
+        ScreenRegion::from_center_size(center, Vector::splat(self.radius * 2.0))
     }
 }
-
-defhandlers! { Circle {} }
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Triangle {
@@ -100,49 +47,22 @@ pub struct Triangle {
     pub color: Color32,
 }
 
-#[typetag::serde]
-impl Node for Triangle {
-    fn type_name(&self) -> String {
-        "Triangle".into()
-    }
-
-    fn draw(&self, ctx: DrawContext) -> DrawResult {
+impl Triangle {
+    /// Paint the triangle with its first vertex at `origin` and the other two at
+    /// `origin + vectors[0]` and `origin + vectors[1]`.
+    pub fn paint(&self, painter: &Painter, origin: ScreenPos) -> ScreenRegion {
         let [vec1, vec2] = self.vectors;
-        let bounding_size = Vector::from_points(&[
-            ScreenPos::zero(),
-            ScreenPos::zero() + vec1,
-            ScreenPos::zero() + vec2,
-        ]);
-        let origin = ctx.constraints.pos.to_top_left(bounding_size);
-
-        let fits = ctx.constraints.fits(bounding_size);
-        if !fits {
-            return if ctx.constraints.wrap.can_retry_on_newline() {
-                DrawResult::Wrap {
-                    region: None,
-                    continuation: 0,
-                }
-            } else {
-                DrawResult::Complete { region: None }
-            };
-        }
-
         let mut mesh = Mesh::default();
-        let screen_vertices = [origin, origin + vec1, origin + vec2];
-        for v in screen_vertices {
+        for v in [origin, origin + vec1, origin + vec2] {
             mesh.colored_vertex(v.into(), self.color);
         }
         mesh.add_triangle(0, 1, 2);
+        painter.add(Shape::mesh(mesh));
 
-        ctx.ui.painter().add(Shape::mesh(mesh));
-
-        DrawResult::Complete {
-            region: Some(ScreenRegion::from_min_size(origin, bounding_size)),
-        }
+        let bounding = Vector::from_points(&[origin, origin + vec1, origin + vec2]);
+        ScreenRegion::from_min_size(origin, bounding)
     }
 }
-
-defhandlers! { Triangle {} }
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Line {
@@ -150,36 +70,11 @@ pub struct Line {
     pub stroke: Stroke,
 }
 
-#[typetag::serde]
-impl Node for Line {
-    fn type_name(&self) -> String {
-        "Line".into()
-    }
-
-    fn draw(&self, ctx: DrawContext) -> DrawResult {
-        let start = ctx.constraints.pos.to_top_left(self.span);
+impl Line {
+    /// Paint the line from `start` to `start + span`.
+    pub fn paint(&self, painter: &Painter, start: ScreenPos) -> ScreenRegion {
         let end = start + self.span;
-
-        let fits = ctx.constraints.fits(self.span);
-        if !fits {
-            return if ctx.constraints.wrap.can_retry_on_newline() {
-                DrawResult::Wrap {
-                    region: None,
-                    continuation: 0,
-                }
-            } else {
-                DrawResult::Complete { region: None }
-            };
-        }
-
-        ctx.ui
-            .painter()
-            .line(vec![start.into(), end.into()], self.stroke);
-
-        DrawResult::Complete {
-            region: Some(ScreenRegion::from_min_max(start, end)),
-        }
+        painter.line(vec![start.into(), end.into()], self.stroke);
+        ScreenRegion::from_min_max(start, end)
     }
 }
-
-defhandlers! { Line {} }

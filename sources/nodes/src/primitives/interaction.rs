@@ -23,6 +23,16 @@ struct LastFrameInteractions {
 }
 
 impl InteractionBox {
+    /// A sensor configured to sense the given gesture kinds.
+    pub fn sensing(hover: bool, clicks: bool, drags: bool) -> Self {
+        Self {
+            senses_hover: hover,
+            senses_clicks: clicks,
+            senses_drags: drags,
+            cache: Transient::default(),
+        }
+    }
+
     fn to_sense(&self) -> Sense {
         let hover = if self.senses_hover {
             Sense::HOVER

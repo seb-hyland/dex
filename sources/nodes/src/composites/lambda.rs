@@ -4,9 +4,7 @@ use egui::{Color32, Stroke};
 use serde::{Deserialize, Serialize};
 use utils::{Reset, Transient};
 
-use crate::layouts::LayoutChild;
-use crate::layouts::horizontal::HorizontalLayout;
-use crate::layouts::vertical::VerticalLayout;
+use crate::layouts::horizontal_layout;
 use crate::primitives::shapes::Line;
 use crate::primitives::text::{CodeEditor, LabelEditable};
 use crate::resolve_center_origin;
@@ -69,49 +67,26 @@ impl Node for LambdaArg {
 
         let avail_w = ctx.constraints.x.map(|a| a.provided_value());
         let avail_h = ctx.constraints.y.map(|a| a.provided_value());
+        let should_clip = ctx.constraints.should_clip;
 
         let origin = resolve_center_origin(&mut ctx, &self.last_size, Vector::splat(50.0));
 
-        // Draw the label at the left
-        let label_constraints = DrawConstraints {
-            pos: PositionConstraint::TopLeft(origin),
-            x: avail_w.map(AxisConstraint::AtMost),
-            y: avail_h.map(AxisConstraint::AtMost),
-            wrap: WrapConstraints::NotAllowed,
-            should_clip: ctx.constraints.should_clip,
-        };
-        let label_region = ctx
-            .draw_workspace_node(self.label.erase(), label_constraints)
-            .and_then(|r| r.region());
-        let label_size = label_region
-            .map(|r| r.size())
-            .unwrap_or(Vector { x: 0.0, y: 0.0 });
-
-        // Draw the parameter name after a small gap
-        let param_origin = origin
-            + Vector {
-                x: label_size.x + ARG_LABEL_GAP,
-                y: 0.0,
-            };
-        let param_constraints = DrawConstraints {
-            pos: PositionConstraint::TopLeft(param_origin),
-            x: avail_w.map(|w| AxisConstraint::AtMost((w - label_size.x - ARG_LABEL_GAP).max(0.0))),
-            y: avail_h.map(AxisConstraint::AtMost),
-            wrap: WrapConstraints::NotAllowed,
-            should_clip: ctx.constraints.should_clip,
-        };
-        let param_region = ctx
-            .draw_workspace_node(self.param_name, param_constraints)
-            .and_then(|r| r.region());
-
-        // The occupied region is the union of both drawn pieces
-        let mut region = ScreenRegion::from_min_size(origin, Vector { x: 0.0, y: 0.0 });
-        if let Some(l) = label_region {
-            region = region.union(l);
-        }
-        if let Some(p) = param_region {
-            region = region.union(p);
-        }
+        // `label` then `param_name`, laid out in a row.
+        let region = horizontal_layout(
+            &mut ctx,
+            &[self.label.erase(), self.param_name.erase()],
+            ARG_LABEL_GAP,
+            false,
+            DrawConstraints {
+                pos: PositionConstraint::TopLeft(origin),
+                x: avail_w.map(AxisConstraint::AtMost),
+                y: avail_h.map(AxisConstraint::AtMost),
+                wrap: WrapConstraints::NotAllowed,
+                should_clip,
+            },
+        )
+        .region()
+        .unwrap_or_else(|| ScreenRegion::from_min_size(origin, Vector { x: 0.0, y: 0.0 }));
 
         self.last_size.set(region.size());
 
@@ -136,11 +111,13 @@ impl Node for Lambda {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        /// Vertical gap between args, dividing line, editor
+        /// Vertical gap between the args row, dividing line, and editor
         const SECTION_GAP: f32 = 6.0;
         /// Thickness of the dividing line
         const DIVIDER_THICKNESS: f32 = 1.0;
-        /// Fallback width for the dividing line when the available width is unbounded
+        /// Horizontal gap between arguments
+        const ARG_GAP: f32 = 2.0;
+        /// Fallback width when the available width is unbounded
         const FALLBACK_WIDTH: f32 = 400.0;
 
         let constraints = ctx.constraints;
@@ -148,42 +125,87 @@ impl Node for Lambda {
             .x
             .map(|a| a.provided_value())
             .unwrap_or(f32::INFINITY);
+        let avail_h = constraints.y.map(|a| a.provided_value());
         let divider_w = if avail_w.is_finite() {
             avail_w
         } else {
             FALLBACK_WIDTH
         };
+        let should_clip = constraints.should_clip;
 
-        // Vertical stack of the args, dividing line, code editor
-        let body = VerticalLayout::new(
-            vec![
-                LayoutChild::local(HorizontalLayout::new(
-                    self.args
-                        .iter()
-                        .copied()
-                        .map(NodeUid::erase)
-                        .map(LayoutChild::Workspace)
-                        .collect(),
-                    true,
-                    2.0,
-                )),
-                LayoutChild::local(Line {
-                    span: Vector {
-                        x: divider_w,
-                        y: 0.0,
-                    },
-                    stroke: Stroke::new(DIVIDER_THICKNESS, Color32::GRAY),
-                }),
-                LayoutChild::Workspace(self.editor.erase()),
-            ],
-            SECTION_GAP,
+        let origin = constraints.pos.to_top_left(Vector {
+            x: divider_w,
+            y: avail_h.unwrap_or(0.0),
+        });
+
+        // Row of arguments.
+        let args: Vec<_> = self.args.iter().map(|a| a.erase()).collect();
+        let row_h = horizontal_layout(
+            &mut ctx,
+            &args,
+            ARG_GAP,
+            true,
+            DrawConstraints {
+                pos: PositionConstraint::TopLeft(origin),
+                x: Some(AxisConstraint::AtMost(divider_w)),
+                y: avail_h.map(AxisConstraint::AtMost),
+                wrap: WrapConstraints::NotAllowed,
+                should_clip,
+            },
+        )
+        .region()
+        .map(|r| r.size().y)
+        .unwrap_or(0.0);
+
+        // Dividing line beneath the argument row (a paint primitive).
+        let divider_y = origin.y + row_h + SECTION_GAP;
+        Line {
+            span: Vector {
+                x: divider_w,
+                y: 0.0,
+            },
+            stroke: Stroke::new(DIVIDER_THICKNESS, Color32::GRAY),
+        }
+        .paint(
+            ctx.ui.painter(),
+            ScreenPos {
+                x: origin.x,
+                y: divider_y,
+            },
         );
 
-        ctx.draw_node(
-            &body,
-            NodeUid::new_local(ctx.node.id, "lambda body"),
-            constraints,
-        )
+        // Code editor below the divider.
+        let editor_y = divider_y + SECTION_GAP;
+        let editor_region = ctx
+            .draw_workspace_node(
+                self.editor,
+                DrawConstraints {
+                    pos: PositionConstraint::TopLeft(ScreenPos {
+                        x: origin.x,
+                        y: editor_y,
+                    }),
+                    x: Some(AxisConstraint::Exactly(divider_w)),
+                    y: avail_h.map(|h| AxisConstraint::AtMost((origin.y + h - editor_y).max(0.0))),
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip,
+                },
+            )
+            .and_then(|r| r.region());
+
+        let mut region = ScreenRegion::from_min_size(
+            origin,
+            Vector {
+                x: divider_w,
+                y: divider_y - origin.y,
+            },
+        );
+        if let Some(er) = editor_region {
+            region = region.union(er);
+        }
+
+        DrawResult::Complete {
+            region: Some(region),
+        }
     }
 }
 

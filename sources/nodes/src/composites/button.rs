@@ -3,42 +3,49 @@ use egui::{Color32, Stroke};
 use serde::{Deserialize, Serialize};
 use utils::{Reset, Transient};
 
-use crate::primitives::interaction::{InteractionBox, WasClicked};
+use crate::primitives::interaction::InteractionBox;
 use crate::primitives::shapes::Rect;
 use crate::primitives::text::Label;
 use crate::resolve_center_origin;
 
-#[derive(Clone, Serialize, Deserialize)]
+/// A clickable button. Send it [`WasClicked`](crate::primitives::interaction::WasClicked) to poll it.
+#[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Button {
     pub label: Label,
-    pub onclick_action: Action,
 
     /// Space between the label and the surrounding border on every side
     pub padding: f32,
     pub corner_radius: f32,
     pub fill_color: Color32,
     pub border: Stroke,
+    interaction: NodeUid<InteractionBox>,
     last_size: Transient<Vector>,
-
-    /// Click sensor covering the whole button
-    interaction: InteractionBox,
 }
 
 impl Button {
-    pub fn new(label: Label, action: Action) -> Self {
-        let mut interaction = InteractionBox::default();
-        interaction.senses_clicks = true;
+    /// Build a button and return its id.
+    pub fn build(ws: &Workspace, label: Label) -> NodeUid<Button> {
+        Self::build_with(ws, label, |_| {})
+    }
 
-        Self {
+    /// Like [`Button::build`], but `configure` may adjust the visual style before the button is inserted.
+    pub fn build_with(
+        ws: &Workspace,
+        label: Label,
+        configure: impl FnOnce(&mut Self),
+    ) -> NodeUid<Button> {
+        let interaction = ws.insert_node(Box::new(InteractionBox::sensing(false, true, false)));
+        let mut button = Self {
             label,
-            onclick_action: action,
             padding: 4.0,
             corner_radius: 0.0,
             fill_color: Color32::TRANSPARENT,
             border: Stroke::new(1.0, Color32::GRAY),
             interaction,
             last_size: Transient::default(),
-        }
+        };
+        configure(&mut button);
+        ws.insert_node(Box::new(button))
     }
 }
 
@@ -63,11 +70,7 @@ impl Node for Button {
             wrap: ctx.constraints.wrap,
             should_clip: ctx.constraints.should_clip,
         };
-        let label_result = ctx.draw_node(
-            &self.label,
-            NodeUid::new_local(ctx.node.id, "button label"),
-            label_constraints,
-        );
+        let label_result = self.label.paint(&mut ctx, label_constraints);
         // If the label couldn't fit and requested a new line, pass that request up.
         if let DrawResult::Wrap { continuation, .. } = label_result {
             return DrawResult::Wrap {
@@ -84,13 +87,6 @@ impl Node for Button {
             x: label_size.x + 2.0 * padding,
             y: label_size.y + 2.0 * padding,
         };
-        let box_constraints = DrawConstraints {
-            pos: PositionConstraint::TopLeft(origin),
-            x: Some(AxisConstraint::Exactly(button_size.x)),
-            y: Some(AxisConstraint::Exactly(button_size.y)),
-            wrap: WrapConstraints::NotAllowed,
-            should_clip: ctx.constraints.should_clip,
-        };
 
         let border = Rect {
             size: button_size,
@@ -98,26 +94,18 @@ impl Node for Button {
             fill_color: self.fill_color,
             border: self.border,
         };
-        ctx.draw_node(
-            &border,
-            NodeUid::new_local(ctx.node.id, "button border"),
-            box_constraints,
-        );
+        border.paint(ctx.ui.painter(), origin);
 
-        ctx.draw_node(
-            &self.interaction,
-            NodeUid::new_local(ctx.node.id, "button interaction"),
-            box_constraints,
+        ctx.draw_workspace_node(
+            self.interaction,
+            DrawConstraints {
+                pos: PositionConstraint::TopLeft(origin),
+                x: Some(AxisConstraint::Exactly(button_size.x)),
+                y: Some(AxisConstraint::Exactly(button_size.y)),
+                wrap: WrapConstraints::NotAllowed,
+                should_clip: ctx.constraints.should_clip,
+            },
         );
-        let clicked = self
-            .interaction
-            .request(WasClicked, ctx.node)
-            .unwrap_or(false);
-        if clicked {
-            ctx.node
-                .workspace
-                .submit_action_dyn(self.onclick_action.clone());
-        }
 
         self.last_size.set(button_size);
 
@@ -125,13 +113,14 @@ impl Node for Button {
             region: Some(ScreenRegion::from_min_size(origin, button_size)),
         }
     }
-}
 
-impl Reset for Button {
-    fn reset(&self) {
-        self.label.reset();
-        self.interaction.reset();
-        self.last_size.reset();
+    fn deref_target(&self) -> Option<NodeUid> {
+        // Polling messages fall through to the click sensor.
+        Some(self.interaction.erase())
+    }
+
+    fn on_delete(&self, ctx: NodeContext) {
+        ctx.workspace.delete_node(self.interaction.erase());
     }
 }
 

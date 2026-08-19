@@ -17,6 +17,7 @@ use crate::primitives::{
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct HorizontalDnD {
     children: Vec<NodeUid>,
+    sensors: Vec<NodeUid<InteractionBox>>,
     pub spacing: f32,
 
     /// Cached draw sizes from last frame
@@ -34,14 +35,20 @@ struct PendingReorder {
 }
 
 impl HorizontalDnD {
-    pub fn new(children: Vec<NodeUid>, spacing: f32) -> Self {
-        Self {
+    /// Build the container into `ws`, minting one drag sensor per child.
+    pub fn build(ws: &Workspace, children: Vec<NodeUid>, spacing: f32) -> NodeUid<HorizontalDnD> {
+        let sensors = children
+            .iter()
+            .map(|_| ws.insert_node(Box::new(InteractionBox::sensing(false, false, true))))
+            .collect();
+        ws.insert_node(Box::new(Self {
             children,
+            sensors,
             spacing,
             sizes: Transient::default(),
             pending: Transient::default(),
             last_size: Transient::default(),
-        }
+        }))
     }
 }
 
@@ -72,8 +79,6 @@ impl Node for HorizontalDnD {
         };
 
         let n = self.children.len();
-        let node_id = ctx.node.id;
-        let sensor_uid = |idx: usize| NodeUid::new_local(node_id, ("dnd drag", idx));
 
         // Render from the pending drag ----------------------------------------
         let pending = *self.pending.val();
@@ -122,12 +127,11 @@ impl Node for HorizontalDnD {
                 };
 
             // Drag sensor under child
-            if let Some(size) = last_sizes.as_ref().and_then(|s| s.get(idx).copied()) {
-                let mut sensor = InteractionBox::default();
-                sensor.senses_drags = true;
-                ctx.draw_node(
-                    &sensor,
-                    sensor_uid(idx),
+            if let Some(size) = last_sizes.as_ref().and_then(|s| s.get(idx).copied())
+                && let Some(&sensor) = self.sensors.get(idx)
+            {
+                ctx.draw_workspace_node(
+                    sensor,
                     DrawConstraints {
                         pos: PositionConstraint::TopLeft(child_pos),
                         x: Some(AxisConstraint::Exactly(size.x)),
@@ -136,10 +140,20 @@ impl Node for HorizontalDnD {
                         should_clip: false,
                     },
                 );
-                if let Some(pos) = sensor.request(DragPointerPos, ctx.node).flatten() {
+                if let Some(pos) = ctx
+                    .node
+                    .workspace
+                    .send_request(sensor, DragPointerPos)
+                    .flatten()
+                {
                     this_dragged = Some((idx, pos));
                 }
-                if sensor.request(WasDragReleased, ctx.node).unwrap_or(false) {
+                if ctx
+                    .node
+                    .workspace
+                    .send_request(sensor, WasDragReleased)
+                    .unwrap_or(false)
+                {
                     this_released = Some(idx);
                 }
             }
@@ -174,40 +188,23 @@ impl Node for HorizontalDnD {
             && let Some(region) = slot_rect[p.from]
         {
             let size = region.size();
-            let highlight = Rect {
+            Rect {
                 size,
                 corner_radius: 4.0,
                 fill_color: Color32::from_rgba_unmultiplied(70, 130, 180, 28),
                 border: Stroke::NONE,
-            };
-            ctx.draw_node(
-                &highlight,
-                NodeUid::new_local(node_id, "drag highlight"),
-                DrawConstraints {
-                    pos: PositionConstraint::TopLeft(region.min),
-                    x: Some(AxisConstraint::Exactly(size.x)),
-                    y: Some(AxisConstraint::Exactly(size.y)),
-                    wrap: WrapConstraints::NotAllowed,
-                    should_clip: false,
-                },
-            );
+            }
+            .paint(ctx.ui.painter(), region.min);
 
-            let insertion = Line {
+            Line {
                 span: Vector { x: 0.0, y: max_h },
                 stroke: Stroke::new(2.0, Color32::from_gray(120)),
-            };
-            ctx.draw_node(
-                &insertion,
-                NodeUid::new_local(node_id, "insertion line"),
-                DrawConstraints {
-                    pos: PositionConstraint::TopLeft(ScreenPos {
-                        x: region.min.x - self.spacing * 0.5,
-                        y: origin.y,
-                    }),
-                    x: None,
-                    y: None,
-                    wrap: WrapConstraints::NotAllowed,
-                    should_clip: false,
+            }
+            .paint(
+                ctx.ui.painter(),
+                ScreenPos {
+                    x: region.min.x - self.spacing * 0.5,
+                    y: origin.y,
                 },
             );
         }
@@ -244,15 +241,31 @@ impl Node for HorizontalDnD {
             region: Some(ScreenRegion::from_min_size(origin, size)),
         }
     }
+
+    fn on_delete(&self, ctx: NodeContext) {
+        for child in &self.children {
+            ctx.workspace.delete_node(*child);
+        }
+        for sensor in &self.sensors {
+            ctx.workspace.delete_node(sensor.erase());
+        }
+    }
 }
 
 defhandlers! { HorizontalDnD {
     actions: [
-        AddChild { child: NodeUid } => (this, a) {
+        AddChild { child: NodeUid } => (this, a, ctx) {
             this.children.push(a.child);
+            // Mint a matching slot sensor.
+            let sensor = ctx.workspace.insert_node(Box::new(InteractionBox::sensing(false, false, true)));
+            this.sensors.push(sensor);
         },
-        RemoveChild { child: NodeUid } => (this, a) {
-            this.children.retain(|c| *c != a.child);
+        RemoveChild { child: NodeUid } => (this, a, ctx) {
+            if let Some(pos) = this.children.iter().position(|c| *c == a.child) {
+                this.children.remove(pos);
+                let sensor = this.sensors.remove(pos);
+                ctx.workspace.delete_node(sensor.erase());
+            }
         },
         Reorder { from: usize, to: usize } => (this, s) {
             if s.from < this.children.len() && s.to < this.children.len() {

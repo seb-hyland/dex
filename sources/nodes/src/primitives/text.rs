@@ -7,6 +7,7 @@ use egui_code_editor::{CodeEditor as CodeEditorWidget, ColorTheme, DEFAULT_THEME
 use serde::{Deserialize, Serialize};
 use utils::{Reset, Transient};
 
+/// A *draw instruction* for a run of text.
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Label {
     pub text: String,
@@ -25,17 +26,11 @@ impl Label {
             color: Color32::BLACK,
         }
     }
-}
 
-#[typetag::serde]
-impl Node for Label {
-    fn type_name(&self) -> String {
-        "Text Label".into()
-    }
-
-    fn draw(&self, ctx: DrawContext) -> DrawResult {
+    /// Paint the label, returning the occupied region (and a wrap continuation if the text must reflow).
+    pub fn paint(&self, ctx: &mut DrawContext, constraints: DrawConstraints) -> DrawResult {
         // A continuation is a char offset
-        let start = if let WrapConstraints::CanRequest { continuation, .. } = ctx.constraints.wrap
+        let start = if let WrapConstraints::CanRequest { continuation, .. } = constraints.wrap
             && let Some(cont) = continuation
         {
             cont as usize
@@ -48,21 +43,20 @@ impl Node for Label {
             return DrawResult::Complete { region: None };
         }
 
-        let avail_w = ctx.constraints.x.map(|a| a.provided_value());
-        let avail_h = ctx.constraints.y.map(|a| a.provided_value());
+        let avail_w = constraints.x.map(|a| a.provided_value());
+        let avail_h = constraints.y.map(|a| a.provided_value());
 
         if self.singleline {
-            self.draw_singleline(ctx, &remaining, avail_w)
+            self.draw_singleline(ctx, &constraints, &remaining, avail_w)
         } else {
-            self.draw_multiline(ctx, &remaining, start, avail_w, avail_h)
+            self.draw_multiline(ctx, &constraints, &remaining, start, avail_w, avail_h)
         }
     }
-}
 
-impl Label {
     fn draw_singleline(
         &self,
-        ctx: DrawContext,
+        ctx: &mut DrawContext,
+        constraints: &DrawConstraints,
         remaining: &str,
         avail_w: Option<f32>,
     ) -> DrawResult {
@@ -73,8 +67,7 @@ impl Label {
         let fits = avail_w.is_none_or(|w| galley.rect.width() <= w);
         if fits {
             // We can render here normally!
-            let origin: Pos2 = ctx
-                .constraints
+            let origin: Pos2 = constraints
                 .pos
                 .to_top_left(galley.rect.size().into())
                 .into();
@@ -84,7 +77,7 @@ impl Label {
             };
         }
 
-        if ctx.constraints.wrap.can_retry_on_newline() {
+        if constraints.wrap.can_retry_on_newline() {
             // Request to draw on a new line
             return DrawResult::Wrap {
                 region: None,
@@ -97,8 +90,7 @@ impl Label {
         job.wrap = TextWrapping::truncate_at_width(w);
         let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job));
 
-        let origin: Pos2 = ctx
-            .constraints
+        let origin: Pos2 = constraints
             .pos
             .to_top_left(galley.rect.size().into())
             .into();
@@ -110,7 +102,8 @@ impl Label {
 
     fn draw_multiline(
         &self,
-        ctx: DrawContext,
+        ctx: &mut DrawContext,
+        constraints: &DrawConstraints,
         remaining: &str,
         start: usize,
         avail_w: Option<f32>,
@@ -118,7 +111,7 @@ impl Label {
     ) -> DrawResult {
         let width = avail_w.unwrap_or(f32::INFINITY);
         let height = avail_h.unwrap_or(f32::INFINITY);
-        let wrap_constraints = ctx.constraints.wrap;
+        let wrap_constraints = constraints.wrap;
 
         let job = LayoutJob::simple(remaining.to_owned(), self.font.clone(), self.color, width);
         let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job));
@@ -157,11 +150,7 @@ impl Label {
         let local_rect = galley.rows[..num_rows_to_layout]
             .iter()
             .fold(Rect::NOTHING, |acc, pr| acc.union(pr.rect()));
-        let origin: Pos2 = ctx
-            .constraints
-            .pos
-            .to_top_left(local_rect.size().into())
-            .into();
+        let origin: Pos2 = constraints.pos.to_top_left(local_rect.size().into()).into();
 
         let mut clip_rect = ctx.ui.clip_rect();
         clip_rect.max.y = clip_rect.max.y.min(origin.y + local_rect.max.y);
@@ -193,8 +182,6 @@ impl Label {
         }
     }
 }
-
-defhandlers! { Label {} }
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct LabelEditable {

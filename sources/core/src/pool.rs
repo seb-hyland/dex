@@ -1,6 +1,6 @@
 use std::{
     fmt,
-    hash::{DefaultHasher, Hash, Hasher},
+    hash::{Hash, Hasher},
     marker::PhantomData,
 };
 
@@ -36,17 +36,6 @@ impl<T: ?Sized> NodeUid<T> {
     pub fn nil() -> Self {
         Self {
             id: Uuid::nil(),
-            _marker: PhantomData,
-        }
-    }
-
-    /// A stable, deterministic id for a parent-owned node, derived from the `parent` id and a stable ident.
-    pub fn new_local(parent: NodeUid, ident: impl Hash) -> Self {
-        let mut hasher = DefaultHasher::new();
-        ident.hash(&mut hasher);
-        let name = hasher.finish().to_le_bytes();
-        Self {
-            id: Uuid::new_v5(&parent.id, &name),
             _marker: PhantomData,
         }
     }

@@ -14,29 +14,24 @@ impl Node for CanvasRect {
         "Canvas Rect".into()
     }
 
-    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        let mut inner_draw_res = || -> Option<DrawResult> {
-            let x_size = ctx.constraints.x?.provided_value();
-            let y_size = ctx.constraints.y?.provided_value();
-            let draw_rect = shapes::Rect {
-                size: Vector {
-                    x: x_size,
-                    y: y_size,
-                },
-                border: Stroke::NONE,
-                corner_radius: 5.0,
-                fill_color: Color32::RED,
-            };
-
-            Some(ctx.draw_node(
-                &draw_rect,
-                NodeUid::new_local(ctx.node.id, "inner rect"),
-                ctx.constraints,
-            ))
+    fn draw(&self, ctx: DrawContext) -> DrawResult {
+        let (Some(x), Some(y)) = (ctx.constraints.x, ctx.constraints.y) else {
+            return DrawResult::Complete { region: None };
         };
-        match inner_draw_res() {
-            Some(res) => res,
-            None => DrawResult::Complete { region: None },
+        let size = Vector {
+            x: x.provided_value(),
+            y: y.provided_value(),
+        };
+        let origin = ctx.constraints.pos.to_top_left(size);
+        let region = shapes::Rect {
+            size,
+            border: Stroke::NONE,
+            corner_radius: 5.0,
+            fill_color: Color32::RED,
+        }
+        .paint(ctx.ui.painter(), origin);
+        DrawResult::Complete {
+            region: Some(region),
         }
     }
 }
@@ -52,25 +47,23 @@ impl Node for CanvasCircle {
         "Canvas Circle".into()
     }
 
-    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        let mut inner_draw_res = || -> Option<DrawResult> {
-            let x_size = ctx.constraints.x?.provided_value();
-            let y_size = ctx.constraints.y?.provided_value();
-            let draw_circle = shapes::Circle {
-                radius: x_size.min(y_size) / 2.0,
-                border: Stroke::NONE,
-                fill_color: Color32::RED,
-            };
-
-            Some(ctx.draw_node(
-                &draw_circle,
-                NodeUid::new_local(ctx.node.id, "inner Circle"),
-                ctx.constraints,
-            ))
+    fn draw(&self, ctx: DrawContext) -> DrawResult {
+        let (Some(x), Some(y)) = (ctx.constraints.x, ctx.constraints.y) else {
+            return DrawResult::Complete { region: None };
         };
-        match inner_draw_res() {
-            Some(res) => res,
-            None => DrawResult::Complete { region: None },
+        let size = Vector {
+            x: x.provided_value(),
+            y: y.provided_value(),
+        };
+        let center = ctx.constraints.pos.to_center(size);
+        let region = shapes::Circle {
+            radius: size.x.min(size.y) / 2.0,
+            border: Stroke::NONE,
+            fill_color: Color32::RED,
+        }
+        .paint(ctx.ui.painter(), center);
+        DrawResult::Complete {
+            region: Some(region),
         }
     }
 }

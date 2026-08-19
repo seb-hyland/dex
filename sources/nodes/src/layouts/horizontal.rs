@@ -1,133 +1,164 @@
 use dex_core::prelude::*;
-use serde::{Deserialize, Serialize};
-use utils::{Reset, Transient};
 
-use crate::layouts::LayoutChild;
-use crate::resolve_center_origin;
+/**
+    Lay out `children` left-to-right, separated by `spacing`.
+    When `allow_wrap` is set, wrap onto new rows.
+*/
+pub fn horizontal_layout(
+    ctx: &mut DrawContext,
+    children: &[NodeUid],
+    spacing: f32,
+    allow_wrap: bool,
+    constraints: DrawConstraints,
+) -> DrawResult {
+    let avail_w = constraints
+        .x
+        .map(|x_ax| x_ax.provided_value())
+        .unwrap_or(f32::INFINITY);
+    let avail_h = constraints
+        .y
+        .map(|y_ax| y_ax.provided_value())
+        .unwrap_or(f32::INFINITY);
+    let should_clip = constraints.should_clip;
 
-#[derive(Clone, Reset, Serialize, Deserialize)]
-pub struct HorizontalLayout {
-    pub children: Vec<LayoutChild>,
-    pub allow_wrap: bool,
-    pub wrap_spacing: f32,
-    last_size: Transient<Vector>,
-}
+    let origin = constraints.pos.to_top_left(Vector::splat(0.0));
 
-impl HorizontalLayout {
-    pub fn new(children: Vec<LayoutChild>, allow_wrap: bool, wrap_spacing: f32) -> Self {
-        Self {
-            children,
-            allow_wrap,
-            wrap_spacing,
-            last_size: Transient::default(),
+    let mut cur_line_width = 0.0;
+    let mut cur_line_highest_element = 0.0;
+    let mut consumed_height = 0.0;
+    let mut max_line_width = 0.0;
+
+    /**
+       Starts a new horizontal line.
+       ## Returns
+       - `true` if all space has been consumed and the caller should return
+       - `false` otherwise
+    */
+    #[must_use]
+    fn start_newline_still_has_space(
+        cur_line_width: &mut f32,
+        cur_line_highest_element: &mut f32,
+        cur_used_height: &mut f32,
+        cur_max_width: &mut f32,
+        padding: f32,
+        avail_h: f32,
+        can_wrap: bool,
+    ) -> bool {
+        *cur_used_height += *cur_line_highest_element;
+        *cur_max_width = cur_max_width.max(*cur_line_width);
+        *cur_line_highest_element = 0.0;
+        *cur_line_width = 0.0;
+
+        if !can_wrap {
+            // Cannot start new lines, must return
+            true
+        } else if *cur_used_height >= avail_h {
+            // No more space
+            true
+        } else {
+            // Can start newline!
+            *cur_used_height += padding;
+            false
         }
     }
-}
 
-#[typetag::serde]
-impl Node for HorizontalLayout {
-    fn type_name(&self) -> String {
-        "Horizontal Layout".into()
+    let compute_draw_res = |origin: ScreenPos, width: f32, height: f32| -> DrawResult {
+        DrawResult::Complete {
+            region: Some(ScreenRegion::from_min_size(
+                origin,
+                Vector {
+                    x: width,
+                    y: height,
+                },
+            )),
+        }
+    };
+
+    fn update_cursors(
+        maybe_new_region: Option<ScreenRegion>,
+        cur_line_width: &mut f32,
+        cur_line_highest_element: &mut f32,
+    ) {
+        let Some(new_region) = maybe_new_region else {
+            return;
+        };
+        let consumed_size = new_region.size();
+        *cur_line_width += consumed_size.x;
+        *cur_line_highest_element = cur_line_highest_element.max(consumed_size.y);
     }
 
-    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        let avail_w = ctx
-            .constraints
-            .x
-            .map(|x_ax| x_ax.provided_value())
-            .unwrap_or(f32::INFINITY);
-        let avail_h = ctx
-            .constraints
-            .y
-            .map(|y_ax| y_ax.provided_value())
-            .unwrap_or(f32::INFINITY);
+    for child in children.iter().copied() {
+        if avail_w - cur_line_width <= 0.0 {
+            // No space left in line
+            if start_newline_still_has_space(
+                &mut cur_line_width,
+                &mut cur_line_highest_element,
+                &mut consumed_height,
+                &mut max_line_width,
+                spacing,
+                avail_h,
+                allow_wrap,
+            ) {
+                // No space left at all
+                return compute_draw_res(origin, max_line_width, consumed_height);
+            }
+        }
 
-        let origin = resolve_center_origin(&mut ctx, &self.last_size, Vector::splat(300.0));
+        // Gap before every item but the first on its line.
+        if cur_line_width > 0.0 {
+            cur_line_width += spacing;
+        }
 
-        let mut cur_line_width = 0.0;
-        let mut cur_line_highest_element = 0.0;
-        let mut consumed_height = 0.0;
-        let mut max_line_width = 0.0;
-
-        /**
-           Starts a new horizontal line.
-           ## Returns
-           - `true` if all space has been consumed and the caller should return
-           - `false` otherwise
-        */
-        #[must_use]
-        fn start_newline_still_has_space(
-            cur_line_width: &mut f32,
-            cur_line_highest_element: &mut f32,
-            cur_used_height: &mut f32,
-            cur_max_width: &mut f32,
-            padding: f32,
-            avail_h: f32,
-            can_wrap: bool,
-        ) -> bool {
-            *cur_used_height += *cur_line_highest_element;
-            *cur_max_width = cur_max_width.max(*cur_line_width);
-            *cur_line_highest_element = 0.0;
-            *cur_line_width = 0.0;
-
-            if !can_wrap {
-                // Cannot start new lines, must return
-                true
-            } else {
-                if *cur_used_height >= avail_h {
-                    // No more space
-                    true
-                } else {
-                    // Can start newline!
-                    *cur_used_height += padding;
-                    false
+        let child_constraints = DrawConstraints {
+            pos: PositionConstraint::TopLeft(
+                origin
+                    + Vector {
+                        x: cur_line_width,
+                        y: consumed_height,
+                    },
+            ),
+            x: Some(AxisConstraint::AtMost(avail_w - cur_line_width)),
+            y: Some(AxisConstraint::AtMost(avail_h - consumed_height)),
+            wrap: if allow_wrap {
+                WrapConstraints::CanRequest {
+                    at_start_of_line: cur_line_width == 0.0,
+                    continuation: None,
                 }
-            }
-        }
-
-        let compute_draw_res = |origin: ScreenPos, width: f32, height: f32| -> DrawResult {
-            let size = Vector {
-                x: width,
-                y: height,
-            };
-            self.last_size.set(size);
-            DrawResult::Complete {
-                region: Some(ScreenRegion::from_min_size(origin, size)),
-            }
+            } else {
+                WrapConstraints::NotAllowed
+            },
+            should_clip,
+        };
+        let Some(mut child_draw_res) = ctx.draw_workspace_node(child, child_constraints) else {
+            // This child no longer exists
+            // TODO: delete it
+            continue;
         };
 
-        fn update_cursors(
-            maybe_new_region: Option<ScreenRegion>,
-            cur_line_width: &mut f32,
-            cur_line_highest_element: &mut f32,
-        ) {
-            let Some(new_region) = maybe_new_region else {
-                return;
-            };
-            let consumed_size = new_region.size();
-            *cur_line_width += consumed_size.x;
-            *cur_line_highest_element = cur_line_highest_element.max(consumed_size.y);
-        }
+        let maybe_region = child_draw_res.region();
+        update_cursors(
+            maybe_region,
+            &mut cur_line_width,
+            &mut cur_line_highest_element,
+        );
 
-        for (idx, child) in self.children.iter().enumerate() {
-            let local_id = NodeUid::new_local(ctx.node.id, idx);
-            if avail_w - cur_line_width <= 0.0 {
-                // No space left in line
-                if start_newline_still_has_space(
-                    &mut cur_line_width,
-                    &mut cur_line_highest_element,
-                    &mut consumed_height,
-                    &mut max_line_width,
-                    self.wrap_spacing,
-                    avail_h,
-                    self.allow_wrap,
-                ) {
-                    // No space left at all
-                    return compute_draw_res(origin, max_line_width, consumed_height);
-                }
+        while allow_wrap && let DrawResult::Wrap { continuation, .. } = child_draw_res {
+            // Need to draw again on a new line
+
+            if start_newline_still_has_space(
+                &mut cur_line_width,
+                &mut cur_line_highest_element,
+                &mut consumed_height,
+                &mut max_line_width,
+                spacing,
+                avail_h,
+                allow_wrap,
+            ) {
+                // No space left at all
+                return compute_draw_res(origin, max_line_width, consumed_height);
             }
 
-            let constraints = DrawConstraints {
+            let child_constraints = DrawConstraints {
                 pos: PositionConstraint::TopLeft(
                     origin
                         + Vector {
@@ -137,85 +168,31 @@ impl Node for HorizontalLayout {
                 ),
                 x: Some(AxisConstraint::AtMost(avail_w - cur_line_width)),
                 y: Some(AxisConstraint::AtMost(avail_h - consumed_height)),
-                wrap: if self.allow_wrap {
-                    WrapConstraints::CanRequest {
-                        at_start_of_line: cur_line_width == 0.0,
-                        continuation: None,
-                    }
-                } else {
-                    WrapConstraints::NotAllowed
+                wrap: WrapConstraints::CanRequest {
+                    at_start_of_line: true,
+                    continuation: Some(continuation),
                 },
-                should_clip: ctx.constraints.should_clip,
+                should_clip,
             };
-            let Some(mut child_draw_res) = child.draw(&mut ctx, local_id, constraints) else {
-                // This child no longer exists
-                // TODO: delete it
-                continue;
-            };
+            let child_continuation_draw_res = ctx
+                .draw_workspace_node(child, child_constraints)
+                .expect("Child should not be deleted mid-draw");
 
-            let maybe_region = child_draw_res.region();
+            let maybe_region = child_continuation_draw_res.region();
             update_cursors(
                 maybe_region,
                 &mut cur_line_width,
                 &mut cur_line_highest_element,
             );
 
-            while self.allow_wrap
-                && let DrawResult::Wrap { continuation, .. } = child_draw_res
-            {
-                // Need to draw again on a new line
-
-                if start_newline_still_has_space(
-                    &mut cur_line_width,
-                    &mut cur_line_highest_element,
-                    &mut consumed_height,
-                    &mut max_line_width,
-                    self.wrap_spacing,
-                    avail_h,
-                    self.allow_wrap,
-                ) {
-                    // No space left at all
-                    return compute_draw_res(origin, max_line_width, consumed_height);
-                }
-
-                let constraints = DrawConstraints {
-                    pos: PositionConstraint::TopLeft(
-                        origin
-                            + Vector {
-                                x: cur_line_width,
-                                y: consumed_height,
-                            },
-                    ),
-                    x: Some(AxisConstraint::AtMost(avail_w - cur_line_width)),
-                    y: Some(AxisConstraint::AtMost(avail_h - consumed_height)),
-                    wrap: WrapConstraints::CanRequest {
-                        at_start_of_line: true,
-                        continuation: Some(continuation),
-                    },
-                    should_clip: ctx.constraints.should_clip,
-                };
-                let child_continuation_draw_res = child
-                    .draw(&mut ctx, local_id, constraints)
-                    .expect("Child should not be deleted mid-draw");
-
-                let maybe_region = child_continuation_draw_res.region();
-                update_cursors(
-                    maybe_region,
-                    &mut cur_line_width,
-                    &mut cur_line_highest_element,
-                );
-
-                // To keep the loop going
-                child_draw_res = child_continuation_draw_res;
-            }
+            // To keep the loop going
+            child_draw_res = child_continuation_draw_res;
         }
-
-        // Final update pass on cursors
-        consumed_height += cur_line_highest_element;
-        max_line_width = max_line_width.max(cur_line_width);
-
-        compute_draw_res(origin, max_line_width, consumed_height)
     }
-}
 
-defhandlers! { HorizontalLayout {} }
+    // Final update pass on cursors
+    consumed_height += cur_line_highest_element;
+    max_line_width = max_line_width.max(cur_line_width);
+
+    compute_draw_res(origin, max_line_width, consumed_height)
+}

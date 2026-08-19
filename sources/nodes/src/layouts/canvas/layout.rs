@@ -10,25 +10,23 @@ use crate::{
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Canvas {
     children: Vec<NodeUid<CanvasNode>>,
-    drag_interaction: Option<InteractionBox>,
+    /// Background drag sensor (a registered child) used for panning.
+    drag_interaction: NodeUid<InteractionBox>,
     screen_offset: Transient<Vector>,
 }
 
-impl Default for Canvas {
-    fn default() -> Self {
-        Self {
-            children: Vec::new(),
-            drag_interaction: Some({
-                let mut interact = InteractionBox::default();
-                interact.senses_drags = true;
-                interact
-            }),
-            screen_offset: Transient::default(),
-        }
-    }
-}
-
 impl Canvas {
+    /// Build an empty canvas into `ws`.
+    pub fn build(ws: &Workspace) -> NodeUid<Canvas> {
+        let drag_interaction =
+            ws.insert_node(Box::new(InteractionBox::sensing(false, false, true)));
+        ws.insert_node(Box::new(Self {
+            children: Vec::new(),
+            drag_interaction,
+            screen_offset: Transient::default(),
+        }))
+    }
+
     pub fn push_child(&mut self, child: NodeUid<CanvasNode>) {
         self.children.push(child);
     }
@@ -63,26 +61,24 @@ impl Node for Canvas {
         let origin = ctx.constraints.pos.to_top_left(size);
         let region = ScreenRegion::from_min_size(origin, size);
 
-        if let Some(interact) = &self.drag_interaction {
-            ctx.draw_node(
-                interact,
-                NodeUid::new_local(ctx.node.id, "background drag"),
-                DrawConstraints {
-                    pos: PositionConstraint::TopLeft(origin),
-                    x: Some(AxisConstraint::Exactly(avail_x)),
-                    y: Some(AxisConstraint::Exactly(avail_y)),
-                    wrap: WrapConstraints::NotAllowed,
-                    should_clip: true,
-                },
-            );
-
-            let drag_res = interact
-                .request(WasDragged, ctx.node)
-                .expect("Message should be understood");
-            if let Some(drag_delta) = drag_res {
-                // Update the offset
-                self.screen_offset.set(self.screen_offset() - drag_delta);
-            }
+        ctx.draw_workspace_node(
+            self.drag_interaction,
+            DrawConstraints {
+                pos: PositionConstraint::TopLeft(origin),
+                x: Some(AxisConstraint::Exactly(avail_x)),
+                y: Some(AxisConstraint::Exactly(avail_y)),
+                wrap: WrapConstraints::NotAllowed,
+                should_clip: true,
+            },
+        );
+        if let Some(drag_delta) = ctx
+            .node
+            .workspace
+            .send_request(self.drag_interaction, WasDragged)
+            .flatten()
+        {
+            // Update the offset
+            self.screen_offset.set(self.screen_offset() - drag_delta);
         }
 
         let canvas_origin = origin - self.screen_offset();
@@ -104,6 +100,13 @@ impl Node for Canvas {
             region: Some(region),
         }
     }
+
+    fn on_delete(&self, ctx: NodeContext) {
+        ctx.workspace.delete_node(self.drag_interaction.erase());
+        for child in &self.children {
+            ctx.workspace.delete_node(child.erase());
+        }
+    }
 }
 
 defhandlers! { Canvas {
@@ -114,9 +117,7 @@ defhandlers! { Canvas {
             let child_id = ctx.workspace.insert_node_dyn(a.child);
             // Place new nodes near the top-left of the current view.
             let canvas_pos = this.screen_offset() + Vector::splat(40.0);
-            let node_id = ctx
-                .workspace
-                .insert_node(Box::new(CanvasNode::new(child_id, canvas_pos, DEFAULT_CHILD_SIZE)));
+            let node_id = CanvasNode::build(ctx.workspace, child_id, canvas_pos, DEFAULT_CHILD_SIZE);
             this.children.push(node_id);
         },
     ],

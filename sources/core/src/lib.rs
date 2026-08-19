@@ -30,7 +30,7 @@ pub trait Node: RequestableDyn + ActionHandler + Reset + 'static + DynClone + Se
     fn type_name(&self) -> String;
 
     /// Given some context, draw the node on screen
-    #[deprecated = "This should never be called directly. Use `DrawContext::draw_node` or `DrawContext::draw_workspace_node` instead."]
+    #[deprecated = "This should never be called directly. Use `DrawContext::draw_workspace_node` instead."]
     // This deprecation attribute prevents direct `<instance>.draw(ctx)` calls
     fn draw(&self, ctx: DrawContext) -> DrawResult;
 

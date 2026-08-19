@@ -128,6 +128,27 @@ impl Workspace {
         self.insert_node_dyn(node).cast()
     }
 
+    /**
+        Queue node insertion with a caller-chosen id.
+        Functions similar to [`Workspace::insert_node`], but for a node whose id must be known.
+    */
+    pub fn insert_node_at<T: Node>(&self, uid: NodeUid<T>, node: Box<T>) {
+        self.submit_action_dyn(Action {
+            dest: NodeUid::nil(),
+            description: format!("Inserted node of type {}", node.type_name()).into(),
+            body: Box::new(PushWorkspaceNode {
+                node,
+                uid: uid.erase(),
+            }),
+        });
+    }
+
+    /// Drain the pending action queue now. Used after building the initial node
+    /// graph so it is live by the time this returns.
+    pub fn process_pending(&mut self) {
+        self.process_actions();
+    }
+
     pub fn insert_node_dyn(&self, node: Box<dyn Node>) -> NodeUid {
         let uid = NodeUid::new_workspace();
 
@@ -335,22 +356,5 @@ impl<'ctx> DrawContext<'ctx> {
         };
 
         Some(res)
-    }
-
-    pub fn draw_node(
-        &mut self,
-        node: &(impl Node + ?Sized),
-        id: NodeUid,
-        constraints: DrawConstraints,
-    ) -> DrawResult {
-        let workspace = self.node.workspace;
-        let temp_ctx = DrawContext {
-            node: NodeContext { id, workspace },
-            constraints,
-            ..self.reborrow()
-        };
-
-        #[allow(deprecated)] // Private call
-        node.draw(temp_ctx)
     }
 }

@@ -17,18 +17,35 @@ pub struct CanvasNode {
     pub committed: ConstraintsTuple,
     /// Uncommitted preview accumulated during interaction.
     pending: Transient<ConstraintsTuple>,
+
+    /// Hover sensor covering the node + margin.
+    proximity: NodeUid<InteractionBox>,
+    /// Drag/hover sensor for the move handle.
+    move_sensor: NodeUid<InteractionBox>,
+    /// The eight resize grips: tl, tr, bl, br, top, bottom, left, right.
+    grips: [NodeUid<InteractionBox>; 8],
 }
 
 impl CanvasNode {
-    pub fn new(child: NodeUid, canvas_pos: Vector, size: Vector) -> Self {
-        Self {
+    /// Build a canvas node (wrapping `child`) and its sensors into `ws`.
+    pub fn build(
+        ws: &Workspace,
+        child: NodeUid,
+        canvas_pos: Vector,
+        size: Vector,
+    ) -> NodeUid<CanvasNode> {
+        let sensor = |kind| ws.insert_node(Box::new(kind));
+        ws.insert_node(Box::new(Self {
             child,
             committed: ConstraintsTuple {
                 pos: canvas_pos,
                 size,
             },
             pending: Transient::default(),
-        }
+            proximity: sensor(InteractionBox::sensing(true, false, false)),
+            move_sensor: sensor(InteractionBox::sensing(true, false, true)),
+            grips: std::array::from_fn(|_| sensor(InteractionBox::sensing(false, false, true))),
+        }))
     }
 }
 
@@ -77,11 +94,8 @@ impl Node for CanvasNode {
         let near_bounds = ScreenRegion::from_min_size(display_tl, display.size).union(
             ScreenRegion::from_min_size(display_tl - handle_offset, HANDLE_SIZE),
         );
-        let mut proximity = InteractionBox::default();
-        proximity.senses_hover = true;
-        ctx.draw_node(
-            &proximity,
-            NodeUid::new_local(ctx.node.id, "proximity"),
+        ctx.draw_workspace_node(
+            self.proximity,
             DrawConstraints {
                 pos: PositionConstraint::TopLeft(
                     near_bounds.min - Vector::splat(VISIBILITY_MARGIN),
@@ -96,8 +110,10 @@ impl Node for CanvasNode {
                 should_clip: false,
             },
         );
-        let near = proximity
-            .request(ContainsPointer, ctx.node)
+        let near = ctx
+            .node
+            .workspace
+            .send_request(self.proximity, ContainsPointer)
             .unwrap_or(false)
             || self.pending.val().is_some();
 
@@ -204,12 +220,10 @@ impl Node for CanvasNode {
                     Vector { x: 1.0, y: 0.0 },
                 ),
             ];
-            for (key, local, sensor_size, size_mul) in grips {
-                let mut sensor = InteractionBox::default();
-                sensor.senses_drags = true;
-                ctx.draw_node(
-                    &sensor,
-                    NodeUid::new_local(ctx.node.id, key),
+            for (i, (_key, local, sensor_size, size_mul)) in grips.into_iter().enumerate() {
+                let grip = self.grips[i];
+                ctx.draw_workspace_node(
+                    grip,
                     DrawConstraints {
                         pos: PositionConstraint::TopLeft(display_tl + local),
                         x: Some(AxisConstraint::Exactly(sensor_size.x)),
@@ -218,18 +232,14 @@ impl Node for CanvasNode {
                         should_clip: false,
                     },
                 );
-                if let Some(delta) = sensor.request(WasDragged, ctx.node).flatten() {
+                if let Some(delta) = ctx.node.workspace.send_request(grip, WasDragged).flatten() {
                     active = Some(display.apply_resize(size_mul, delta, MIN_SIZE));
                 }
             }
 
             // Move handle sensor (offset to the left of the node).
-            let mut move_sensor = InteractionBox::default();
-            move_sensor.senses_drags = true;
-            move_sensor.senses_hover = true;
-            ctx.draw_node(
-                &move_sensor,
-                NodeUid::new_local(ctx.node.id, "move"),
+            ctx.draw_workspace_node(
+                self.move_sensor,
                 DrawConstraints {
                     pos: PositionConstraint::TopLeft(display_tl - handle_offset),
                     x: Some(AxisConstraint::Exactly(HANDLE_SIZE.x)),
@@ -238,8 +248,17 @@ impl Node for CanvasNode {
                     should_clip: false,
                 },
             );
-            handle_hovered = move_sensor.request(WasHovered, ctx.node).unwrap_or(false);
-            if let Some(delta) = move_sensor.request(WasDragged, ctx.node).flatten() {
+            handle_hovered = ctx
+                .node
+                .workspace
+                .send_request(self.move_sensor, WasHovered)
+                .unwrap_or(false);
+            if let Some(delta) = ctx
+                .node
+                .workspace
+                .send_request(self.move_sensor, WasDragged)
+                .flatten()
+            {
                 active = Some(ConstraintsTuple {
                     pos: display.pos + delta,
                     size: display.size,
@@ -282,17 +301,7 @@ impl Node for CanvasNode {
                     outline_stroke
                 },
             };
-            ctx.draw_node(
-                &bounds,
-                NodeUid::new_local(ctx.node.id, "bounds"),
-                DrawConstraints {
-                    pos: PositionConstraint::TopLeft(display_tl),
-                    x: Some(AxisConstraint::Exactly(display.size.x)),
-                    y: Some(AxisConstraint::Exactly(display.size.y)),
-                    wrap: WrapConstraints::NotAllowed,
-                    should_clip: false,
-                },
-            );
+            bounds.paint(ctx.ui.painter(), display_tl);
 
             // Grip circles centered *on* the preview rect's edges and corners.
             let edge_center = |mx: f32, my: f32| ScreenPos {
@@ -344,17 +353,7 @@ impl Node for CanvasNode {
                 },
                 border: Stroke::NONE,
             };
-            ctx.draw_node(
-                &plate,
-                NodeUid::new_local(ctx.node.id, "handle"),
-                DrawConstraints {
-                    pos: PositionConstraint::TopLeft(handle_tl),
-                    x: Some(AxisConstraint::Exactly(HANDLE_SIZE.x)),
-                    y: Some(AxisConstraint::Exactly(HANDLE_SIZE.y)),
-                    wrap: WrapConstraints::NotAllowed,
-                    should_clip: false,
-                },
-            );
+            plate.paint(ctx.ui.painter(), handle_tl);
             let dot_color = if handle_hovered {
                 Color32::from_gray(110)
             } else {
@@ -387,8 +386,13 @@ impl Node for CanvasNode {
     }
 
     fn on_delete(&self, ctx: NodeContext) {
-        // Deleting the node deletes the child it owns.
+        // Deleting the node deletes the child it owns, plus its sensors.
         ctx.workspace.delete_node(self.child);
+        ctx.workspace.delete_node(self.proximity.erase());
+        ctx.workspace.delete_node(self.move_sensor.erase());
+        for grip in self.grips {
+            ctx.workspace.delete_node(grip.erase());
+        }
     }
 }
 

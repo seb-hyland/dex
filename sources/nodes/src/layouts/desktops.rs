@@ -8,6 +8,7 @@ use crate::{
     layouts::{
         canvas::{layout::Canvas, sidebar::CanvasSidebar},
         horizontal_dnd::{AddChild, HorizontalDnD},
+        horizontal_layout,
     },
     primitives::{
         interaction::{InteractionBox, WasClicked, WasDoubleClicked, WasDragged, WasHovered},
@@ -27,42 +28,49 @@ use crate::{
 pub struct Desktops {
     tab_bar: NodeUid<HorizontalDnD>,
     active: Option<NodeUid<Canvas>>,
+    sidebar: NodeUid<CanvasSidebar>,
+    add_button: NodeUid<Button>,
+    divider: NodeUid<InteractionBox>,
 
     sidebar_width: f32,
     pending_sidebar_width: Transient<f32>,
 }
 
 impl Desktops {
-    /// Build a fresh workspace with a [`Desktops`] instance pre-inserted.
+    /// Build a fresh workspace with a [`Desktops`] instance as its root.
     pub fn new_workspace() -> Workspace {
-        let mut workspace = Workspace::new_empty();
+        let mut ws = Workspace::new_empty();
+        let root = Desktops::build(&ws);
+        // Drain the queued inserts so the tree is live before the first frame.
+        ws.process_pending();
+        ws.set_root(root.erase());
+        ws
+    }
 
-        let desktops_id = NodeUid::<Desktops>::new_workspace();
+    /// Build the desktops root (and its whole subtree) into `ws`.
+    pub fn build(ws: &Workspace) -> NodeUid<Desktops> {
+        let id = NodeUid::<Desktops>::new_workspace();
 
-        let canvas = workspace.insert_node_now(Box::new(Canvas::default()));
-        let name = workspace.insert_node_now(Box::new(LabelEditable::click_to_edit(
-            "Canvas 1".to_owned(),
-        )));
-        let tab = workspace.insert_node_now(Box::new(DesktopTabView {
-            canvas,
-            name,
-            parent: desktops_id,
-        }));
-        let tab_bar =
-            workspace.insert_node_now(Box::new(HorizontalDnD::new(vec![tab.erase()], TAB_SPACING)));
+        let canvas = Canvas::build(ws);
+        let tab = DesktopTabView::build(ws, canvas, id, "Canvas 1".to_owned());
+        let tab_bar = HorizontalDnD::build(ws, vec![tab.erase()], TAB_SPACING);
+        let sidebar = CanvasSidebar::build(ws, id);
+        let add_button = Button::build(ws, Label::new("+".to_owned()));
+        let divider = ws.insert_node(Box::new(InteractionBox::sensing(true, false, true)));
 
-        workspace.insert_node_now_at(
-            desktops_id,
+        ws.insert_node_at(
+            id,
             Box::new(Desktops {
                 tab_bar,
                 active: Some(canvas),
+                sidebar,
+                add_button,
+                divider,
                 sidebar_width: 200.0,
                 pending_sidebar_width: Transient::default(),
             }),
         );
-
-        workspace.set_root(desktops_id.erase());
-        workspace
+        id
     }
 }
 
@@ -114,12 +122,8 @@ impl Node for Desktops {
             y: origin.y,
         };
 
-        let sidebar = CanvasSidebar {
-            desktops: ctx.node.id.cast(),
-        };
-        ctx.draw_node(
-            &sidebar,
-            NodeUid::new_local(ctx.node.id, "sidebar"),
+        ctx.draw_workspace_node(
+            self.sidebar,
             DrawConstraints {
                 pos: PositionConstraint::TopLeft(origin),
                 x: Some(AxisConstraint::Exactly(sidebar_w)),
@@ -129,9 +133,12 @@ impl Node for Desktops {
             },
         );
 
-        // Tab bar ----------------------------------------
-        let tab_bar_res = ctx.draw_workspace_node(
-            self.tab_bar,
+        // Tab bar, then the add-canvas button, laid out in a row.
+        horizontal_layout(
+            &mut ctx,
+            &[self.tab_bar.erase(), self.add_button.erase()],
+            TAB_SPACING,
+            false,
             DrawConstraints {
                 pos: PositionConstraint::TopLeft(
                     right_origin
@@ -148,34 +155,14 @@ impl Node for Desktops {
                 should_clip: false,
             },
         );
-
-        // Add tab button ----------------------------------------
-        let tabs_right = tab_bar_res
-            .and_then(|r| r.region())
-            .map(|r| r.min.x + r.size().x)
-            .unwrap_or(right_origin.x + TAB_SPACING);
-        let add_button = Button::new(
-            Label::new("+".to_owned()),
-            Action {
-                dest: ctx.node.id,
-                description: "Add canvas".into(),
-                body: Box::new(AddCanvas),
-            },
-        );
-        ctx.draw_node(
-            &add_button,
-            NodeUid::new_local(ctx.node.id, "add canvas"),
-            DrawConstraints {
-                pos: PositionConstraint::TopLeft(ScreenPos {
-                    x: tabs_right + TAB_SPACING,
-                    y: right_origin.y + TAB_SPACING,
-                }),
-                x: Some(AxisConstraint::AtMost(60.0)),
-                y: Some(AxisConstraint::AtMost((TAB_BAR_H - TAB_SPACING).max(0.0))),
-                wrap: WrapConstraints::NotAllowed,
-                should_clip: true,
-            },
-        );
+        if ctx
+            .node
+            .workspace
+            .send_request(self.add_button.erase(), WasClicked)
+            .unwrap_or(false)
+        {
+            ctx.submit_action_for_self::<Self, _>(AddCanvas, "Add canvas");
+        }
 
         // Draw active canvas -------------------------------------------------
         if let Some(active) = self.active {
@@ -195,12 +182,8 @@ impl Node for Desktops {
         }
 
         // Draw sidebar splitter ----------------------------------------
-        let mut divider = InteractionBox::default();
-        divider.senses_drags = true;
-        divider.senses_hover = true;
-        ctx.draw_node(
-            &divider,
-            NodeUid::new_local(ctx.node.id, "sidebar divider"),
+        ctx.draw_workspace_node(
+            self.divider,
             DrawConstraints {
                 pos: PositionConstraint::TopLeft(ScreenPos {
                     x: divider_x,
@@ -213,8 +196,12 @@ impl Node for Desktops {
             },
         );
 
-        let divider_active =
-            pending.is_some() || divider.request(WasHovered, ctx.node).unwrap_or(false);
+        let divider_active = pending.is_some()
+            || ctx
+                .node
+                .workspace
+                .send_request(self.divider, WasHovered)
+                .unwrap_or(false);
         let divider_color = if divider_active {
             Color32::from_gray(150)
         } else {
@@ -233,7 +220,12 @@ impl Node for Desktops {
             divider_color,
         );
 
-        if let Some(delta) = divider.request(WasDragged, ctx.node).flatten() {
+        if let Some(delta) = ctx
+            .node
+            .workspace
+            .send_request(self.divider, WasDragged)
+            .flatten()
+        {
             let base = pending.unwrap_or(self.sidebar_width);
             self.pending_sidebar_width
                 .set((base + delta.x).clamp(SIDEBAR_MIN, SIDEBAR_MAX));
@@ -266,15 +258,8 @@ impl Node for Desktops {
 defhandlers! { Desktops {
     actions: [
         AddCanvas => (this, _a, ctx) {
-            let canvas = ctx.workspace.insert_node(Box::new(Canvas::default()));
-            let name = ctx.workspace.insert_node(Box::new(
-                LabelEditable::click_to_edit("New canvas".to_owned())
-            ));
-            let tab = ctx.workspace.insert_node(Box::new(DesktopTabView {
-                canvas,
-                name,
-                parent: ctx.id.cast(),
-            }));
+            let canvas = Canvas::build(ctx.workspace);
+            let tab = DesktopTabView::build(ctx.workspace, canvas, ctx.id.cast(), "New canvas".to_owned());
             ctx.workspace.submit_action(
                 this.tab_bar,
                 "Add tab",
@@ -300,6 +285,27 @@ struct DesktopTabView {
     canvas: NodeUid<Canvas>,
     name: NodeUid<LabelEditable>,
     parent: NodeUid<Desktops>,
+    /// Click/double-click sensor over the whole tab.
+    sensor: NodeUid<InteractionBox>,
+}
+
+impl DesktopTabView {
+    /// Build a tab (its editable name + click sensor) into `ws`.
+    fn build(
+        ws: &Workspace,
+        canvas: NodeUid<Canvas>,
+        parent: NodeUid<Desktops>,
+        name_text: String,
+    ) -> NodeUid<DesktopTabView> {
+        let name = ws.insert_node(Box::new(LabelEditable::click_to_edit(name_text)));
+        let sensor = ws.insert_node(Box::new(InteractionBox::sensing(false, true, false)));
+        ws.insert_node(Box::new(Self {
+            canvas,
+            name,
+            parent,
+            sensor,
+        }))
+    }
 }
 
 #[typetag::serde]
@@ -369,25 +375,12 @@ impl Node for DesktopTabView {
             fill_color: Color32::TRANSPARENT,
             border,
         };
-        ctx.draw_node(
-            &outline,
-            NodeUid::new_local(ctx.node.id, "tab border"),
-            DrawConstraints {
-                pos: PositionConstraint::TopLeft(origin),
-                x: Some(AxisConstraint::Exactly(tab_size.x)),
-                y: Some(AxisConstraint::Exactly(tab_size.y)),
-                wrap: WrapConstraints::NotAllowed,
-                should_clip: false,
-            },
-        );
+        outline.paint(ctx.ui.painter(), origin);
 
         // Click/double-click sensor over the whole tab when not editing.
         if !editing {
-            let mut sensor = InteractionBox::default();
-            sensor.senses_clicks = true;
-            ctx.draw_node(
-                &sensor,
-                NodeUid::new_local(ctx.node.id, "tab click"),
+            ctx.draw_workspace_node(
+                self.sensor,
                 DrawConstraints {
                     pos: PositionConstraint::TopLeft(origin),
                     x: Some(AxisConstraint::Exactly(tab_size.x)),
@@ -397,22 +390,22 @@ impl Node for DesktopTabView {
                 },
             );
 
-            if sensor.request(WasDoubleClicked, ctx.node).unwrap_or(false) {
+            let ws = ctx.node.workspace;
+            if ws
+                .send_request(self.sensor, WasDoubleClicked)
+                .unwrap_or(false)
+            {
                 // Start renaming, and make sure this canvas is the active one.
-                ctx.node.workspace.submit_action(
-                    self.name,
-                    "Edit canvas name",
-                    SetInteractive { on: true },
-                );
-                ctx.node.workspace.submit_action(
+                ws.submit_action(self.name, "Edit canvas name", SetInteractive { on: true });
+                ws.submit_action(
                     self.parent,
                     "Activated canvas",
                     SetActive {
                         canvas: self.canvas,
                     },
                 );
-            } else if sensor.request(WasClicked, ctx.node).unwrap_or(false) {
-                ctx.node.workspace.submit_action(
+            } else if ws.send_request(self.sensor, WasClicked).unwrap_or(false) {
+                ws.submit_action(
                     self.parent,
                     "Activated canvas",
                     SetActive {
@@ -425,6 +418,11 @@ impl Node for DesktopTabView {
         DrawResult::Complete {
             region: Some(ScreenRegion::from_min_size(origin, tab_size)),
         }
+    }
+
+    fn on_delete(&self, ctx: NodeContext) {
+        ctx.workspace.delete_node(self.name.erase());
+        ctx.workspace.delete_node(self.sensor.erase());
     }
 }
 
