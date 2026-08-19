@@ -1,9 +1,10 @@
 use dex_core::prelude::*;
+use egui::{Pos2, Rect};
 use serde::{Deserialize, Serialize};
 use utils::{Reset, Transient};
 
 use crate::{
-    layouts::canvas::nodes::CanvasNode,
+    layouts::canvas::nodes::{CanvasNode, CanvasNodeConstraints, ConstraintsTuple},
     primitives::interaction::{InteractionBox, WasDragged},
 };
 
@@ -13,6 +14,8 @@ pub struct Canvas {
     /// Background drag sensor (a registered child) used for panning.
     drag_interaction: NodeUid<InteractionBox>,
     screen_offset: Transient<Vector>,
+    /// The canvas's on-screen region as of the last frame it was drawn.
+    viewport: Transient<ScreenRegion>,
 }
 
 impl Canvas {
@@ -23,6 +26,7 @@ impl Canvas {
             children: Vec::new(),
             drag_interaction,
             screen_offset: Transient::default(),
+            viewport: Transient::default(),
         })
     }
 
@@ -32,6 +36,21 @@ impl Canvas {
 
     fn screen_offset(&self) -> Vector {
         self.screen_offset.val().unwrap_or(Vector::splat(0.0))
+    }
+
+    /// Screen position corresponding to canvas-space origin `(0, 0)`.
+    fn canvas_origin(&self) -> ScreenPos {
+        let origin = self
+            .viewport
+            .val()
+            .map(|r| r.min)
+            .unwrap_or(ScreenPos::zero());
+        origin - self.screen_offset()
+    }
+
+    /// Map a canvas-space layout into its on-screen region.
+    fn map_to_screen(&self, tuple: ConstraintsTuple) -> ScreenRegion {
+        ScreenRegion::from_min_size(self.canvas_origin() + tuple.pos, tuple.size)
     }
 }
 
@@ -59,6 +78,7 @@ impl Node for Canvas {
         };
         let origin = ctx.constraints.pos;
         let region = ScreenRegion::from_min_size(origin, size);
+        self.viewport.set(region);
 
         ctx.draw_workspace_node(
             self.drag_interaction,
@@ -114,10 +134,34 @@ defhandlers! { Canvas {
             const DEFAULT_CHILD_SIZE: Vector = Vector { x: 160.0, y: 40.0 };
 
             let child_id = ctx.workspace.insert_node_dyn(a.child);
-            // Place new nodes near the top-left of the current view.
-            let canvas_pos = this.screen_offset() + Vector::splat(40.0);
+            // Center new nodes in the currently visible section of the canvas.
+            let visible_size = this
+                .viewport
+                .val()
+                .map(|r| r.size())
+                .unwrap_or(Vector::splat(0.0));
+            let canvas_pos =
+                this.screen_offset() + visible_size / 2.0 - DEFAULT_CHILD_SIZE / 2.0;
             let node_id = CanvasNode::build(ctx.workspace, child_id, canvas_pos, DEFAULT_CHILD_SIZE);
             this.children.push(node_id);
+        },
+    ],
+    requests: [
+        // Find the top-most canvas node whose on-screen region contains `pos`.
+        CanvasNodeAt { pos: ScreenPos } => (this, s, ctx): Option<NodeUid<CanvasNode>> {
+            this.children.iter().rev().copied().find(|&child| {
+                ctx.workspace
+                    .send_request(child, CanvasNodeConstraints)
+                    .is_some_and(|tuple| {
+                        Rect::from(this.map_to_screen(tuple)).contains(Pos2::from(s.pos))
+                    })
+            })
+        },
+        // Map a canvas node's current layout into its on-screen region.
+        CanvasNodeScreenRect { node: NodeUid<CanvasNode> } => (this, s, ctx): Option<ScreenRegion> {
+            ctx.workspace
+                .send_request(s.node, CanvasNodeConstraints)
+                .map(|tuple| this.map_to_screen(tuple))
         },
     ],
 }}

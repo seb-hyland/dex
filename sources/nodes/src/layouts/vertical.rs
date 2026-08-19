@@ -2,10 +2,12 @@ use dex_core::prelude::*;
 use serde::{Deserialize, Serialize};
 use utils::Reset;
 
+use crate::layouts::child::LayoutChild;
+
 /// Lay out `children` top-to-bottom, `spacing` apart.
 #[derive(Clone, Serialize, Deserialize, Reset)]
 pub struct VerticalLayout {
-    pub children: Vec<Arc<dyn Node>>,
+    pub children: Vec<LayoutChild>,
     pub spacing: f32,
 }
 
@@ -56,7 +58,7 @@ impl Node for VerticalLayout {
                 should_clip: ctx.constraints.should_clip,
             };
 
-            if let Some(region) = ctx.draw_node(&**child, child_constraints).region() {
+            if let Some(region) = child.draw(&mut ctx, child_constraints).region() {
                 let size = region.size();
                 consumed_height = y_offset + size.y;
                 max_width = max_width.max(size.x);

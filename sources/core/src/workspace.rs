@@ -5,7 +5,7 @@ use std::{
 };
 
 use dyn_clone::clone_box;
-use egui::{Rect, Ui, UiBuilder};
+use egui::{Id, LayerId, Order, Rect, Ui, UiBuilder};
 use serde::{Deserialize, Serialize};
 use utils::match_dyn;
 
@@ -49,7 +49,6 @@ impl Workspace {
 
     /// A workspace with no nodes and no root yet. Populate it synchronously with
     /// [`Workspace::insert_node_now`] and finish with [`Workspace::set_root`].
-    /// Intended for building the initial node graph before the frame loop.
     pub fn new_empty() -> Self {
         let (action_tx, action_recv) = mpsc::channel();
 
@@ -79,6 +78,11 @@ impl Workspace {
 
     pub fn set_root(&mut self, new_root: NodeUid) {
         self.root_node = new_root;
+    }
+
+    /// The workspace's root node.
+    pub fn root(&self) -> NodeUid {
+        self.root_node
     }
 
     pub fn submit_action<N, A>(
@@ -184,15 +188,24 @@ impl Workspace {
             wrap: WrapConstraints::NotAllowed,
             should_clip: true,
         };
-        let mut ctx = DrawContext {
-            node: NodeContext {
-                id: root_node,
-                workspace: self,
+
+        ui.scope_builder(
+            UiBuilder::new().layer_id(LayerId::new(
+                Order::Foreground,
+                Id::new("root_node_painter"),
+            )),
+            |ui| {
+                let mut ctx = DrawContext {
+                    node: NodeContext {
+                        id: root_node,
+                        workspace: self,
+                    },
+                    constraints,
+                    ui,
+                };
+                ctx.draw_workspace_node(root_node, constraints);
             },
-            constraints,
-            ui,
-        };
-        ctx.draw_workspace_node(root_node, constraints);
+        );
     }
 
     /// Delete a node from the workspace; its [`Node::on_delete`] handler will run.

@@ -7,7 +7,6 @@ use egui_code_editor::{CodeEditor as CodeEditorWidget, ColorTheme, DEFAULT_THEME
 use serde::{Deserialize, Serialize};
 use utils::{Reset, Transient};
 
-/// A *draw instruction* for a run of text.
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct Label {
     pub text: String,
@@ -17,18 +16,15 @@ pub struct Label {
     pub color: Color32,
 }
 
-impl Label {
-    pub fn new(text: String) -> Self {
-        Self {
-            text,
-            singleline: true,
-            font: FontId::proportional(16.0),
-            color: Color32::BLACK,
-        }
+#[typetag::serde]
+impl Node for Label {
+    fn type_name(&self) -> String {
+        "Label".into()
     }
 
-    /// Paint the label, returning the occupied region (and a wrap continuation if the text must reflow).
-    pub fn paint(&self, ctx: &mut DrawContext, constraints: DrawConstraints) -> DrawResult {
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
+        let constraints = ctx.constraints;
+
         // A continuation is a char offset
         let start = if let WrapConstraints::CanRequest { continuation, .. } = constraints.wrap
             && let Some(cont) = continuation
@@ -47,9 +43,22 @@ impl Label {
         let avail_h = constraints.y.map(|a| a.provided_value());
 
         if self.singleline {
-            self.draw_singleline(ctx, &constraints, &remaining, avail_w)
+            self.draw_singleline(&mut ctx, &constraints, &remaining, avail_w)
         } else {
-            self.draw_multiline(ctx, &constraints, &remaining, start, avail_w, avail_h)
+            self.draw_multiline(&mut ctx, &constraints, &remaining, start, avail_w, avail_h)
+        }
+    }
+}
+
+defhandlers! { Label {} }
+
+impl Label {
+    pub fn new(text: String) -> Self {
+        Self {
+            text,
+            singleline: true,
+            font: FontId::proportional(16.0),
+            color: Color32::BLACK,
         }
     }
 
@@ -434,6 +443,20 @@ pub struct CodeEditor {
     pub theme: String,
     /// Highlighting language (e.g. "rust", "python")
     pub language: String,
+}
+
+impl CodeEditor {
+    pub fn new(value: String, language: String) -> Self {
+        Self {
+            value,
+            buf: Transient::default(),
+            font_size: 14.0,
+            rows: 6,
+            numlines: true,
+            theme: "Gruvbox".to_owned(),
+            language,
+        }
+    }
 }
 
 #[typetag::serde]

@@ -38,6 +38,17 @@ impl Add for ScreenPos {
     }
 }
 
+impl Sub for ScreenPos {
+    type Output = ScreenPos;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self {
+            x: self.x - rhs.x,
+            y: self.y - rhs.y,
+        }
+    }
+}
+
 impl Add<Vector> for ScreenPos {
     type Output = ScreenPos;
 
@@ -63,6 +74,13 @@ impl Sub<Vector> for ScreenPos {
 impl ScreenPos {
     pub fn zero() -> Self {
         Self { x: 0.0, y: 0.0 }
+    }
+
+    pub fn to_vector(self) -> Vector {
+        Vector {
+            x: self.x,
+            y: self.y,
+        }
     }
 }
 
@@ -217,6 +235,13 @@ impl Vector {
         ScreenPos {
             x: self.x,
             y: self.y,
+        }
+    }
+
+    pub fn map(self, mut f: impl FnMut(f32) -> f32) -> Self {
+        Self {
+            x: f(self.x),
+            y: f(self.y),
         }
     }
 }

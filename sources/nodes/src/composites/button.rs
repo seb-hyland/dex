@@ -1,5 +1,5 @@
 use dex_core::prelude::*;
-use egui::{Color32, Stroke};
+use egui::{Color32, Stroke, StrokeKind};
 use serde::{Deserialize, Serialize};
 use utils::Reset;
 
@@ -67,7 +67,7 @@ impl Node for Button {
             wrap: ctx.constraints.wrap,
             should_clip: ctx.constraints.should_clip,
         };
-        let label_result = self.label.paint(&mut ctx, label_constraints);
+        let label_result = ctx.draw_node(&self.label, label_constraints);
         // If the label couldn't fit and requested a new line, pass that request up.
         if let DrawResult::Wrap { continuation, .. } = label_result {
             return DrawResult::Wrap {
@@ -90,6 +90,7 @@ impl Node for Button {
             corner_radius: self.corner_radius,
             fill_color: self.fill_color,
             border: self.border,
+            stroke_kind: StrokeKind::Middle,
         };
         border.paint(ctx.ui.painter(), origin);
 

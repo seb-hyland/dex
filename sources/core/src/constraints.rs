@@ -1,3 +1,5 @@
+use std::ops::{Add, Sub};
+
 use crate::{ScreenPos, Vector};
 
 #[derive(Clone, Copy)]
@@ -16,6 +18,16 @@ impl DrawConstraints {
         let y_fits = self.y.is_none_or(|y_ax| y_ax.provided_value() >= size.y);
         x_fits && y_fits
     }
+
+    pub fn shrunk_by_per_side(self, x: f32, y: f32) -> Self {
+        Self {
+            pos: self.pos + ScreenPos { x, y },
+            x: self.x.map(|x_ax| x_ax - 2.0 * x),
+            y: self.y.map(|y_ax| y_ax - 2.0 * y),
+            wrap: self.wrap,
+            should_clip: self.should_clip,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -29,6 +41,28 @@ impl AxisConstraint {
         match self {
             Self::Exactly(v) => *v,
             Self::AtMost(v) => *v,
+        }
+    }
+}
+
+impl Add<f32> for AxisConstraint {
+    type Output = Self;
+
+    fn add(self, rhs: f32) -> Self::Output {
+        match self {
+            Self::Exactly(v) => Self::Exactly(v + rhs),
+            Self::AtMost(v) => Self::AtMost(v + rhs),
+        }
+    }
+}
+
+impl Sub<f32> for AxisConstraint {
+    type Output = Self;
+
+    fn sub(self, rhs: f32) -> Self::Output {
+        match self {
+            Self::Exactly(v) => Self::Exactly(v - rhs),
+            Self::AtMost(v) => Self::AtMost(v - rhs),
         }
     }
 }

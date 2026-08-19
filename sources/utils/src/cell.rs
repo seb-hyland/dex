@@ -105,6 +105,7 @@ impl_Reset_noop!(
     egui::Vec2,
     egui::Rect,
     egui::Stroke,
+    egui::StrokeKind,
     egui::FontId,
 );
 

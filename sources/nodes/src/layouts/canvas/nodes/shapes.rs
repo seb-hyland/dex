@@ -1,9 +1,9 @@
 use dex_core::prelude::*;
-use egui::{Color32, Stroke};
+use egui::{Color32, Stroke, StrokeKind};
 use serde::{Deserialize, Serialize};
 use utils::Reset;
 
-use crate::primitives::shapes;
+use crate::primitives::shapes::{self, Line};
 
 #[derive(Clone, Copy, Reset, Serialize, Deserialize)]
 pub struct CanvasRect;
@@ -28,6 +28,7 @@ impl Node for CanvasRect {
             border: Stroke::NONE,
             corner_radius: 5.0,
             fill_color: Color32::RED,
+            stroke_kind: StrokeKind::Middle,
         }
         .paint(ctx.ui.painter(), origin);
         DrawResult::Complete {
@@ -69,3 +70,45 @@ impl Node for CanvasCircle {
 }
 
 defhandlers! { CanvasCircle {} }
+
+#[derive(Clone, Copy, Reset, Serialize, Deserialize)]
+pub struct SectionDivider;
+
+#[typetag::serde]
+impl Node for SectionDivider {
+    fn type_name(&self) -> String {
+        "Section Divider".into()
+    }
+
+    fn draw(&self, ctx: DrawContext) -> DrawResult {
+        const DIVIDER_HEIGHT: f32 = 2.0;
+        const DIVIDER_COLOR: Color32 = Color32::DARK_GRAY;
+
+        let Some(width) = ctx.constraints.x.map(|x_ax| x_ax.provided_value()) else {
+            return DrawResult::Complete {
+                region: Some(ScreenRegion::empty()),
+            };
+        };
+
+        Line {
+            span: Vector { x: width, y: 0.0 },
+            stroke: Stroke {
+                width: DIVIDER_HEIGHT,
+                color: DIVIDER_COLOR,
+            },
+        }
+        .paint(ctx.ui.painter(), ctx.constraints.pos);
+
+        DrawResult::Complete {
+            region: Some(ScreenRegion::from_min_size(
+                ctx.constraints.pos,
+                Vector {
+                    x: width,
+                    y: DIVIDER_HEIGHT,
+                },
+            )),
+        }
+    }
+}
+
+defhandlers! { SectionDivider {} }

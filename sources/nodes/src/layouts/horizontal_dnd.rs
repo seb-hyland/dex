@@ -1,5 +1,5 @@
 use dex_core::prelude::*;
-use egui::{Color32, Stroke};
+use egui::{Color32, Stroke, StrokeKind};
 use serde::{Deserialize, Serialize};
 use utils::{Reset, Transient};
 
@@ -108,7 +108,7 @@ impl Node for HorizontalDnD {
         let mut new_sizes: Vec<Vector> = vec![Vector::splat(0.0); n];
         let mut max_h = 0.0_f32;
         let mut cursor_x = 0.0;
-        let mut this_dragged: Option<(usize, Vector)> = None;
+        let mut this_dragged: Option<(usize, ScreenPos)> = None;
         let mut this_released: Option<usize> = None;
 
         for &idx in &draw_order {
@@ -185,6 +185,7 @@ impl Node for HorizontalDnD {
                 corner_radius: 4.0,
                 fill_color: Color32::from_rgba_unmultiplied(70, 130, 180, 28),
                 border: Stroke::NONE,
+                stroke_kind: StrokeKind::Middle,
             }
             .paint(ctx.ui.painter(), region.min);
 

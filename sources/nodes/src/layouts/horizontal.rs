@@ -2,13 +2,15 @@ use dex_core::prelude::*;
 use serde::{Deserialize, Serialize};
 use utils::Reset;
 
+use crate::layouts::child::LayoutChild;
+
 /**
     Lay out `children` left-to-right, separated by `spacing`.
     When `allow_wrap` is set, wrap onto new rows.
 */
 #[derive(Clone, Serialize, Deserialize, Reset)]
 pub struct HorizontalLayout {
-    pub children: Vec<Arc<dyn Node>>,
+    pub children: Vec<LayoutChild>,
     pub spacing: f32,
     pub allow_wrap: bool,
 }
@@ -140,7 +142,7 @@ impl Node for HorizontalLayout {
                 },
                 should_clip,
             };
-            let mut child_draw_res = ctx.draw_node(&**child, child_constraints);
+            let mut child_draw_res = child.draw(&mut ctx, child_constraints);
 
             let maybe_region = child_draw_res.region();
             update_cursors(
@@ -181,7 +183,7 @@ impl Node for HorizontalLayout {
                     },
                     should_clip,
                 };
-                let child_continuation_draw_res = ctx.draw_node(&**child, child_constraints);
+                let child_continuation_draw_res = child.draw(&mut ctx, child_constraints);
 
                 let maybe_region = child_continuation_draw_res.region();
                 update_cursors(

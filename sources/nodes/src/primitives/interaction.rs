@@ -18,7 +18,7 @@ struct LastFrameInteractions {
     clicked: bool,
     double_clicked: bool,
     dragged: Option<Vector>,
-    drag_pos: Option<Vector>,
+    drag_pos: Option<ScreenPos>,
     drag_stopped: bool,
 }
 
@@ -92,7 +92,7 @@ impl Node for InteractionBox {
                 .dragged()
                 .then(|| resp.interact_pointer_pos())
                 .flatten()
-                .map(|p| Vector { x: p.x, y: p.y }),
+                .map(ScreenPos::from),
             drag_stopped: resp.drag_stopped(),
         });
 
@@ -109,7 +109,8 @@ defhandlers! { InteractionBox {
         WasHovered => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.hovered) },
         ContainsPointer => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.contains_pointer) },
         WasDragged => (this, _q): Option<Vector> { this.cache.val().as_ref().and_then(|i| i.dragged) },
-        DragPointerPos => (this, _q): Option<Vector> { this.cache.val().as_ref().and_then(|i| i.drag_pos) },
+        // Live pointer position while a drag is in progress (for rubber-band feedback).
+        DragPointerPos => (this, _q): Option<ScreenPos> { this.cache.val().as_ref().and_then(|i| i.drag_pos) },
         WasDragReleased => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.drag_stopped) },
     ],
 }}

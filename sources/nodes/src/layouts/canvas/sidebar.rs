@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use utils::Reset;
 
 use crate::{
-    composites::button::Button,
+    composites::{button::Button, lambda::Lambda},
     layouts::{
-        HorizontalLayout,
+        HorizontalLayout, LayoutChild,
         canvas::{
             layout::AddCanvasItem,
             nodes::shapes::{CanvasCircle, CanvasRect},
@@ -25,8 +25,9 @@ pub struct CanvasSidebar {
 }
 
 impl CanvasSidebar {
-    /// Labels for the option buttons.
-    pub const OPTIONS: [&'static str; 3] = ["Text", "Rect", "Circle"];
+    /// Labels for the option buttons, in order. The button at index `i` inserts
+    /// the node produced by [`CanvasSidebar::dispatch`] for that index.
+    pub const OPTIONS: [&'static str; 4] = ["Text", "Rect", "Circle", "Lambda"];
 
     /// Build the sidebar and its option buttons into `ws`.
     pub fn build(ws: &Workspace, desktops: NodeUid<Desktops>) -> NodeUid<CanvasSidebar> {
@@ -42,12 +43,13 @@ impl CanvasSidebar {
     }
 
     /// The insert action for the option at `index`.
-    fn dispatch(&self, index: usize) -> Option<Action> {
+    fn dispatch(&self, index: usize, ws: &Workspace) -> Option<Action> {
         let dest = self.desktops.erase();
         let child: Arc<dyn Node> = match index {
             0 => Arc::new(LabelEditable::new("Text here".to_owned())),
             1 => Arc::new(CanvasRect),
             2 => Arc::new(CanvasCircle),
+            3 => Arc::new(Lambda::new(ws)),
             _ => return None,
         };
         Some(Action {
@@ -65,19 +67,19 @@ impl Node for CanvasSidebar {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        const GAP: f32 = 4.0;
+        const GAP: f32 = 10.0;
+        const PADDING: f32 = 5.0;
 
         // Draw the option buttons in a vertical stack, then poll each.
-        let buttons: Vec<NodeUid> = self.buttons.iter().map(|b| b.erase()).collect();
         let layout = HorizontalLayout {
-            children: buttons
-                .iter()
-                .filter_map(|b_uid| ctx.get_workspace_node(*b_uid))
-                .collect(),
+            children: self.buttons.iter().map(|b| LayoutChild::from(*b)).collect(),
             spacing: GAP,
             allow_wrap: true,
         };
-        let result = ctx.draw_node(&layout, ctx.constraints);
+        let result = ctx.draw_node(
+            &layout,
+            ctx.constraints.shrunk_by_per_side(PADDING, PADDING),
+        );
 
         for (i, &btn) in self.buttons.iter().enumerate() {
             if ctx
@@ -85,7 +87,7 @@ impl Node for CanvasSidebar {
                 .workspace
                 .send_request(btn.erase(), WasClicked)
                 .unwrap_or(false)
-                && let Some(action) = self.dispatch(i)
+                && let Some(action) = self.dispatch(i, ctx.node.workspace)
             {
                 ctx.node.workspace.submit_action_dyn(action);
             }

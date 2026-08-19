@@ -1,5 +1,5 @@
 use dex_core::prelude::*;
-use egui::{Color32, LayerId, Stroke};
+use egui::{Color32, LayerId, Stroke, StrokeKind};
 use serde::{Deserialize, Serialize};
 use utils::{Reset, Transient};
 
@@ -7,6 +7,7 @@ use crate::{
     composites::button::Button,
     layouts::{
         canvas::{layout::Canvas, sidebar::CanvasSidebar},
+        child::LayoutChild,
         horizontal::HorizontalLayout,
         horizontal_dnd::{AddChild, HorizontalDnD},
     },
@@ -131,31 +132,30 @@ impl Node for Desktops {
         );
 
         // Tab bar, then the add-canvas button, laid out in a row.
-        if let Some(tab_bar) = ctx.get_workspace_node(self.tab_bar)
-            && let Some(add_button) = ctx.get_workspace_node(self.add_button)
-        {
-            let layout = HorizontalLayout {
-                children: vec![tab_bar, add_button],
-                spacing: TAB_SPACING,
-                allow_wrap: false,
-            };
-            ctx.draw_node(
-                &layout,
-                DrawConstraints {
-                    pos: right_origin
-                        + Vector {
-                            x: TAB_SPACING,
-                            y: TAB_SPACING,
-                        },
-                    x: Some(AxisConstraint::AtMost(
-                        (right_w - 2.0 * TAB_SPACING).max(0.0),
-                    )),
-                    y: Some(AxisConstraint::AtMost((TAB_BAR_H - TAB_SPACING).max(0.0))),
-                    wrap: WrapConstraints::NotAllowed,
-                    should_clip: false,
-                },
-            );
-        }
+        let layout = HorizontalLayout {
+            children: vec![
+                LayoutChild::from(self.tab_bar),
+                LayoutChild::from(self.add_button),
+            ],
+            spacing: TAB_SPACING,
+            allow_wrap: false,
+        };
+        ctx.draw_node(
+            &layout,
+            DrawConstraints {
+                pos: right_origin
+                    + Vector {
+                        x: TAB_SPACING,
+                        y: TAB_SPACING,
+                    },
+                x: Some(AxisConstraint::AtMost(
+                    (right_w - 2.0 * TAB_SPACING).max(0.0),
+                )),
+                y: Some(AxisConstraint::AtMost((TAB_BAR_H - TAB_SPACING).max(0.0))),
+                wrap: WrapConstraints::NotAllowed,
+                should_clip: false,
+            },
+        );
         if ctx
             .node
             .workspace
@@ -375,6 +375,7 @@ impl Node for DesktopTabView {
             corner_radius: 4.0,
             fill_color: Color32::TRANSPARENT,
             border,
+            stroke_kind: StrokeKind::Middle,
         };
         outline.paint(ctx.ui.painter(), origin);
 

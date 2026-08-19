@@ -1,7 +1,7 @@
 pub mod shapes;
 
 use dex_core::prelude::*;
-use egui::{Color32, Stroke};
+use egui::{Color32, Stroke, StrokeKind};
 use serde::{Deserialize, Serialize};
 use utils::{Reset, Transient};
 
@@ -298,6 +298,7 @@ impl Node for CanvasNode {
                 } else {
                     outline_stroke
                 },
+                stroke_kind: StrokeKind::Middle,
             };
             bounds.paint(ctx.ui.painter(), display_tl);
 
@@ -350,6 +351,7 @@ impl Node for CanvasNode {
                     Color32::from_rgba_unmultiplied(0, 0, 0, 10)
                 },
                 border: Stroke::NONE,
+                stroke_kind: StrokeKind::Middle,
             };
             plate.paint(ctx.ui.painter(), handle_tl);
             let dot_color = if handle_hovered {
@@ -396,8 +398,9 @@ impl Node for CanvasNode {
 
 #[derive(Clone, Copy, Reset, Serialize, Deserialize)]
 pub struct ConstraintsTuple {
-    pos: Vector,
-    size: Vector,
+    /// Top-left position in canvas space.
+    pub pos: Vector,
+    pub size: Vector,
 }
 
 impl ConstraintsTuple {
@@ -433,5 +436,13 @@ defhandlers! { CanvasNode {
             this.committed.pos = s.canvas_pos;
             this.committed.size = s.size;
         },
+    ],
+    requests: [
+        // The node's current rendered layout (position + size) in canvas space.
+        CanvasNodeConstraints => (this, _q): ConstraintsTuple {
+            (*this.pending.val()).unwrap_or(this.committed)
+        },
+        // The workspace node this canvas node wraps.
+        CanvasNodeChild => (this, _q): NodeUid { this.child },
     ],
 }}

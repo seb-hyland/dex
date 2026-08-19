@@ -9,6 +9,7 @@ pub struct Rect {
     pub corner_radius: f32,
     pub fill_color: Color32,
     pub border: Stroke,
+    pub stroke_kind: StrokeKind,
 }
 
 impl Rect {
@@ -20,7 +21,7 @@ impl Rect {
             self.corner_radius,
             self.fill_color,
             self.border,
-            StrokeKind::Middle,
+            self.stroke_kind,
         );
         region
     }
