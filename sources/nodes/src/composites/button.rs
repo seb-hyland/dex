@@ -1,11 +1,12 @@
 use dex_core::prelude::*;
 use egui::{Color32, Stroke};
 use serde::{Deserialize, Serialize};
-use utils::Reset;
+use utils::{Reset, Transient};
 
 use crate::primitives::interaction::{InteractionBox, WasClicked};
 use crate::primitives::shapes::Rect;
 use crate::primitives::text::Label;
+use crate::resolve_center_origin;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Button {
@@ -17,6 +18,7 @@ pub struct Button {
     pub corner_radius: f32,
     pub fill_color: Color32,
     pub border: Stroke,
+    last_size: Transient<Vector>,
 
     /// Click sensor covering the whole button
     interaction: InteractionBox,
@@ -35,6 +37,7 @@ impl Button {
             fill_color: Color32::TRANSPARENT,
             border: Stroke::new(1.0, Color32::GRAY),
             interaction,
+            last_size: Transient::default(),
         }
     }
 }
@@ -50,19 +53,7 @@ impl Node for Button {
         let avail_w = ctx.constraints.x.map(|a| a.provided_value());
         let avail_h = ctx.constraints.y.map(|a| a.provided_value());
 
-        let origin = match ctx.constraints.pos {
-            PositionConstraint::TopLeft(tl) => tl,
-            PositionConstraint::Center(_) => {
-                let size = match ctx.this_node_last_frame_location().map(|r| r.size()) {
-                    Some(s) => s,
-                    None => {
-                        ctx.request_skip_frame();
-                        Vector::splat(50.0)
-                    }
-                };
-                ctx.constraints.pos.to_top_left(size)
-            }
-        };
+        let origin = resolve_center_origin(&mut ctx, &self.last_size, Vector::splat(50.0));
 
         let content_origin = origin + Vector::splat(padding);
         let label_constraints = DrawConstraints {
@@ -128,6 +119,8 @@ impl Node for Button {
                 .submit_action_dyn(self.onclick_action.clone());
         }
 
+        self.last_size.set(button_size);
+
         DrawResult::Complete {
             region: Some(ScreenRegion::from_min_size(origin, button_size)),
         }
@@ -138,6 +131,7 @@ impl Reset for Button {
     fn reset(&self) {
         self.label.reset();
         self.interaction.reset();
+        self.last_size.reset();
     }
 }
 

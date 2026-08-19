@@ -1,13 +1,25 @@
 use dex_core::prelude::*;
 use serde::{Deserialize, Serialize};
-use utils::Reset;
+use utils::{Reset, Transient};
 
 use crate::layouts::LayoutChild;
+use crate::resolve_center_origin;
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct VerticalLayout {
     pub children: Vec<LayoutChild>,
     pub spacing: f32,
+    last_size: Transient<Vector>,
+}
+
+impl VerticalLayout {
+    pub fn new(children: Vec<LayoutChild>, spacing: f32) -> Self {
+        Self {
+            children,
+            spacing,
+            last_size: Transient::default(),
+        }
+    }
 }
 
 #[typetag::serde]
@@ -28,21 +40,7 @@ impl Node for VerticalLayout {
             .map(|y_ax| y_ax.provided_value())
             .unwrap_or(f32::INFINITY);
 
-        let origin = match ctx.constraints.pos {
-            PositionConstraint::TopLeft(tl) => tl,
-            PositionConstraint::Center(_) => {
-                let last_known_size = ctx.this_node_last_frame_location().map(|reg| reg.size());
-                let last_size_estimate = match last_known_size {
-                    Some(s) => s,
-                    None => {
-                        // We're going to guess, don't draw this frame
-                        ctx.request_skip_frame();
-                        Vector::splat(300.0)
-                    }
-                };
-                ctx.constraints.pos.to_top_left(last_size_estimate)
-            }
-        };
+        let origin = resolve_center_origin(&mut ctx, &self.last_size, Vector::splat(300.0));
 
         let mut consumed_height = 0.0;
         let mut max_width = 0.0_f32;
@@ -87,14 +85,14 @@ impl Node for VerticalLayout {
             }
         }
 
+        let size = Vector {
+            x: max_width,
+            y: consumed_height,
+        };
+        self.last_size.set(size);
+
         DrawResult::Complete {
-            region: Some(ScreenRegion::from_min_size(
-                origin,
-                Vector {
-                    x: max_width,
-                    y: consumed_height,
-                },
-            )),
+            region: Some(ScreenRegion::from_min_size(origin, size)),
         }
     }
 }

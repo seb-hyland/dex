@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     fmt,
     hash::{DefaultHasher, Hash, Hasher},
     marker::PhantomData,
@@ -11,7 +10,7 @@ use slotmap::{SlotMap, new_key_type};
 use utils::{HistoryGraph, Reset, Timestamp, impl_Reset_noop};
 use uuid::Uuid;
 
-use crate::{Node, messages::Action, region::ScreenRegion, workspace::PushWorkspaceNode};
+use crate::{Node, messages::Action, workspace::PushWorkspaceNode};
 
 /**
     A unique identifier for a node.
@@ -139,9 +138,6 @@ pub struct Registry {
 
     /// A history of nodes and requests
     history: HistoryGraph<WorldSnapshot, Action>,
-
-    /// An ID for the current frame
-    current_frame: u64,
 }
 
 impl Registry {
@@ -156,7 +152,6 @@ impl Registry {
             Self {
                 pool,
                 history: HistoryGraph::new(snapshot),
-                current_frame: 0,
             },
             root_id,
         )
@@ -168,17 +163,12 @@ impl Registry {
         Self {
             pool: NodePool::default(),
             history: HistoryGraph::new(WorldSnapshot::default()),
-            current_frame: 0,
         }
     }
 
-    pub(crate) fn tick_frame(&mut self) {
-        self.current_frame += 1;
-    }
-
-    pub(crate) fn get(&self, id: NodeUid) -> Option<(&dyn Node, Option<ScreenRegion>)> {
+    pub(crate) fn get(&self, id: NodeUid) -> Option<&dyn Node> {
         let maybe_nobj = self.history.current_epoch().data.map.get(&id);
-        maybe_nobj.map(|nobj| (nobj.current(&self.pool), *nobj.last_known_region.borrow()))
+        maybe_nobj.map(|nobj| nobj.current(&self.pool))
     }
 
     pub(crate) fn push(&mut self, action: PushWorkspaceNode) {
@@ -214,30 +204,6 @@ impl Registry {
             nobj.commit(node, edge, cur_epoch_time, &mut self.pool);
         }
     }
-
-    pub(crate) fn update_node_region(&self, id: NodeUid, new_region: Option<ScreenRegion>) {
-        let Some(nobj) = self.history.current_epoch().data.map.get(&id) else {
-            // Node does not exist
-            return;
-        };
-
-        let Some(region) = new_region else {
-            // No information available to update with
-            return;
-        };
-
-        if *nobj.last_known_frame.borrow() != self.current_frame {
-            // Stale data; clear it
-            *nobj.last_known_region.borrow_mut() = None;
-            *nobj.last_known_frame.borrow_mut() = self.current_frame;
-        }
-
-        let last_known_region = *nobj.last_known_region.borrow();
-        *nobj.last_known_region.borrow_mut() = match last_known_region {
-            None => Some(region),
-            Some(existing_region) => Some(existing_region.union(region)),
-        };
-    }
 }
 
 /**
@@ -260,12 +226,6 @@ impl WorldSnapshot {
 struct NodeObject {
     /// A history of the node's previous states for fine-grained rollbacks
     history: HistoryGraph<NodeRef, Action>,
-
-    /// The regions at which this node was drawn either last frame or this frame
-    pub(crate) last_known_region: RefCell<Option<ScreenRegion>>,
-
-    /// The frame at which [`Self::last_known_regions`] was updated
-    pub(crate) last_known_frame: RefCell<u64>,
 }
 
 impl NodeObject {
@@ -273,8 +233,6 @@ impl NodeObject {
         let new_ref = pool.insert(node);
         Self {
             history: HistoryGraph::new(new_ref),
-            last_known_region: RefCell::new(None),
-            last_known_frame: RefCell::new(0),
         }
     }
 

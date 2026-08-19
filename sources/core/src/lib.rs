@@ -85,10 +85,6 @@ pub struct DrawContext<'ctx> {
 }
 
 impl<'ctx> DrawContext<'ctx> {
-    pub fn this_node_last_frame_location(&self) -> Option<ScreenRegion> {
-        self.last_frame_location_of(self.node.id)
-    }
-
     pub fn submit_action_for_self<N, A>(&self, body: A, description: impl Into<Cow<'static, str>>)
     where
         N: Node + ?Sized,
@@ -99,10 +95,6 @@ impl<'ctx> DrawContext<'ctx> {
                 .workspace
                 .submit_action(self.node.id.cast::<N>(), description, body);
         }
-    }
-
-    pub fn last_frame_location_of(&self, id: NodeUid) -> Option<ScreenRegion> {
-        self.node.workspace.last_draw_region_of(id)
     }
 
     pub fn request_skip_frame(&self) {

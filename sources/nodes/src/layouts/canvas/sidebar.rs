@@ -49,11 +49,7 @@ impl Node for CanvasSidebar {
             })
             .collect();
 
-        let layout = HorizontalLayout {
-            children: options,
-            allow_wrap: true,
-            wrap_spacing: 4.0,
-        };
+        let layout = HorizontalLayout::new(options, true, 4.0);
         ctx.draw_node(
             &layout,
             NodeUid::new_local(ctx.node.id, "sidebar items"),

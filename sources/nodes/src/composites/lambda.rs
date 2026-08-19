@@ -2,13 +2,14 @@ use dex_core::prelude::*;
 
 use egui::{Color32, Stroke};
 use serde::{Deserialize, Serialize};
-use utils::Reset;
+use utils::{Reset, Transient};
 
 use crate::layouts::LayoutChild;
 use crate::layouts::horizontal::HorizontalLayout;
 use crate::layouts::vertical::VerticalLayout;
 use crate::primitives::shapes::Line;
 use crate::primitives::text::{CodeEditor, LabelEditable};
+use crate::resolve_center_origin;
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct LambdaEditor {
@@ -53,6 +54,7 @@ pub enum LambdaLang {
 pub struct LambdaArg {
     label: NodeUid<LabelEditable>,
     param_name: NodeUid<LabelEditable>,
+    last_size: Transient<Vector>,
 }
 
 #[typetag::serde]
@@ -68,7 +70,7 @@ impl Node for LambdaArg {
         let avail_w = ctx.constraints.x.map(|a| a.provided_value());
         let avail_h = ctx.constraints.y.map(|a| a.provided_value());
 
-        let origin = resolve_origin(&mut ctx, Vector::splat(50.0));
+        let origin = resolve_center_origin(&mut ctx, &self.last_size, Vector::splat(50.0));
 
         // Draw the label at the left
         let label_constraints = DrawConstraints {
@@ -111,6 +113,8 @@ impl Node for LambdaArg {
             region = region.union(p);
         }
 
+        self.last_size.set(region.size());
+
         DrawResult::Complete {
             region: Some(region),
         }
@@ -151,20 +155,18 @@ impl Node for Lambda {
         };
 
         // Vertical stack of the args, dividing line, code editor
-        let body = VerticalLayout {
-            spacing: SECTION_GAP,
-            children: vec![
-                LayoutChild::local(HorizontalLayout {
-                    children: self
-                        .args
+        let body = VerticalLayout::new(
+            vec![
+                LayoutChild::local(HorizontalLayout::new(
+                    self.args
                         .iter()
                         .copied()
                         .map(NodeUid::erase)
                         .map(LayoutChild::Workspace)
                         .collect(),
-                    allow_wrap: true,
-                    wrap_spacing: 2.0,
-                }),
+                    true,
+                    2.0,
+                )),
                 LayoutChild::local(Line {
                     span: Vector {
                         x: divider_w,
@@ -174,7 +176,8 @@ impl Node for Lambda {
                 }),
                 LayoutChild::Workspace(self.editor.erase()),
             ],
-        };
+            SECTION_GAP,
+        );
 
         ctx.draw_node(
             &body,
@@ -185,21 +188,3 @@ impl Node for Lambda {
 }
 
 defhandlers! { Lambda {} }
-
-/// Resolve the top-left origin for a content-sized node, with a fallback "guess" size
-fn resolve_origin(ctx: &mut DrawContext, fallback: Vector) -> ScreenPos {
-    match ctx.constraints.pos {
-        PositionConstraint::TopLeft(tl) => tl,
-        PositionConstraint::Center(_) => {
-            let last_known_size = ctx.this_node_last_frame_location().map(|reg| reg.size());
-            let estimate = match last_known_size {
-                Some(s) => s,
-                None => {
-                    ctx.request_skip_frame();
-                    fallback
-                }
-            };
-            ctx.constraints.pos.to_top_left(estimate)
-        }
-    }
-}

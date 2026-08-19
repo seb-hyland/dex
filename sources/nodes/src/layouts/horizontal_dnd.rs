@@ -23,6 +23,7 @@ pub struct HorizontalDnD {
     sizes: Transient<Vec<Vector>>,
     /// Pending reorder while a child is dragged
     pending: Transient<PendingReorder>,
+    last_size: Transient<Vector>,
 }
 
 /// An in-progress drag: the child at index `from` is previewed at slot `to`
@@ -39,6 +40,7 @@ impl HorizontalDnD {
             spacing,
             sizes: Transient::default(),
             pending: Transient::default(),
+            last_size: Transient::default(),
         }
     }
 }
@@ -64,10 +66,7 @@ impl Node for HorizontalDnD {
         let origin = match ctx.constraints.pos {
             PositionConstraint::TopLeft(tl) => tl,
             PositionConstraint::Center(_) => {
-                let size = ctx
-                    .this_node_last_frame_location()
-                    .map(|r| r.size())
-                    .unwrap_or(Vector::splat(0.0));
+                let size = (*self.last_size.val()).unwrap_or(Vector::splat(0.0));
                 ctx.constraints.pos.to_top_left(size)
             }
         };
@@ -235,14 +234,14 @@ impl Node for HorizontalDnD {
             None => *self.pending.val_mut() = None,
         }
 
+        let size = Vector {
+            x: (cursor_x - self.spacing).max(0.0),
+            y: max_h,
+        };
+        self.last_size.set(size);
+
         DrawResult::Complete {
-            region: Some(ScreenRegion::from_min_size(
-                origin,
-                Vector {
-                    x: (cursor_x - self.spacing).max(0.0),
-                    y: max_h,
-                },
-            )),
+            region: Some(ScreenRegion::from_min_size(origin, size)),
         }
     }
 }

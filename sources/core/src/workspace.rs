@@ -104,16 +104,11 @@ impl Workspace {
         .map(downcast_resp)
     }
 
-    /// The screen region a node last drew into last frame.
-    pub fn last_draw_region_of(&self, id: NodeUid) -> Option<ScreenRegion> {
-        self.registry.get(id).and_then(|(_, region)| region)
-    }
-
     fn send_request_dyn(&self, mut q: Request) -> Option<Box<dyn Any>> {
         loop {
             // Get the request target
             let dest = q.dest;
-            let (dest_node, _) = self.registry.get(dest)?;
+            let dest_node = self.registry.get(dest)?;
             let ctx = NodeContext {
                 id: dest,
                 workspace: self,
@@ -151,7 +146,6 @@ impl Workspace {
     pub fn draw_frame(&mut self, ui: &mut Ui, draw_area: Rect) {
         self.draw_root(ui, draw_area);
         self.process_actions();
-        self.registry.tick_frame();
     }
 
     fn draw_root(&mut self, ui: &mut Ui, draw_area: Rect) {
@@ -243,7 +237,7 @@ impl Workspace {
                 return;
             };
             // Not understood here; dereference to the child, if any, and retry
-            let Some((n, _)) = self.registry.get(dest) else {
+            let Some(n) = self.registry.get(dest) else {
                 return;
             };
             let Some(target) = n.deref_target() else {
@@ -290,7 +284,7 @@ impl<'ctx> DrawContext<'ctx> {
         constraints: DrawConstraints,
     ) -> Option<DrawResult> {
         let workspace = self.node.workspace;
-        let (node, _) = workspace.registry.get(id.erase())?;
+        let node = workspace.registry.get(id.erase())?;
 
         let clip_x = constraints
             .x
@@ -339,18 +333,6 @@ impl<'ctx> DrawContext<'ctx> {
             #[allow(deprecated)] // Private call
             node.draw(temp_ctx)
         };
-
-        let maybe_region = res.region().and_then(|reg| {
-            if constraints.should_clip {
-                // Clip the output region to match the actual drawn area
-                reg.intersect(clip_region)
-            } else {
-                Some(reg)
-            }
-        });
-        workspace
-            .registry
-            .update_node_region(id.erase(), maybe_region);
 
         Some(res)
     }

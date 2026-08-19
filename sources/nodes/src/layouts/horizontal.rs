@@ -1,14 +1,27 @@
 use dex_core::prelude::*;
 use serde::{Deserialize, Serialize};
-use utils::Reset;
+use utils::{Reset, Transient};
 
 use crate::layouts::LayoutChild;
+use crate::resolve_center_origin;
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct HorizontalLayout {
     pub children: Vec<LayoutChild>,
     pub allow_wrap: bool,
     pub wrap_spacing: f32,
+    last_size: Transient<Vector>,
+}
+
+impl HorizontalLayout {
+    pub fn new(children: Vec<LayoutChild>, allow_wrap: bool, wrap_spacing: f32) -> Self {
+        Self {
+            children,
+            allow_wrap,
+            wrap_spacing,
+            last_size: Transient::default(),
+        }
+    }
 }
 
 #[typetag::serde]
@@ -29,21 +42,7 @@ impl Node for HorizontalLayout {
             .map(|y_ax| y_ax.provided_value())
             .unwrap_or(f32::INFINITY);
 
-        let origin = match ctx.constraints.pos {
-            PositionConstraint::TopLeft(tl) => tl,
-            PositionConstraint::Center(_) => {
-                let last_known_size = ctx.this_node_last_frame_location().map(|reg| reg.size());
-                let last_size_estimate = match last_known_size {
-                    Some(s) => s,
-                    None => {
-                        // We're going to guess, don't draw this frame
-                        ctx.request_skip_frame();
-                        Vector::splat(300.0)
-                    }
-                };
-                ctx.constraints.pos.to_top_left(last_size_estimate)
-            }
-        };
+        let origin = resolve_center_origin(&mut ctx, &self.last_size, Vector::splat(300.0));
 
         let mut cur_line_width = 0.0;
         let mut cur_line_highest_element = 0.0;
@@ -86,19 +85,16 @@ impl Node for HorizontalLayout {
             }
         }
 
-        fn compute_draw_res(origin: ScreenPos, width: f32, height: f32) -> DrawResult {
-            let consumed_region = ScreenRegion {
-                min: origin,
-                max: origin
-                    + Vector {
-                        x: width,
-                        y: height,
-                    },
+        let compute_draw_res = |origin: ScreenPos, width: f32, height: f32| -> DrawResult {
+            let size = Vector {
+                x: width,
+                y: height,
             };
+            self.last_size.set(size);
             DrawResult::Complete {
-                region: Some(consumed_region),
+                region: Some(ScreenRegion::from_min_size(origin, size)),
             }
-        }
+        };
 
         fn update_cursors(
             maybe_new_region: Option<ScreenRegion>,
