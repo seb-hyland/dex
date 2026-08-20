@@ -16,7 +16,7 @@ pub fn vertical_layout(
         .map(|y_ax| y_ax.provided_value())
         .unwrap_or(f32::INFINITY);
 
-    let origin = constraints.pos.to_top_left(Vector::splat(0.0));
+    let origin = constraints.pos;
 
     let mut consumed_height = 0.0;
     let mut max_width = 0.0_f32;
@@ -36,13 +36,11 @@ pub fn vertical_layout(
         }
 
         let child_constraints = DrawConstraints {
-            pos: PositionConstraint::TopLeft(
-                origin
-                    + Vector {
-                        x: 0.0,
-                        y: y_offset,
-                    },
-            ),
+            pos: origin
+                + Vector {
+                    x: 0.0,
+                    y: y_offset,
+                },
             x: Some(AxisConstraint::AtMost(avail_w)),
             y: Some(AxisConstraint::AtMost(avail_h - y_offset)),
             wrap: WrapConstraints::NotAllowed,

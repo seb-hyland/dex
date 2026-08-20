@@ -2,12 +2,11 @@ use dex_core::prelude::*;
 
 use egui::{Color32, Stroke};
 use serde::{Deserialize, Serialize};
-use utils::{Reset, Transient};
+use utils::Reset;
 
 use crate::layouts::horizontal_layout;
 use crate::primitives::shapes::Line;
 use crate::primitives::text::{CodeEditor, LabelEditable};
-use crate::resolve_center_origin;
 
 #[derive(Clone, Reset, Serialize, Deserialize)]
 pub struct LambdaEditor {
@@ -52,7 +51,6 @@ pub enum LambdaLang {
 pub struct LambdaArg {
     label: NodeUid<LabelEditable>,
     param_name: NodeUid<LabelEditable>,
-    last_size: Transient<Vector>,
 }
 
 #[typetag::serde]
@@ -69,7 +67,7 @@ impl Node for LambdaArg {
         let avail_h = ctx.constraints.y.map(|a| a.provided_value());
         let should_clip = ctx.constraints.should_clip;
 
-        let origin = resolve_center_origin(&mut ctx, &self.last_size, Vector::splat(50.0));
+        let origin = ctx.constraints.pos;
 
         // `label` then `param_name`, laid out in a row.
         let region = horizontal_layout(
@@ -78,7 +76,7 @@ impl Node for LambdaArg {
             ARG_LABEL_GAP,
             false,
             DrawConstraints {
-                pos: PositionConstraint::TopLeft(origin),
+                pos: origin,
                 x: avail_w.map(AxisConstraint::AtMost),
                 y: avail_h.map(AxisConstraint::AtMost),
                 wrap: WrapConstraints::NotAllowed,
@@ -87,8 +85,6 @@ impl Node for LambdaArg {
         )
         .region()
         .unwrap_or_else(|| ScreenRegion::from_min_size(origin, Vector { x: 0.0, y: 0.0 }));
-
-        self.last_size.set(region.size());
 
         DrawResult::Complete {
             region: Some(region),
@@ -133,10 +129,7 @@ impl Node for Lambda {
         };
         let should_clip = constraints.should_clip;
 
-        let origin = constraints.pos.to_top_left(Vector {
-            x: divider_w,
-            y: avail_h.unwrap_or(0.0),
-        });
+        let origin = constraints.pos;
 
         // Row of arguments.
         let args: Vec<_> = self.args.iter().map(|a| a.erase()).collect();
@@ -146,7 +139,7 @@ impl Node for Lambda {
             ARG_GAP,
             true,
             DrawConstraints {
-                pos: PositionConstraint::TopLeft(origin),
+                pos: origin,
                 x: Some(AxisConstraint::AtMost(divider_w)),
                 y: avail_h.map(AxisConstraint::AtMost),
                 wrap: WrapConstraints::NotAllowed,
@@ -180,10 +173,10 @@ impl Node for Lambda {
             .draw_workspace_node(
                 self.editor,
                 DrawConstraints {
-                    pos: PositionConstraint::TopLeft(ScreenPos {
+                    pos: ScreenPos {
                         x: origin.x,
                         y: editor_y,
-                    }),
+                    },
                     x: Some(AxisConstraint::Exactly(divider_w)),
                     y: avail_h.map(|h| AxisConstraint::AtMost((origin.y + h - editor_y).max(0.0))),
                     wrap: WrapConstraints::NotAllowed,

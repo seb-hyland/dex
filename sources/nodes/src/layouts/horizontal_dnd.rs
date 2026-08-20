@@ -24,7 +24,6 @@ pub struct HorizontalDnD {
     sizes: Transient<Vec<Vector>>,
     /// Pending reorder while a child is dragged
     pending: Transient<PendingReorder>,
-    last_size: Transient<Vector>,
 }
 
 /// An in-progress drag: the child at index `from` is previewed at slot `to`
@@ -47,7 +46,6 @@ impl HorizontalDnD {
             spacing,
             sizes: Transient::default(),
             pending: Transient::default(),
-            last_size: Transient::default(),
         }))
     }
 }
@@ -70,13 +68,7 @@ impl Node for HorizontalDnD {
             .map(|a| a.provided_value())
             .unwrap_or(f32::INFINITY);
 
-        let origin = match ctx.constraints.pos {
-            PositionConstraint::TopLeft(tl) => tl,
-            PositionConstraint::Center(_) => {
-                let size = (*self.last_size.val()).unwrap_or(Vector::splat(0.0));
-                ctx.constraints.pos.to_top_left(size)
-            }
-        };
+        let origin = ctx.constraints.pos;
 
         let n = self.children.len();
 
@@ -133,7 +125,7 @@ impl Node for HorizontalDnD {
                 ctx.draw_workspace_node(
                     sensor,
                     DrawConstraints {
-                        pos: PositionConstraint::TopLeft(child_pos),
+                        pos: child_pos,
                         x: Some(AxisConstraint::Exactly(size.x)),
                         y: Some(AxisConstraint::Exactly(size.y)),
                         wrap: WrapConstraints::NotAllowed,
@@ -162,7 +154,7 @@ impl Node for HorizontalDnD {
                 .draw_workspace_node(
                     self.children[idx],
                     DrawConstraints {
-                        pos: PositionConstraint::TopLeft(child_pos),
+                        pos: child_pos,
                         x: Some(AxisConstraint::AtMost((avail_w - cursor_x).max(0.0))),
                         y: Some(AxisConstraint::AtMost(avail_h)),
                         wrap: WrapConstraints::NotAllowed,
@@ -235,7 +227,6 @@ impl Node for HorizontalDnD {
             x: (cursor_x - self.spacing).max(0.0),
             y: max_h,
         };
-        self.last_size.set(size);
 
         DrawResult::Complete {
             region: Some(ScreenRegion::from_min_size(origin, size)),

@@ -58,13 +58,13 @@ impl Node for Canvas {
             x: avail_x,
             y: avail_y,
         };
-        let origin = ctx.constraints.pos.to_top_left(size);
+        let origin = ctx.constraints.pos;
         let region = ScreenRegion::from_min_size(origin, size);
 
         ctx.draw_workspace_node(
             self.drag_interaction,
             DrawConstraints {
-                pos: PositionConstraint::TopLeft(origin),
+                pos: origin,
                 x: Some(AxisConstraint::Exactly(avail_x)),
                 y: Some(AxisConstraint::Exactly(avail_y)),
                 wrap: WrapConstraints::NotAllowed,
@@ -87,7 +87,7 @@ impl Node for Canvas {
                 child,
                 DrawConstraints {
                     // `CanvasNode` children will draw relative to the origin
-                    pos: PositionConstraint::TopLeft(canvas_origin),
+                    pos: canvas_origin,
                     x: None,
                     y: None,
                     wrap: WrapConstraints::NotAllowed,

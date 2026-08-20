@@ -21,7 +21,7 @@ pub fn horizontal_layout(
         .unwrap_or(f32::INFINITY);
     let should_clip = constraints.should_clip;
 
-    let origin = constraints.pos.to_top_left(Vector::splat(0.0));
+    let origin = constraints.pos;
 
     let mut cur_line_width = 0.0;
     let mut cur_line_highest_element = 0.0;
@@ -110,13 +110,11 @@ pub fn horizontal_layout(
         }
 
         let child_constraints = DrawConstraints {
-            pos: PositionConstraint::TopLeft(
-                origin
-                    + Vector {
-                        x: cur_line_width,
-                        y: consumed_height,
-                    },
-            ),
+            pos: origin
+                + Vector {
+                    x: cur_line_width,
+                    y: consumed_height,
+                },
             x: Some(AxisConstraint::AtMost(avail_w - cur_line_width)),
             y: Some(AxisConstraint::AtMost(avail_h - consumed_height)),
             wrap: if allow_wrap {
@@ -159,13 +157,11 @@ pub fn horizontal_layout(
             }
 
             let child_constraints = DrawConstraints {
-                pos: PositionConstraint::TopLeft(
-                    origin
-                        + Vector {
-                            x: cur_line_width,
-                            y: consumed_height,
-                        },
-                ),
+                pos: origin
+                    + Vector {
+                        x: cur_line_width,
+                        y: consumed_height,
+                    },
                 x: Some(AxisConstraint::AtMost(avail_w - cur_line_width)),
                 y: Some(AxisConstraint::AtMost(avail_h - consumed_height)),
                 wrap: WrapConstraints::CanRequest {

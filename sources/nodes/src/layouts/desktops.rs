@@ -89,10 +89,7 @@ impl Node for Desktops {
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
         let avail_w = ctx.constraints.x.map(|a| a.provided_value()).unwrap_or(0.0);
         let avail_h = ctx.constraints.y.map(|a| a.provided_value()).unwrap_or(0.0);
-        let origin = ctx.constraints.pos.to_top_left(Vector {
-            x: avail_w,
-            y: avail_h,
-        });
+        let origin = ctx.constraints.pos;
 
         // Paint the whole screen background white.
         ctx.ui.layer_painter(LayerId::background()).rect_filled(
@@ -125,7 +122,7 @@ impl Node for Desktops {
         ctx.draw_workspace_node(
             self.sidebar,
             DrawConstraints {
-                pos: PositionConstraint::TopLeft(origin),
+                pos: origin,
                 x: Some(AxisConstraint::Exactly(sidebar_w)),
                 y: Some(AxisConstraint::Exactly(avail_h)),
                 wrap: WrapConstraints::NotAllowed,
@@ -140,13 +137,11 @@ impl Node for Desktops {
             TAB_SPACING,
             false,
             DrawConstraints {
-                pos: PositionConstraint::TopLeft(
-                    right_origin
-                        + Vector {
-                            x: TAB_SPACING,
-                            y: TAB_SPACING,
-                        },
-                ),
+                pos: right_origin
+                    + Vector {
+                        x: TAB_SPACING,
+                        y: TAB_SPACING,
+                    },
                 x: Some(AxisConstraint::AtMost(
                     (right_w - 2.0 * TAB_SPACING).max(0.0),
                 )),
@@ -169,10 +164,10 @@ impl Node for Desktops {
             ctx.draw_workspace_node(
                 active,
                 DrawConstraints {
-                    pos: PositionConstraint::TopLeft(ScreenPos {
+                    pos: ScreenPos {
                         x: right_x,
                         y: origin.y + TAB_BAR_H,
-                    }),
+                    },
                     x: Some(AxisConstraint::Exactly(right_w)),
                     y: Some(AxisConstraint::Exactly((avail_h - TAB_BAR_H).max(0.0))),
                     wrap: WrapConstraints::NotAllowed,
@@ -185,10 +180,10 @@ impl Node for Desktops {
         ctx.draw_workspace_node(
             self.divider,
             DrawConstraints {
-                pos: PositionConstraint::TopLeft(ScreenPos {
+                pos: ScreenPos {
                     x: divider_x,
                     y: origin.y,
-                }),
+                },
                 x: Some(AxisConstraint::Exactly(DIVIDER_W)),
                 y: Some(AxisConstraint::Exactly(avail_h)),
                 wrap: WrapConstraints::NotAllowed,
@@ -328,7 +323,7 @@ impl Node for DesktopTabView {
             .y
             .map(|a| a.provided_value())
             .unwrap_or(f32::INFINITY);
-        let origin = ctx.constraints.pos.to_top_left(Vector::splat(0.0));
+        let origin = ctx.constraints.pos;
 
         let editing = ctx
             .node
@@ -346,7 +341,7 @@ impl Node for DesktopTabView {
         let name_res = ctx.draw_workspace_node(
             self.name,
             DrawConstraints {
-                pos: PositionConstraint::TopLeft(origin + Vector { x: PAD_X, y: PAD_Y }),
+                pos: origin + Vector { x: PAD_X, y: PAD_Y },
                 x: Some(AxisConstraint::AtMost((avail_w - 2.0 * PAD_X).max(0.0))),
                 y: Some(AxisConstraint::AtMost((avail_h - 2.0 * PAD_Y).max(0.0))),
                 wrap: WrapConstraints::NotAllowed,
@@ -382,7 +377,7 @@ impl Node for DesktopTabView {
             ctx.draw_workspace_node(
                 self.sensor,
                 DrawConstraints {
-                    pos: PositionConstraint::TopLeft(origin),
+                    pos: origin,
                     x: Some(AxisConstraint::Exactly(tab_size.x)),
                     y: Some(AxisConstraint::Exactly(tab_size.y)),
                     wrap: WrapConstraints::NotAllowed,

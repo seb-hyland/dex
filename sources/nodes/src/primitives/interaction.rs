@@ -76,7 +76,7 @@ impl Node for InteractionBox {
             y: y.provided_value(),
         };
 
-        let origin = ctx.constraints.pos.to_top_left(size);
+        let origin = ctx.constraints.pos;
         let region = ScreenRegion::from_min_size(origin, size);
 
         let resp = ctx

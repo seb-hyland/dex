@@ -70,7 +70,7 @@ impl Node for CanvasNode {
         let ghost_fill = Color32::from_rgba_unmultiplied(130, 130, 130, 26);
         let ghost_stroke = Stroke::new(1.0, Color32::from_gray(150));
 
-        let canvas_origin = ctx.constraints.pos.to_top_left(Vector::splat(0.0));
+        let canvas_origin = ctx.constraints.pos;
 
         let display = (*self.pending.val()).unwrap_or(self.committed);
         let display_tl = canvas_origin + display.pos;
@@ -82,7 +82,7 @@ impl Node for CanvasNode {
         ctx.draw_workspace_node(
             self.child,
             DrawConstraints {
-                pos: PositionConstraint::TopLeft(display_tl),
+                pos: display_tl,
                 x: Some(AxisConstraint::Exactly(display.size.x)),
                 y: Some(AxisConstraint::Exactly(display.size.y)),
                 wrap: WrapConstraints::NotAllowed,
@@ -97,9 +97,7 @@ impl Node for CanvasNode {
         ctx.draw_workspace_node(
             self.proximity,
             DrawConstraints {
-                pos: PositionConstraint::TopLeft(
-                    near_bounds.min - Vector::splat(VISIBILITY_MARGIN),
-                ),
+                pos: near_bounds.min - Vector::splat(VISIBILITY_MARGIN),
                 x: Some(AxisConstraint::Exactly(
                     near_bounds.size().x + 2.0 * VISIBILITY_MARGIN,
                 )),
@@ -225,7 +223,7 @@ impl Node for CanvasNode {
                 ctx.draw_workspace_node(
                     grip,
                     DrawConstraints {
-                        pos: PositionConstraint::TopLeft(display_tl + local),
+                        pos: display_tl + local,
                         x: Some(AxisConstraint::Exactly(sensor_size.x)),
                         y: Some(AxisConstraint::Exactly(sensor_size.y)),
                         wrap: WrapConstraints::NotAllowed,
@@ -241,7 +239,7 @@ impl Node for CanvasNode {
             ctx.draw_workspace_node(
                 self.move_sensor,
                 DrawConstraints {
-                    pos: PositionConstraint::TopLeft(display_tl - handle_offset),
+                    pos: display_tl - handle_offset,
                     x: Some(AxisConstraint::Exactly(HANDLE_SIZE.x)),
                     y: Some(AxisConstraint::Exactly(HANDLE_SIZE.y)),
                     wrap: WrapConstraints::NotAllowed,

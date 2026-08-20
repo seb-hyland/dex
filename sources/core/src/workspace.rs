@@ -6,7 +6,7 @@ use utils::match_dyn;
 
 use crate::{
     ActionBody, ActionFor, AxisConstraint, DrawConstraints, DrawContext, DrawResult, Node,
-    NodeContext, PositionConstraint, RequestFor, ScreenRegion, Vector, WrapConstraints,
+    NodeContext, RequestFor, ScreenRegion, Vector, WrapConstraints,
     compute::{ComputeScheduler, ComputeSchedulerHandle, ComputeTask},
     messages::{Action, ActionGroup, Request, downcast_resp},
     pool::{NodeUid, Registry},
@@ -173,7 +173,7 @@ impl Workspace {
         let root_node = self.root_node;
 
         let constraints = DrawConstraints {
-            pos: PositionConstraint::TopLeft(draw_area.min.into()),
+            pos: draw_area.min.into(),
             x: Some(AxisConstraint::Exactly(draw_area.width())),
             y: Some(AxisConstraint::Exactly(draw_area.height())),
             wrap: WrapConstraints::NotAllowed,
@@ -319,10 +319,7 @@ impl<'ctx> DrawContext<'ctx> {
             x: clip_x,
             y: clip_y,
         };
-        let clip_region = match constraints.pos {
-            PositionConstraint::Center(c) => ScreenRegion::from_center_size(c, clip_size),
-            PositionConstraint::TopLeft(tl) => ScreenRegion::from_min_size(tl, clip_size),
-        };
+        let clip_region = ScreenRegion::from_min_size(constraints.pos, clip_size);
 
         let res = if constraints.should_clip {
             // Draw within a new child UI that is clipped

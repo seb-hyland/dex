@@ -22,7 +22,7 @@ impl Node for CanvasRect {
             x: x.provided_value(),
             y: y.provided_value(),
         };
-        let origin = ctx.constraints.pos.to_top_left(size);
+        let origin = ctx.constraints.pos;
         let region = shapes::Rect {
             size,
             border: Stroke::NONE,
@@ -55,7 +55,7 @@ impl Node for CanvasCircle {
             x: x.provided_value(),
             y: y.provided_value(),
         };
-        let center = ctx.constraints.pos.to_center(size);
+        let center = ctx.constraints.pos + size / 2.0;
         let region = shapes::Circle {
             radius: size.x.min(size.y) / 2.0,
             border: Stroke::NONE,

@@ -67,10 +67,7 @@ impl Label {
         let fits = avail_w.is_none_or(|w| galley.rect.width() <= w);
         if fits {
             // We can render here normally!
-            let origin: Pos2 = constraints
-                .pos
-                .to_top_left(galley.rect.size().into())
-                .into();
+            let origin: Pos2 = constraints.pos.into();
             ctx.ui.painter().galley(origin, galley.clone(), self.color);
             return DrawResult::Complete {
                 region: Some(galley.rect.translate(origin.to_vec2()).into()),
@@ -90,10 +87,7 @@ impl Label {
         job.wrap = TextWrapping::truncate_at_width(w);
         let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job));
 
-        let origin: Pos2 = constraints
-            .pos
-            .to_top_left(galley.rect.size().into())
-            .into();
+        let origin: Pos2 = constraints.pos.into();
         ctx.ui.painter().galley(origin, galley.clone(), self.color);
         DrawResult::Complete {
             region: Some(galley.rect.translate(origin.to_vec2()).into()),
@@ -150,7 +144,7 @@ impl Label {
         let local_rect = galley.rows[..num_rows_to_layout]
             .iter()
             .fold(Rect::NOTHING, |acc, pr| acc.union(pr.rect()));
-        let origin: Pos2 = constraints.pos.to_top_left(local_rect.size().into()).into();
+        let origin: Pos2 = constraints.pos.into();
 
         let mut clip_rect = ctx.ui.clip_rect();
         clip_rect.max.y = clip_rect.max.y.min(origin.y + local_rect.max.y);
@@ -266,7 +260,7 @@ impl LabelEditable {
             x: block_w,
             y: exact_h.unwrap_or(row_h),
         };
-        let origin = ctx.constraints.pos.to_top_left(size);
+        let origin = ctx.constraints.pos;
         // Mirror the editor's centered alignment.
         let text_pos = Pos2 {
             x: origin.x + ((block_w - content_w) * 0.5).max(0.0),
@@ -352,7 +346,7 @@ impl Node for LabelEditable {
             x: block_w,
             y: exact_h.unwrap_or(row_h),
         };
-        let origin = ctx.constraints.pos.to_top_left(size);
+        let origin = ctx.constraints.pos;
 
         let rect = Rect::from_min_size(origin.into(), size.into());
 
@@ -495,7 +489,7 @@ impl Node for CodeEditor {
             x: block_w,
             y: block_h,
         };
-        let origin = ctx.constraints.pos.to_top_left(size);
+        let origin = ctx.constraints.pos;
         let rect = Rect::from_min_size(origin.into(), size.into());
 
         let syntax = syntax_for(&self.language);

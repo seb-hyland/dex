@@ -2,7 +2,8 @@ use crate::{ScreenPos, Vector};
 
 #[derive(Clone, Copy)]
 pub struct DrawConstraints {
-    pub pos: PositionConstraint,
+    /// Top-left of the region to draw into.
+    pub pos: ScreenPos,
     pub x: Option<AxisConstraint>,
     pub y: Option<AxisConstraint>,
     pub wrap: WrapConstraints,
@@ -14,28 +15,6 @@ impl DrawConstraints {
         let x_fits = self.x.is_none_or(|x_ax| x_ax.provided_value() >= size.x);
         let y_fits = self.y.is_none_or(|y_ax| y_ax.provided_value() >= size.y);
         x_fits && y_fits
-    }
-}
-
-#[derive(Clone, Copy)]
-pub enum PositionConstraint {
-    Center(ScreenPos),
-    TopLeft(ScreenPos),
-}
-
-impl PositionConstraint {
-    pub fn to_top_left(&self, size: Vector) -> ScreenPos {
-        match self {
-            Self::TopLeft(tl) => *tl,
-            Self::Center(c) => *c - size / 2.0,
-        }
-    }
-
-    pub fn to_center(&self, size: Vector) -> ScreenPos {
-        match self {
-            Self::Center(c) => *c,
-            Self::TopLeft(tl) => *tl + size / 2.0,
-        }
     }
 }
 

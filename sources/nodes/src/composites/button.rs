@@ -1,12 +1,11 @@
 use dex_core::prelude::*;
 use egui::{Color32, Stroke};
 use serde::{Deserialize, Serialize};
-use utils::{Reset, Transient};
+use utils::Reset;
 
 use crate::primitives::interaction::InteractionBox;
 use crate::primitives::shapes::Rect;
 use crate::primitives::text::Label;
-use crate::resolve_center_origin;
 
 /// A clickable button. Send it [`WasClicked`](crate::primitives::interaction::WasClicked) to poll it.
 #[derive(Clone, Reset, Serialize, Deserialize)]
@@ -19,7 +18,6 @@ pub struct Button {
     pub fill_color: Color32,
     pub border: Stroke,
     interaction: NodeUid<InteractionBox>,
-    last_size: Transient<Vector>,
 }
 
 impl Button {
@@ -42,7 +40,6 @@ impl Button {
             fill_color: Color32::TRANSPARENT,
             border: Stroke::new(1.0, Color32::GRAY),
             interaction,
-            last_size: Transient::default(),
         };
         configure(&mut button);
         ws.insert_node(Box::new(button))
@@ -60,11 +57,11 @@ impl Node for Button {
         let avail_w = ctx.constraints.x.map(|a| a.provided_value());
         let avail_h = ctx.constraints.y.map(|a| a.provided_value());
 
-        let origin = resolve_center_origin(&mut ctx, &self.last_size, Vector::splat(50.0));
+        let origin = ctx.constraints.pos;
 
         let content_origin = origin + Vector::splat(padding);
         let label_constraints = DrawConstraints {
-            pos: PositionConstraint::TopLeft(content_origin),
+            pos: content_origin,
             x: avail_w.map(|w| AxisConstraint::AtMost((w - 2.0 * padding).max(0.0))),
             y: avail_h.map(|h| AxisConstraint::AtMost((h - 2.0 * padding).max(0.0))),
             wrap: ctx.constraints.wrap,
@@ -99,15 +96,13 @@ impl Node for Button {
         ctx.draw_workspace_node(
             self.interaction,
             DrawConstraints {
-                pos: PositionConstraint::TopLeft(origin),
+                pos: origin,
                 x: Some(AxisConstraint::Exactly(button_size.x)),
                 y: Some(AxisConstraint::Exactly(button_size.y)),
                 wrap: WrapConstraints::NotAllowed,
                 should_clip: ctx.constraints.should_clip,
             },
         );
-
-        self.last_size.set(button_size);
 
         DrawResult::Complete {
             region: Some(ScreenRegion::from_min_size(origin, button_size)),
