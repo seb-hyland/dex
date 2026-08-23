@@ -7,8 +7,8 @@ use crate::{
     composites::button::Button,
     layouts::{
         canvas::{layout::Canvas, sidebar::CanvasSidebar},
+        horizontal::HorizontalLayout,
         horizontal_dnd::{AddChild, HorizontalDnD},
-        horizontal_layout,
     },
     primitives::{
         interaction::{InteractionBox, WasClicked, WasDoubleClicked, WasDragged, WasHovered},
@@ -56,11 +56,11 @@ impl Desktops {
         let tab_bar = HorizontalDnD::build(ws, vec![tab.erase()], TAB_SPACING);
         let sidebar = CanvasSidebar::build(ws, id);
         let add_button = Button::build(ws, Label::new("+".to_owned()));
-        let divider = ws.insert_node(Box::new(InteractionBox::sensing(true, false, true)));
+        let divider = ws.insert_node(InteractionBox::sensing(true, false, true));
 
         ws.insert_node_at(
             id,
-            Box::new(Desktops {
+            Desktops {
                 tab_bar,
                 active: Some(canvas),
                 sidebar,
@@ -68,7 +68,7 @@ impl Desktops {
                 divider,
                 sidebar_width: 200.0,
                 pending_sidebar_width: Transient::default(),
-            }),
+            },
         );
         id
     }
@@ -131,25 +131,31 @@ impl Node for Desktops {
         );
 
         // Tab bar, then the add-canvas button, laid out in a row.
-        horizontal_layout(
-            &mut ctx,
-            &[self.tab_bar.erase(), self.add_button.erase()],
-            TAB_SPACING,
-            false,
-            DrawConstraints {
-                pos: right_origin
-                    + Vector {
-                        x: TAB_SPACING,
-                        y: TAB_SPACING,
-                    },
-                x: Some(AxisConstraint::AtMost(
-                    (right_w - 2.0 * TAB_SPACING).max(0.0),
-                )),
-                y: Some(AxisConstraint::AtMost((TAB_BAR_H - TAB_SPACING).max(0.0))),
-                wrap: WrapConstraints::NotAllowed,
-                should_clip: false,
-            },
-        );
+        if let Some(tab_bar) = ctx.get_workspace_node(self.tab_bar)
+            && let Some(add_button) = ctx.get_workspace_node(self.add_button)
+        {
+            let layout = HorizontalLayout {
+                children: vec![tab_bar, add_button],
+                spacing: TAB_SPACING,
+                allow_wrap: false,
+            };
+            ctx.draw_node(
+                &layout,
+                DrawConstraints {
+                    pos: right_origin
+                        + Vector {
+                            x: TAB_SPACING,
+                            y: TAB_SPACING,
+                        },
+                    x: Some(AxisConstraint::AtMost(
+                        (right_w - 2.0 * TAB_SPACING).max(0.0),
+                    )),
+                    y: Some(AxisConstraint::AtMost((TAB_BAR_H - TAB_SPACING).max(0.0))),
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip: false,
+                },
+            );
+        }
         if ctx
             .node
             .workspace
@@ -292,14 +298,14 @@ impl DesktopTabView {
         parent: NodeUid<Desktops>,
         name_text: String,
     ) -> NodeUid<DesktopTabView> {
-        let name = ws.insert_node(Box::new(LabelEditable::click_to_edit(name_text)));
-        let sensor = ws.insert_node(Box::new(InteractionBox::sensing(false, true, false)));
-        ws.insert_node(Box::new(Self {
+        let name = ws.insert_node(LabelEditable::click_to_edit(name_text));
+        let sensor = ws.insert_node(InteractionBox::sensing(false, true, false));
+        ws.insert_node(Self {
             canvas,
             name,
             parent,
             sensor,
-        }))
+        })
     }
 }
 

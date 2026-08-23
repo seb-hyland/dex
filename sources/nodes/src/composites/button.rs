@@ -32,7 +32,7 @@ impl Button {
         label: Label,
         configure: impl FnOnce(&mut Self),
     ) -> NodeUid<Button> {
-        let interaction = ws.insert_node(Box::new(InteractionBox::sensing(false, true, false)));
+        let interaction = ws.insert_node(InteractionBox::sensing(false, true, false));
         let mut button = Self {
             label,
             padding: 4.0,
@@ -42,7 +42,7 @@ impl Button {
             interaction,
         };
         configure(&mut button);
-        ws.insert_node(Box::new(button))
+        ws.insert_node(button)
     }
 }
 

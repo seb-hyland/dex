@@ -20,13 +20,14 @@ pub mod prelude {
         workspace::Workspace,
         *,
     };
+    pub use std::sync::Arc;
     pub use utils::AsAny;
 }
 pub use prelude::*;
 use utils::Reset;
 
 #[typetag::serde]
-pub trait Node: RequestableDyn + ActionHandler + Reset + 'static + DynClone + Send {
+pub trait Node: RequestableDyn + ActionHandler + Reset + 'static + DynClone + Send + Sync {
     fn type_name(&self) -> String;
 
     /// Given some context, draw the node on screen

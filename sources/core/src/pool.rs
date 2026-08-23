@@ -2,6 +2,7 @@ use std::{
     fmt,
     hash::{Hash, Hasher},
     marker::PhantomData,
+    sync::Arc,
 };
 
 use rpds::HashTrieMap;
@@ -32,7 +33,7 @@ impl<T: ?Sized> NodeUid<T> {
         }
     }
 
-    /// The nil id, used as an action's destination when there is no target node (the workspace itself is the target).
+    /// The nil id, used as an action's destination when there is no target node.
     pub fn nil() -> Self {
         Self {
             id: Uuid::nil(),
@@ -130,12 +131,12 @@ pub struct Registry {
 }
 
 impl Registry {
-    pub(crate) fn new(root_node: Box<dyn Node>) -> (Self, NodeUid) {
+    pub(crate) fn new(root_node: impl Node) -> (Self, NodeUid) {
         let mut pool = NodePool::default();
         let mut snapshot = WorldSnapshot::default();
 
         let root_id = NodeUid::new_workspace();
-        snapshot.push(root_node, root_id, &mut pool);
+        snapshot.push(Arc::new(root_node), root_id, &mut pool);
 
         (
             Self {
@@ -155,7 +156,7 @@ impl Registry {
         }
     }
 
-    pub(crate) fn get(&self, id: NodeUid) -> Option<&dyn Node> {
+    pub(crate) fn get(&self, id: NodeUid) -> Option<Arc<dyn Node>> {
         let maybe_nobj = self.history.current_epoch().data.map.get(&id);
         maybe_nobj.map(|nobj| nobj.current(&self.pool))
     }
@@ -179,14 +180,8 @@ impl Registry {
         self.history.current_epoch().time()
     }
 
-    /// Clone the node currently registered at `dest`, if any.
-    pub(crate) fn clone_node(&self, dest: NodeUid) -> Option<Box<dyn Node>> {
-        let nobj = self.history.current_epoch().data.map.get(&dest)?;
-        Some(dyn_clone::clone_box(nobj.current(&self.pool)))
-    }
-
     /// Commit `node` as the new current state of `dest`, recording `edge` in the node's history.
-    pub(crate) fn commit_node(&mut self, dest: NodeUid, edge: Action, node: Box<dyn Node>) {
+    pub(crate) fn commit_node(&mut self, dest: NodeUid, edge: Action, node: Arc<dyn Node>) {
         let cur_epoch_time = self.current_epoch_time();
 
         if let Some(nobj) = self.history.current_epoch_mut().map.get_mut(&dest) {
@@ -205,7 +200,7 @@ struct WorldSnapshot {
 }
 
 impl WorldSnapshot {
-    fn push(&mut self, new_node: Box<dyn Node>, uid: NodeUid, pool: &mut NodePool) {
+    fn push(&mut self, new_node: Arc<dyn Node>, uid: NodeUid, pool: &mut NodePool) {
         let new_node_object = NodeObject::new(new_node, pool);
         self.map.insert_mut(uid, new_node_object);
     }
@@ -218,14 +213,14 @@ struct NodeObject {
 }
 
 impl NodeObject {
-    fn new(node: Box<dyn Node>, pool: &mut NodePool) -> Self {
+    fn new(node: Arc<dyn Node>, pool: &mut NodePool) -> Self {
         let new_ref = pool.insert(node);
         Self {
             history: HistoryGraph::new(new_ref),
         }
     }
 
-    pub(crate) fn current<'pool>(&self, pool: &'pool NodePool) -> &'pool dyn Node {
+    pub(crate) fn current(&self, pool: &NodePool) -> Arc<dyn Node> {
         let cur_epoch = self.history.current_epoch();
         pool.get(cur_epoch.data)
             .expect("Reference in use should not be freed")
@@ -234,7 +229,7 @@ impl NodeObject {
     /// Record `node` as this object's current state, starting a new history epoch labelled with `edge`
     pub(crate) fn commit(
         &mut self,
-        node: Box<dyn Node>,
+        node: Arc<dyn Node>,
         edge: Action,
         epoch_ts: Timestamp,
         pool: &mut NodePool,
@@ -256,19 +251,19 @@ impl NodeObject {
 */
 #[derive(Default, Serialize, Deserialize, Reset)]
 pub(crate) struct NodePool {
-    inner: SlotMap<NodeRef, Box<dyn Node>>,
+    inner: SlotMap<NodeRef, Arc<dyn Node>>,
 }
 
 new_key_type! { struct NodeRef; }
 impl_Reset_noop!(NodeRef);
 
 impl NodePool {
-    fn get(&self, nref: NodeRef) -> Option<&dyn Node> {
-        self.inner.get(nref).map(|n| &**n)
+    fn get(&self, nref: NodeRef) -> Option<Arc<dyn Node>> {
+        self.inner.get(nref).cloned()
     }
 
     #[must_use]
-    fn insert(&mut self, node: Box<dyn Node>) -> NodeRef {
+    fn insert(&mut self, node: Arc<dyn Node>) -> NodeRef {
         self.inner.insert(node)
     }
 }

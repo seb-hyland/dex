@@ -4,7 +4,7 @@ use egui::{Color32, Stroke};
 use serde::{Deserialize, Serialize};
 use utils::Reset;
 
-use crate::layouts::horizontal_layout;
+use crate::layouts::HorizontalLayout;
 use crate::primitives::shapes::Line;
 use crate::primitives::text::{CodeEditor, LabelEditable};
 
@@ -70,25 +70,28 @@ impl Node for LambdaArg {
         let origin = ctx.constraints.pos;
 
         // `label` then `param_name`, laid out in a row.
-        let region = horizontal_layout(
-            &mut ctx,
-            &[self.label.erase(), self.param_name.erase()],
-            ARG_LABEL_GAP,
-            false,
-            DrawConstraints {
-                pos: origin,
-                x: avail_w.map(AxisConstraint::AtMost),
-                y: avail_h.map(AxisConstraint::AtMost),
-                wrap: WrapConstraints::NotAllowed,
-                should_clip,
-            },
-        )
-        .region()
-        .unwrap_or_else(|| ScreenRegion::from_min_size(origin, Vector { x: 0.0, y: 0.0 }));
+        let layout = HorizontalLayout {
+            children: [self.label.erase(), self.param_name.erase()]
+                .into_iter()
+                .filter_map(|nuid| ctx.get_workspace_node(nuid))
+                .collect(),
+            spacing: ARG_LABEL_GAP,
+            allow_wrap: false,
+        };
+        let region = ctx
+            .draw_node(
+                &layout,
+                DrawConstraints {
+                    pos: origin,
+                    x: avail_w.map(AxisConstraint::AtMost),
+                    y: avail_h.map(AxisConstraint::AtMost),
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip,
+                },
+            )
+            .region();
 
-        DrawResult::Complete {
-            region: Some(region),
-        }
+        DrawResult::Complete { region }
     }
 }
 
@@ -132,23 +135,29 @@ impl Node for Lambda {
         let origin = constraints.pos;
 
         // Row of arguments.
-        let args: Vec<_> = self.args.iter().map(|a| a.erase()).collect();
-        let row_h = horizontal_layout(
-            &mut ctx,
-            &args,
-            ARG_GAP,
-            true,
-            DrawConstraints {
-                pos: origin,
-                x: Some(AxisConstraint::AtMost(divider_w)),
-                y: avail_h.map(AxisConstraint::AtMost),
-                wrap: WrapConstraints::NotAllowed,
-                should_clip,
-            },
-        )
-        .region()
-        .map(|r| r.size().y)
-        .unwrap_or(0.0);
+        let layout = HorizontalLayout {
+            children: self
+                .args
+                .iter()
+                .filter_map(|a| ctx.get_workspace_node(*a))
+                .collect(),
+            spacing: ARG_GAP,
+            allow_wrap: true,
+        };
+        let row_h = ctx
+            .draw_node(
+                &layout,
+                DrawConstraints {
+                    pos: origin,
+                    x: Some(AxisConstraint::AtMost(divider_w)),
+                    y: avail_h.map(AxisConstraint::AtMost),
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip,
+                },
+            )
+            .region()
+            .map(|r| r.size().y)
+            .unwrap_or(0.0);
 
         // Dividing line beneath the argument row (a paint primitive).
         let divider_y = origin.y + row_h + SECTION_GAP;

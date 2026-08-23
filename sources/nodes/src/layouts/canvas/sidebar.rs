@@ -5,12 +5,12 @@ use utils::Reset;
 use crate::{
     composites::button::Button,
     layouts::{
+        HorizontalLayout,
         canvas::{
             layout::AddCanvasItem,
             nodes::shapes::{CanvasCircle, CanvasRect},
         },
         desktops::Desktops,
-        horizontal_layout,
     },
     primitives::{
         interaction::WasClicked,
@@ -38,16 +38,16 @@ impl CanvasSidebar {
                 })
             })
             .collect();
-        ws.insert_node(Box::new(Self { desktops, buttons }))
+        ws.insert_node(Self { desktops, buttons })
     }
 
     /// The insert action for the option at `index`.
     fn dispatch(&self, index: usize) -> Option<Action> {
         let dest = self.desktops.erase();
-        let child: Box<dyn Node> = match index {
-            0 => Box::new(LabelEditable::new("Text here".to_owned())),
-            1 => Box::new(CanvasRect),
-            2 => Box::new(CanvasCircle),
+        let child: Arc<dyn Node> = match index {
+            0 => Arc::new(LabelEditable::new("Text here".to_owned())),
+            1 => Arc::new(CanvasRect),
+            2 => Arc::new(CanvasCircle),
             _ => return None,
         };
         Some(Action {
@@ -68,9 +68,16 @@ impl Node for CanvasSidebar {
         const GAP: f32 = 4.0;
 
         // Draw the option buttons in a vertical stack, then poll each.
-        let constraints = ctx.constraints;
         let buttons: Vec<NodeUid> = self.buttons.iter().map(|b| b.erase()).collect();
-        let result = horizontal_layout(&mut ctx, &buttons, GAP, true, constraints);
+        let layout = HorizontalLayout {
+            children: buttons
+                .iter()
+                .filter_map(|b_uid| ctx.get_workspace_node(*b_uid))
+                .collect(),
+            spacing: GAP,
+            allow_wrap: true,
+        };
+        let result = ctx.draw_node(&layout, ctx.constraints);
 
         for (i, &btn) in self.buttons.iter().enumerate() {
             if ctx

@@ -18,13 +18,12 @@ pub struct Canvas {
 impl Canvas {
     /// Build an empty canvas into `ws`.
     pub fn build(ws: &Workspace) -> NodeUid<Canvas> {
-        let drag_interaction =
-            ws.insert_node(Box::new(InteractionBox::sensing(false, false, true)));
-        ws.insert_node(Box::new(Self {
+        let drag_interaction = ws.insert_node(InteractionBox::sensing(false, false, true));
+        ws.insert_node(Self {
             children: Vec::new(),
             drag_interaction,
             screen_offset: Transient::default(),
-        }))
+        })
     }
 
     pub fn push_child(&mut self, child: NodeUid<CanvasNode>) {
@@ -111,7 +110,7 @@ impl Node for Canvas {
 
 defhandlers! { Canvas {
     actions: [
-        AddCanvasItem { child: Box<dyn Node> } => (this, a, ctx) {
+        AddCanvasItem { child: Arc<dyn Node> } => (this, a, ctx) {
             const DEFAULT_CHILD_SIZE: Vector = Vector { x: 160.0, y: 40.0 };
 
             let child_id = ctx.workspace.insert_node_dyn(a.child);

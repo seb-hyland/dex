@@ -3503,6 +3503,7 @@ version = "0.1.0"
 dependencies = [
  "dyn-clone",
  "egui",
+ "parking_lot",
  "petgraph",
  "rpds",
  "serde",

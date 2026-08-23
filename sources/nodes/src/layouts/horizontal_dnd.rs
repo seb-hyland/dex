@@ -38,15 +38,15 @@ impl HorizontalDnD {
     pub fn build(ws: &Workspace, children: Vec<NodeUid>, spacing: f32) -> NodeUid<HorizontalDnD> {
         let sensors = children
             .iter()
-            .map(|_| ws.insert_node(Box::new(InteractionBox::sensing(false, false, true))))
+            .map(|_| ws.insert_node(InteractionBox::sensing(false, false, true)))
             .collect();
-        ws.insert_node(Box::new(Self {
+        ws.insert_node(Self {
             children,
             sensors,
             spacing,
             sizes: Transient::default(),
             pending: Transient::default(),
-        }))
+        })
     }
 }
 
@@ -248,7 +248,7 @@ defhandlers! { HorizontalDnD {
         AddChild { child: NodeUid } => (this, a, ctx) {
             this.children.push(a.child);
             // Mint a matching slot sensor.
-            let sensor = ctx.workspace.insert_node(Box::new(InteractionBox::sensing(false, false, true)));
+            let sensor = ctx.workspace.insert_node(InteractionBox::sensing(false, false, true));
             this.sensors.push(sensor);
         },
         RemoveChild { child: NodeUid } => (this, a, ctx) {

@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 dyn-clone.workspace = true
+egui.workspace = true
+parking_lot.workspace = true
 petgraph.workspace = true
 rpds.workspace = true
 serde.workspace = true
@@ -12,4 +14,3 @@ serde_json.workspace = true
 slotmap.workspace = true
 utils-proc-macro.workspace = true
 uuid.workspace = true
-egui.workspace = true

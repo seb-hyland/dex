@@ -1,5 +1,10 @@
-use std::{any::Any, borrow::Cow, sync::mpsc};
+use std::{
+    any::Any,
+    borrow::Cow,
+    sync::{Arc, mpsc},
+};
 
+use dyn_clone::clone_box;
 use egui::{Rect, Ui, UiBuilder};
 use serde::{Deserialize, Serialize};
 use utils::match_dyn;
@@ -29,7 +34,7 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn new_with_root(root: Box<dyn Node>) -> Self {
+    pub fn new_with_root(root: impl Node) -> Self {
         let (registry, root_node) = Registry::new(root);
         let (action_tx, action_recv) = mpsc::channel();
 
@@ -58,16 +63,16 @@ impl Workspace {
     }
 
     /// Insert a node into the registry immediately, without going through the action queue.
-    pub fn insert_node_now<T: Node>(&mut self, node: Box<T>) -> NodeUid<T> {
+    pub fn insert_node_now<T: Node>(&mut self, node: T) -> NodeUid<T> {
         let uid = NodeUid::new_workspace();
         self.insert_node_now_at(uid, node);
         uid
     }
 
     /// Insert a node under a caller-chosen id (minted with [`NodeUid::new_workspace`]).
-    pub fn insert_node_now_at<T: Node>(&mut self, uid: NodeUid<T>, node: Box<T>) {
+    pub fn insert_node_now_at<T: Node>(&mut self, uid: NodeUid<T>, node: T) {
         self.registry.push(PushWorkspaceNode {
-            node,
+            node: Arc::new(node),
             uid: uid.erase(),
         });
     }
@@ -124,20 +129,20 @@ impl Workspace {
         }
     }
 
-    pub fn insert_node<T: Node>(&self, node: Box<T>) -> NodeUid<T> {
-        self.insert_node_dyn(node).cast()
+    pub fn insert_node<T: Node>(&self, node: T) -> NodeUid<T> {
+        self.insert_node_dyn(Arc::new(node)).cast()
     }
 
     /**
         Queue node insertion with a caller-chosen id.
         Functions similar to [`Workspace::insert_node`], but for a node whose id must be known.
     */
-    pub fn insert_node_at<T: Node>(&self, uid: NodeUid<T>, node: Box<T>) {
+    pub fn insert_node_at<T: Node>(&self, uid: NodeUid<T>, node: T) {
         self.submit_action_dyn(Action {
             dest: NodeUid::nil(),
             description: format!("Inserted node of type {}", node.type_name()).into(),
             body: Box::new(PushWorkspaceNode {
-                node,
+                node: Arc::new(node),
                 uid: uid.erase(),
             }),
         });
@@ -149,7 +154,7 @@ impl Workspace {
         self.process_actions();
     }
 
-    pub fn insert_node_dyn(&self, node: Box<dyn Node>) -> NodeUid {
+    pub fn insert_node_dyn(&self, node: Arc<dyn Node>) -> NodeUid {
         let uid = NodeUid::new_workspace();
 
         self.submit_action_dyn(Action {
@@ -201,7 +206,7 @@ impl Workspace {
 
     fn remove_node(&mut self, uid: NodeUid) {
         // Run cleanup before removing the node.
-        if let Some(node) = self.registry.clone_node(uid) {
+        if let Some(node) = self.registry.get(uid) {
             node.on_delete(NodeContext {
                 id: uid,
                 workspace: self,
@@ -242,26 +247,25 @@ impl Workspace {
     fn apply_action(&mut self, mut action: Action) {
         loop {
             let dest = action.dest;
-            let Some(mut node) = self.registry.clone_node(dest) else {
+            let Some(node) = self.registry.get(dest) else {
                 return;
             };
+            let mut node_owned = clone_box(&*node);
 
             let ctx = NodeContext {
                 id: dest,
                 workspace: self,
             };
-            let leftover = node.handle_action(dyn_clone::clone_box(&*action.body), ctx);
-            self.registry.commit_node(dest, action.clone(), node);
+            let leftover = node_owned.handle_action(dyn_clone::clone_box(&*action.body), ctx);
+            self.registry
+                .commit_node(dest, action.clone(), Arc::from(node_owned));
 
             let Some(body) = leftover else {
                 // The action was understood and handled
                 return;
             };
             // Not understood here; dereference to the child, if any, and retry
-            let Some(n) = self.registry.get(dest) else {
-                return;
-            };
-            let Some(target) = n.deref_target() else {
+            let Some(target) = self.registry.get(dest).and_then(|node| node.deref_target()) else {
                 return;
             };
             action = Action {
@@ -283,7 +287,7 @@ impl Workspace {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct PushWorkspaceNode {
-    pub node: Box<dyn Node>,
+    pub node: Arc<dyn Node>,
     pub uid: NodeUid,
 }
 
@@ -299,13 +303,17 @@ pub(crate) struct RemoveWorkspaceNode {
 impl ActionBody for RemoveWorkspaceNode {}
 
 impl<'ctx> DrawContext<'ctx> {
-    pub fn draw_workspace_node<T: ?Sized>(
+    pub fn get_workspace_node<T: ?Sized>(&self, id: NodeUid<T>) -> Option<Arc<dyn Node>> {
+        self.node.workspace.registry.get(id.erase())
+    }
+
+    fn draw_node_with(
         &mut self,
-        id: NodeUid<T>,
+        node: &dyn Node,
+        id: NodeUid,
         constraints: DrawConstraints,
-    ) -> Option<DrawResult> {
+    ) -> DrawResult {
         let workspace = self.node.workspace;
-        let node = workspace.registry.get(id.erase())?;
 
         let clip_x = constraints
             .x
@@ -321,17 +329,14 @@ impl<'ctx> DrawContext<'ctx> {
         };
         let clip_region = ScreenRegion::from_min_size(constraints.pos, clip_size);
 
-        let res = if constraints.should_clip {
+        if constraints.should_clip {
             // Draw within a new child UI that is clipped
 
             let mut child_ui = self.ui.new_child(UiBuilder::new());
             child_ui.set_clip_rect(clip_region.into());
 
             let temp_ctx = DrawContext {
-                node: NodeContext {
-                    id: id.erase(),
-                    workspace,
-                },
+                node: NodeContext { id, workspace },
                 ui: &mut child_ui,
                 constraints,
             };
@@ -350,8 +355,21 @@ impl<'ctx> DrawContext<'ctx> {
 
             #[allow(deprecated)] // Private call
             node.draw(temp_ctx)
-        };
+        }
+    }
 
-        Some(res)
+    pub fn draw_node(&mut self, node: &dyn Node, constraints: DrawConstraints) -> DrawResult {
+        self.draw_node_with(node, NodeUid::nil(), constraints)
+    }
+
+    pub fn draw_workspace_node<T: ?Sized>(
+        &mut self,
+        id: NodeUid<T>,
+        constraints: DrawConstraints,
+    ) -> Option<DrawResult> {
+        let id = id.erase();
+
+        let node = self.node.workspace.registry.get(id)?;
+        Some(self.draw_node_with(&*node, id, constraints))
     }
 }

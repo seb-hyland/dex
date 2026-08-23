@@ -1,48 +1,55 @@
-use std::{
-    cell::{Ref, RefCell, RefMut},
-    hash::Hash,
-};
+use std::{hash::Hash, sync::Arc};
 
+use parking_lot::{
+    RawRwLock, RwLock, RwLockReadGuard, RwLockWriteGuard,
+    lock_api::{MappedRwLockReadGuard, MappedRwLockWriteGuard},
+};
 use petgraph::{EdgeType, csr::IndexType, prelude::StableGraph};
 use rpds::HashTrieMap;
 use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(bound = "")]
 /// A cached, short-lived, reconstructable value.
-pub struct Transient<T> {
+pub struct Transient<T: Clone> {
     #[serde(skip)]
-    inner: RefCell<Option<T>>,
+    inner: RwLock<Option<T>>,
 }
 
-impl<T> Transient<T> {
+impl<T: Clone> Transient<T> {
     #[track_caller]
-    pub fn val(&self) -> Ref<'_, Option<T>> {
-        self.inner.borrow()
+    pub fn val(&self) -> RwLockReadGuard<'_, Option<T>> {
+        self.inner.read()
     }
 
-    pub fn val_or_else(&self, f: impl FnOnce() -> T) -> Ref<'_, T> {
+    pub fn val_or_else(
+        &self,
+        f: impl FnOnce() -> T,
+    ) -> MappedRwLockReadGuard<'_, parking_lot::RawRwLock, T> {
         self.set_if_none(f);
-        Ref::map(self.val(), |r| r.as_ref().unwrap())
+        RwLockReadGuard::map(self.val(), |v| v.as_ref().unwrap())
     }
 
     #[track_caller]
-    pub fn val_mut(&self) -> RefMut<'_, Option<T>> {
-        self.inner.borrow_mut()
+    pub fn val_mut(&self) -> RwLockWriteGuard<'_, Option<T>> {
+        self.inner.write()
     }
 
-    pub fn val_mut_or_else(&self, f: impl FnOnce() -> T) -> RefMut<'_, T> {
+    pub fn val_mut_or_else(
+        &self,
+        f: impl FnOnce() -> T,
+    ) -> MappedRwLockWriteGuard<'_, RawRwLock, T> {
         self.set_if_none(f);
-        RefMut::map(self.val_mut(), |r| r.as_mut().unwrap())
+        RwLockWriteGuard::map(self.val_mut(), |v| v.as_mut().unwrap())
     }
 
     pub fn set(&self, val: T) {
-        *self.inner.borrow_mut() = Some(val);
+        *self.inner.write() = Some(val);
     }
 
     fn set_if_none(&self, f: impl FnOnce() -> T) {
-        let is_none = self.inner.borrow().is_none();
+        let is_none = self.inner.read().is_none();
         if is_none {
             self.set(f());
         }
@@ -55,9 +62,9 @@ pub trait Reset {
     fn reset(&self);
 }
 
-impl<T> Reset for Transient<T> {
+impl<T: Clone> Reset for Transient<T> {
     fn reset(&self) {
-        *self.inner.borrow_mut() = None;
+        *self.inner.write() = None;
     }
 }
 
@@ -101,15 +108,15 @@ impl_Reset_noop!(
     egui::FontId,
 );
 
-impl<T: Reset + ?Sized> Reset for Box<T> {
+impl<T: Reset + ?Sized> Reset for Arc<T> {
     fn reset(&self) {
         (**self).reset();
     }
 }
 
-impl<T: Reset> Reset for RefCell<T> {
+impl<T: Reset> Reset for RwLock<T> {
     fn reset(&self) {
-        self.borrow().reset();
+        self.write().reset();
     }
 }
 
@@ -170,10 +177,19 @@ impl<T: Reset, E, D: EdgeType, I: IndexType> Reset for StableGraph<T, E, D, I> {
     }
 }
 
-impl<T> Default for Transient<T> {
+impl<T: Clone> Clone for Transient<T> {
+    fn clone(&self) -> Self {
+        let inner = self.inner.read().clone();
+        Self {
+            inner: RwLock::new(inner),
+        }
+    }
+}
+
+impl<T: Clone> Default for Transient<T> {
     fn default() -> Self {
         Self {
-            inner: RefCell::new(None),
+            inner: RwLock::new(None),
         }
     }
 }

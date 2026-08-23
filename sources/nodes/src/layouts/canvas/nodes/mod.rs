@@ -34,8 +34,8 @@ impl CanvasNode {
         canvas_pos: Vector,
         size: Vector,
     ) -> NodeUid<CanvasNode> {
-        let sensor = |kind| ws.insert_node(Box::new(kind));
-        ws.insert_node(Box::new(Self {
+        let sensor = |kind| ws.insert_node(kind);
+        ws.insert_node(Self {
             child,
             committed: ConstraintsTuple {
                 pos: canvas_pos,
@@ -45,7 +45,7 @@ impl CanvasNode {
             proximity: sensor(InteractionBox::sensing(true, false, false)),
             move_sensor: sensor(InteractionBox::sensing(true, false, true)),
             grips: std::array::from_fn(|_| sensor(InteractionBox::sensing(false, false, true))),
-        }))
+        })
     }
 }
 
