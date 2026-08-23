@@ -1,14 +1,30 @@
 use dex_core::prelude::*;
-use serde::{Deserialize, Serialize};
-use utils::Reset;
 
 use crate::layouts::child::LayoutChild;
 
 /// Lay out `children` top-to-bottom, `spacing` apart.
-#[derive(Clone, Serialize, Deserialize, Reset)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct VerticalLayout {
+    // Composed from node handles by `build`; `LayoutChild` isn't bindable.
+    #[dynamic(skip)]
     pub children: Vec<LayoutChild>,
     pub spacing: f32,
+}
+
+#[utils::dynamic_methods]
+impl VerticalLayout {
+    /// Build a column of workspace-node `children` into `ws`.
+    pub fn build(
+        ws: WorkspaceActionHandle,
+        children: Vec<NodeUid>,
+        spacing: f32,
+    ) -> NodeUid<VerticalLayout> {
+        ws.insert_node(Self {
+            children: children.into_iter().map(LayoutChild::Id).collect(),
+            spacing,
+        })
+    }
 }
 
 #[typetag::serde]

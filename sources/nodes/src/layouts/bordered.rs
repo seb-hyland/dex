@@ -1,19 +1,16 @@
 use dex_core::prelude::*;
-use egui::{Color32, Stroke, StrokeKind};
-use serde::{Deserialize, Serialize};
-use utils::Reset;
 
 use crate::layouts::child::LayoutChild;
 use crate::primitives::shapes::Rect;
 
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::portable]
 pub struct Bordered {
     pub child: LayoutChild,
     pub padding: f32,
     pub corner_radius: f32,
-    pub fill_color: Color32,
+    pub fill_color: Color,
     pub border_width: f32,
-    pub border_color: Color32,
+    pub border_color: Color,
 }
 
 #[typetag::serde]
@@ -61,9 +58,9 @@ impl Node for Bordered {
             Rect {
                 size: box_size,
                 corner_radius: self.corner_radius,
-                fill_color: self.fill_color,
-                border: Stroke::new(self.border_width, self.border_color),
-                stroke_kind: StrokeKind::Inside,
+                fill_color: self.fill_color.into(),
+                border: egui::Stroke::new(self.border_width, self.border_color),
+                stroke_kind: egui::StrokeKind::Inside,
             }
             .paint(ctx.ui.painter(), ctx.constraints.pos);
 

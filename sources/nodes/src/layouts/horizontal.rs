@@ -1,6 +1,4 @@
 use dex_core::prelude::*;
-use serde::{Deserialize, Serialize};
-use utils::Reset;
 
 use crate::layouts::child::LayoutChild;
 
@@ -8,11 +6,31 @@ use crate::layouts::child::LayoutChild;
     Lay out `children` left-to-right, separated by `spacing`.
     When `allow_wrap` is set, wrap onto new rows.
 */
-#[derive(Clone, Serialize, Deserialize, Reset)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct HorizontalLayout {
+    // Composed from node handles by `build`; `LayoutChild` isn't bindable.
+    #[dynamic(skip)]
     pub children: Vec<LayoutChild>,
     pub spacing: f32,
     pub allow_wrap: bool,
+}
+
+#[utils::dynamic_methods]
+impl HorizontalLayout {
+    /// Build a row of workspace-node `children` into `ws`.
+    pub fn build(
+        ws: WorkspaceActionHandle,
+        children: Vec<NodeUid>,
+        spacing: f32,
+        allow_wrap: bool,
+    ) -> NodeUid<HorizontalLayout> {
+        ws.insert_node(Self {
+            children: children.into_iter().map(LayoutChild::Id).collect(),
+            spacing,
+            allow_wrap,
+        })
+    }
 }
 
 defhandlers! { HorizontalLayout {} }

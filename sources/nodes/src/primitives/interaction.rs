@@ -1,9 +1,11 @@
 use dex_core::prelude::*;
 use egui::Sense;
 use serde::{Deserialize, Serialize};
-use utils::{Reset, Transient};
+use utils::Transient;
 
-#[derive(Clone, Default, Reset, Serialize, Deserialize)]
+#[derive(Default)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct InteractionBox {
     pub senses_hover: bool,
     pub senses_clicks: bool,
@@ -22,6 +24,7 @@ struct LastFrameInteractions {
     drag_stopped: bool,
 }
 
+#[utils::dynamic_methods]
 impl InteractionBox {
     /// A sensor configured to sense the given gesture kinds.
     pub fn sensing(hover: bool, clicks: bool, drags: bool) -> Self {

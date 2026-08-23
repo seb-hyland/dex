@@ -1,8 +1,7 @@
 use dex_core::prelude::*;
 
-use egui::{Color32, FontId, Id, LayerId, Order, Stroke};
-use serde::{Deserialize, Serialize};
-use utils::{Reset, Transient};
+use egui::{Color32, Id, LayerId, Order, Stroke};
+use utils::Transient;
 
 use crate::composites::button::Button;
 use crate::layouts::canvas::layout::{CanvasNodeAt, CanvasNodeScreenRect};
@@ -13,16 +12,18 @@ use crate::primitives::interaction::{DragPointerPos, InteractionBox, WasClicked,
 use crate::primitives::shapes::{Circle, Line};
 use crate::primitives::text::{CodeEditor, Label, LabelEditable};
 
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct LambdaEditor {
     active: LambdaLang,
     steel: NodeUid<CodeEditor>,
     python: NodeUid<CodeEditor>,
 }
 
+#[utils::dynamic_methods]
 impl LambdaEditor {
     /// Build a lambda editor into `ws`.
-    pub fn build(ws: &Workspace) -> NodeUid<LambdaEditor> {
+    pub fn build(ws: WorkspaceActionHandle) -> NodeUid<LambdaEditor> {
         let steel = ws.insert_node(CodeEditor::new(String::new(), "steel".to_owned()));
         let python = ws.insert_node(CodeEditor::new(String::new(), "python".to_owned()));
         ws.insert_node(Self {
@@ -64,22 +65,24 @@ impl Node for LambdaEditor {
 
 defhandlers! { LambdaEditor {} }
 
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::portable(noop_reset)]
 pub enum LambdaLang {
     Steel,
     Python,
 }
 
 /// A draggable connection knob for a lambda argument.
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct ConnectionPort {
     connected: Option<NodeUid<CanvasNode>>,
     drag_sensor: NodeUid<InteractionBox>,
     drag_pos: Transient<ScreenPos>,
 }
 
+#[utils::dynamic_methods]
 impl ConnectionPort {
-    pub fn build(ws: &Workspace) -> NodeUid<ConnectionPort> {
+    pub fn build(ws: WorkspaceActionHandle) -> NodeUid<ConnectionPort> {
         let drag_sensor_uid = ws.insert_node(InteractionBox::sensing(false, false, true));
         ws.insert_node(Self {
             connected: None,
@@ -210,19 +213,21 @@ defhandlers! { ConnectionPort {
     ],
 }}
 
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct LambdaArg {
     label: NodeUid<LabelEditable>,
     param_name: NodeUid<LabelEditable>,
     port: NodeUid<ConnectionPort>,
 }
 
+#[utils::dynamic_methods]
 impl LambdaArg {
     /// Build an argument into `ws`.
-    pub fn build(ws: &Workspace) -> NodeUid<LambdaArg> {
+    pub fn build(ws: WorkspaceActionHandle) -> NodeUid<LambdaArg> {
         let label = ws.insert_node(LabelEditable::new("label".to_owned()));
         let param_name = ws.insert_node(LabelEditable::new("param_name".to_owned()));
-        let port = ConnectionPort::build(ws);
+        let port = ConnectionPort::build(ws.clone());
         ws.insert_node(Self {
             label,
             param_name,
@@ -271,17 +276,19 @@ impl Node for LambdaArg {
 
 defhandlers! { LambdaArg {} }
 
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct LambdaArgs {
     args: Vec<NodeUid<LambdaArg>>,
     delete_buttons: Vec<NodeUid<Button>>,
     add_button: NodeUid<Button>,
 }
 
+#[utils::dynamic_methods]
 impl LambdaArgs {
     /// Build the (empty) args row into `ws`.
-    pub fn build(ws: &Workspace) -> NodeUid<LambdaArgs> {
-        let add_button = Button::build(ws, Label::new("+".to_owned()));
+    pub fn build(ws: WorkspaceActionHandle) -> NodeUid<LambdaArgs> {
+        let add_button = Button::build(ws.clone(), Label::new("+".to_owned()));
         ws.insert_node(Self {
             args: Vec::new(),
             delete_buttons: Vec::new(),
@@ -367,15 +374,15 @@ impl Node for LambdaArgs {
 defhandlers! { LambdaArgs {
     actions: [
         AddArg => (this, _a, ctx) {
-            let arg = LambdaArg::build(ctx.workspace);
+            let arg = LambdaArg::build(ctx.workspace.action_handle());
 
             // A delete button, polled by this row.
             let mut delete_label = Label::new("×".to_owned());
-            delete_label.font = FontId::proportional(11.0);
-            delete_label.color = Color32::from_gray(120);
-            let delete_button = Button::build_with(ctx.workspace, delete_label, |b| {
+            delete_label.font = Font::proportional(11.0);
+            delete_label.color = Color::gray(120);
+            let delete_button = Button::build_with(ctx.workspace.action_handle(), delete_label, |b| {
                 b.padding = 1.0;
-                b.border = Stroke::NONE;
+                b.border = dex_core::Stroke::NONE;
             });
 
             this.args.push(arg);
@@ -393,16 +400,18 @@ defhandlers! { LambdaArgs {
     ],
 }}
 
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct Lambda {
     args: NodeUid<LambdaArgs>,
     editor: NodeUid<LambdaEditor>,
 }
 
+#[utils::dynamic_methods]
 impl Lambda {
     /// Build a lambda into `ws`.
-    pub fn new(ws: &Workspace) -> Lambda {
-        let editor = LambdaEditor::build(ws);
+    pub fn new(ws: WorkspaceActionHandle) -> Lambda {
+        let editor = LambdaEditor::build(ws.clone());
         let args = LambdaArgs::build(ws);
         Self { args, editor }
     }
@@ -444,9 +453,9 @@ impl Node for Lambda {
             child: LayoutChild::Node(Arc::new(body)),
             padding: OUTER_PADDING,
             corner_radius: 4.0,
-            fill_color: Color32::TRANSPARENT,
+            fill_color: Color::TRANSPARENT,
             border_width: 1.0,
-            border_color: Color32::from_gray(170),
+            border_color: Color::gray(170),
         };
         ctx.draw_node(
             &bordered,

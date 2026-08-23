@@ -7,6 +7,15 @@ pub struct ComputeTask {
     task: Box<dyn (FnOnce() -> Vec<Action>) + Send>,
 }
 
+impl ComputeTask {
+    pub fn new(requester: NodeUid, task: impl (FnOnce() -> Vec<Action>) + Send + 'static) -> Self {
+        Self {
+            requester,
+            task: Box::new(task),
+        }
+    }
+}
+
 pub struct ComputeSchedulerHandle {
     task_sender: mpsc::Sender<ComputeTask>,
     cancellation_sender: mpsc::Sender<NodeUid>,

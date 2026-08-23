@@ -1,0 +1,12 @@
+[package]
+name = "dex-dynamic"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+inventory.workspace = true
+pyo3.workspace = true
+steel-core.workspace = true
+
+[dev-dependencies]
+utils-proc-macro.workspace = true

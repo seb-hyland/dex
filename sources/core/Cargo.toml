@@ -4,12 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+dex-dynamic.workspace = true
 dyn-clone.workspace = true
 egui.workspace = true
+oneshot = { version = "0.2.1", features = ["std"] }
+pyo3.workspace = true
 rpds.workspace = true
 serde.workspace = true
 slotmap.workspace = true
+steel-core.workspace = true
 typetag.workspace = true
 utils.workspace = true
 uuid.workspace = true
-oneshot = { version = "0.2.1", features = ["std"] }

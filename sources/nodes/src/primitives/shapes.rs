@@ -1,9 +1,7 @@
 use dex_core::prelude::*;
 use egui::{Color32, Mesh, Painter, Shape, Stroke, StrokeKind};
-use serde::{Deserialize, Serialize};
-use utils::Reset;
 
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::portable]
 pub struct Rect {
     pub size: Vector,
     pub corner_radius: f32,
@@ -27,7 +25,7 @@ impl Rect {
     }
 }
 
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::portable]
 pub struct Circle {
     pub radius: f32,
     pub fill_color: Color32,
@@ -42,7 +40,7 @@ impl Circle {
     }
 }
 
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::portable]
 pub struct Triangle {
     pub vectors: [Vector; 2],
     pub color: Color32,
@@ -65,7 +63,7 @@ impl Triangle {
     }
 }
 
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::portable]
 pub struct Line {
     pub span: Vector,
     pub stroke: Stroke,

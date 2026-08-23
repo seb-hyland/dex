@@ -4,16 +4,16 @@ use egui::{
     text::{LayoutJob, TextWrapping},
 };
 use egui_code_editor::{CodeEditor as CodeEditorWidget, ColorTheme, DEFAULT_THEMES, Syntax};
-use serde::{Deserialize, Serialize};
-use utils::{Reset, Transient};
+use utils::Transient;
 
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct Label {
     pub text: String,
     pub singleline: bool,
 
-    pub font: FontId,
-    pub color: Color32,
+    pub font: Font,
+    pub color: Color,
 }
 
 #[typetag::serde]
@@ -52,13 +52,14 @@ impl Node for Label {
 
 defhandlers! { Label {} }
 
+#[utils::dynamic_methods]
 impl Label {
     pub fn new(text: String) -> Self {
         Self {
             text,
             singleline: true,
-            font: FontId::proportional(16.0),
-            color: Color32::BLACK,
+            font: Font::proportional(16.0),
+            color: Color::BLACK,
         }
     }
 
@@ -70,14 +71,16 @@ impl Label {
         avail_w: Option<f32>,
     ) -> DrawResult {
         let mut job =
-            LayoutJob::simple_singleline(remaining.to_owned(), self.font.clone(), self.color);
+            LayoutJob::simple_singleline(remaining.to_owned(), self.font.into(), self.color.into());
         let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job.clone()));
 
         let fits = avail_w.is_none_or(|w| galley.rect.width() <= w);
         if fits {
             // We can render here normally!
             let origin: Pos2 = constraints.pos.into();
-            ctx.ui.painter().galley(origin, galley.clone(), self.color);
+            ctx.ui
+                .painter()
+                .galley(origin, galley.clone(), self.color.into());
             return DrawResult::Complete {
                 region: Some(galley.rect.translate(origin.to_vec2()).into()),
             };
@@ -97,7 +100,9 @@ impl Label {
         let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job));
 
         let origin: Pos2 = constraints.pos.into();
-        ctx.ui.painter().galley(origin, galley.clone(), self.color);
+        ctx.ui
+            .painter()
+            .galley(origin, galley.clone(), self.color.into());
         DrawResult::Complete {
             region: Some(galley.rect.translate(origin.to_vec2()).into()),
         }
@@ -116,7 +121,12 @@ impl Label {
         let height = avail_h.unwrap_or(f32::INFINITY);
         let wrap_constraints = constraints.wrap;
 
-        let job = LayoutJob::simple(remaining.to_owned(), self.font.clone(), self.color, width);
+        let job = LayoutJob::simple(
+            remaining.to_owned(),
+            self.font.into(),
+            self.color.into(),
+            width,
+        );
         let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job));
 
         let first_row_height = galley.rows[0].height();
@@ -157,10 +167,11 @@ impl Label {
 
         let mut clip_rect = ctx.ui.clip_rect();
         clip_rect.max.y = clip_rect.max.y.min(origin.y + local_rect.max.y);
-        ctx.ui
-            .painter()
-            .with_clip_rect(clip_rect)
-            .galley(origin, galley.clone(), self.color);
+        ctx.ui.painter().with_clip_rect(clip_rect).galley(
+            origin,
+            galley.clone(),
+            self.color.into(),
+        );
 
         let draw_region = local_rect.translate(origin.to_vec2()).into();
         let have_rows_remaining = galley.rows.len() > num_rows_to_layout;
@@ -186,7 +197,8 @@ impl Label {
     }
 }
 
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct LabelEditable {
     pub value: String,
     buf: Transient<String>,
@@ -198,10 +210,11 @@ pub struct LabelEditable {
     /// Grab focus when this node becomes interactive and lock back to non-interactive on focus loss.
     pub auto_lock: bool,
 
-    pub font: FontId,
-    pub color: Color32,
+    pub font: Font,
+    pub color: Color,
 }
 
+#[utils::dynamic_methods]
 impl LabelEditable {
     pub fn new(value: String) -> Self {
         Self {
@@ -211,8 +224,8 @@ impl LabelEditable {
             shrink_to_text: true,
             interactive: true,
             auto_lock: false,
-            font: FontId::proportional(16.0),
-            color: Color32::BLACK,
+            font: Font::proportional(16.0),
+            color: Color::BLACK,
         }
     }
 
@@ -227,7 +240,8 @@ impl LabelEditable {
 
     /// Render the committed value as static, non-interactive text.
     fn draw_static(&self, ctx: DrawContext) -> DrawResult {
-        let job = LayoutJob::simple_singleline(self.value.clone(), self.font.clone(), self.color);
+        let job =
+            LayoutJob::simple_singleline(self.value.clone(), self.font.into(), self.color.into());
         let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job));
         let content_w = galley.rect.width();
         let row_h = galley.rows[0].height();
@@ -275,7 +289,7 @@ impl LabelEditable {
             x: origin.x + ((block_w - content_w) * 0.5).max(0.0),
             y: origin.y + (size.y - row_h) * 0.5,
         };
-        ctx.ui.painter().galley(text_pos, galley, self.color);
+        ctx.ui.painter().galley(text_pos, galley, self.color.into());
 
         DrawResult::Complete {
             region: Some(ScreenRegion::from_min_size(origin, size)),
@@ -299,7 +313,8 @@ impl Node for LabelEditable {
 
         // Measure the width of the text field
         let content = self.buf.val_or_else(|| self.value.clone()).clone();
-        let measure_job = LayoutJob::simple_singleline(content, self.font.clone(), self.color);
+        let measure_job =
+            LayoutJob::simple_singleline(content, self.font.into(), self.color.into());
         let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(measure_job));
         let content_w = galley.rect.width();
         let row_h = galley.rows[0].height();
@@ -369,8 +384,8 @@ impl Node for LabelEditable {
         .id(editor_id)
         .frame(Frame::NONE)
         .margin(Margin::ZERO)
-        .font(self.font.clone())
-        .text_color(self.color)
+        .font(FontId::from(self.font))
+        .text_color(self.color.into())
         .horizontal_align(Align::Center)
         .vertical_align(Align::Center)
         .desired_width(block_w);
@@ -430,7 +445,8 @@ defhandlers! { LabelEditable {
     ],
 }}
 
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct CodeEditor {
     pub value: String,
     buf: Transient<String>,
@@ -445,6 +461,7 @@ pub struct CodeEditor {
     pub language: String,
 }
 
+#[utils::dynamic_methods]
 impl CodeEditor {
     pub fn new(value: String, language: String) -> Self {
         Self {

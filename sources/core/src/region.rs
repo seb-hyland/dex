@@ -1,13 +1,13 @@
 use std::ops::{Add, Div, Sub};
 
 use egui::{Pos2, Rect, Vec2};
-use serde::{Deserialize, Serialize};
-use utils::impl_Reset_noop;
 
 /**
     A position in screen-space.
 */
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Copy)]
+#[utils::dynamic_type]
+#[utils::portable(noop_reset)]
 pub struct ScreenPos {
     pub x: f32,
     pub y: f32,
@@ -71,6 +71,7 @@ impl Sub<Vector> for ScreenPos {
     }
 }
 
+#[utils::dynamic_methods]
 impl ScreenPos {
     pub fn zero() -> Self {
         Self { x: 0.0, y: 0.0 }
@@ -87,7 +88,9 @@ impl ScreenPos {
 /**
    A rectangular region in screen-space.
 */
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Copy)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct ScreenRegion {
     pub min: ScreenPos,
     pub max: ScreenPos,
@@ -113,6 +116,7 @@ impl From<Rect> for ScreenRegion {
     }
 }
 
+#[utils::dynamic_methods]
 impl ScreenRegion {
     pub fn empty() -> Self {
         Self {
@@ -156,7 +160,9 @@ impl ScreenRegion {
 /**
    A 2-dimensional vector.
 */
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Copy)]
+#[utils::dynamic_type]
+#[utils::portable(noop_reset)]
 pub struct Vector {
     pub x: f32,
     pub y: f32,
@@ -220,6 +226,7 @@ impl Div<f32> for Vector {
     }
 }
 
+#[utils::dynamic_methods]
 impl Vector {
     pub fn splat(s: f32) -> Self {
         Self { x: s, y: s }
@@ -245,5 +252,3 @@ impl Vector {
         }
     }
 }
-
-impl_Reset_noop!(ScreenPos, ScreenRegion, Vector);

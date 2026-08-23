@@ -1,6 +1,5 @@
 [package]
 name = "egui_code_editor"
-authors = ["Roman Chumak <p4ymak@yandex.ru>"]
 version = "0.3.7"
 edition = "2024"
 license = "MIT"

@@ -1,34 +1,33 @@
 use dex_core::prelude::*;
-use egui::{Color32, Stroke, StrokeKind};
-use serde::{Deserialize, Serialize};
-use utils::Reset;
 
 use crate::primitives::interaction::InteractionBox;
 use crate::primitives::shapes::Rect;
 use crate::primitives::text::Label;
 
 /// A clickable button. Send it [`WasClicked`](crate::primitives::interaction::WasClicked) to poll it.
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct Button {
     pub label: Label,
 
     /// Space between the label and the surrounding border on every side
     pub padding: f32,
     pub corner_radius: f32,
-    pub fill_color: Color32,
+    pub fill_color: Color,
     pub border: Stroke,
     interaction: NodeUid<InteractionBox>,
 }
 
+#[utils::dynamic_methods]
 impl Button {
     /// Build a button and return its id.
-    pub fn build(ws: &Workspace, label: Label) -> NodeUid<Button> {
+    pub fn build(ws: WorkspaceActionHandle, label: Label) -> NodeUid<Button> {
         Self::build_with(ws, label, |_| {})
     }
 
     /// Like [`Button::build`], but `configure` may adjust the visual style before the button is inserted.
     pub fn build_with(
-        ws: &Workspace,
+        ws: WorkspaceActionHandle,
         label: Label,
         configure: impl FnOnce(&mut Self),
     ) -> NodeUid<Button> {
@@ -37,8 +36,8 @@ impl Button {
             label,
             padding: 4.0,
             corner_radius: 0.0,
-            fill_color: Color32::TRANSPARENT,
-            border: Stroke::new(1.0, Color32::GRAY),
+            fill_color: Color::TRANSPARENT,
+            border: Stroke::new(1.0, Color::GRAY),
             interaction,
         };
         configure(&mut button);
@@ -88,9 +87,9 @@ impl Node for Button {
         let border = Rect {
             size: button_size,
             corner_radius: self.corner_radius,
-            fill_color: self.fill_color,
-            border: self.border,
-            stroke_kind: StrokeKind::Middle,
+            fill_color: self.fill_color.into(),
+            border: self.border.into(),
+            stroke_kind: egui::StrokeKind::Middle,
         };
         border.paint(ctx.ui.painter(), origin);
 

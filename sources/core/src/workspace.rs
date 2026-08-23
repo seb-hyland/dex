@@ -15,6 +15,7 @@ use crate::{
     compute::{ComputeScheduler, ComputeSchedulerHandle, ComputeTask},
     messages::{Action, ActionGroup, Request, downcast_resp},
     pool::{NodeUid, Registry},
+    scripting::{ScriptLang, run_script},
 };
 
 pub struct Workspace {
@@ -24,8 +25,8 @@ pub struct Workspace {
     /// A historical registry for the workspace
     registry: Registry,
 
-    /// A sender for actions
-    action_sender: mpsc::Sender<Action>,
+    /// A cheap, clonable `Send` handle over the action queue.
+    actions_handle: WorkspaceActionHandle,
     /// A queue of unprocessed actions
     actions: mpsc::Receiver<Action>,
 
@@ -41,7 +42,9 @@ impl Workspace {
         Self {
             root_node,
             registry,
-            action_sender: action_tx.clone(),
+            actions_handle: WorkspaceActionHandle {
+                action_sender: action_tx.clone(),
+            },
             actions: action_recv,
             scheduler: ComputeScheduler::spawn(action_tx),
         }
@@ -55,10 +58,17 @@ impl Workspace {
         Self {
             root_node: NodeUid::nil(),
             registry: Registry::empty(),
-            action_sender: action_tx.clone(),
+            actions_handle: WorkspaceActionHandle {
+                action_sender: action_tx.clone(),
+            },
             actions: action_recv,
             scheduler: ComputeScheduler::spawn(action_tx),
         }
+    }
+
+    /// An owned clone of this workspace's action-queue handle.
+    pub fn action_handle(&self) -> WorkspaceActionHandle {
+        self.actions_handle.clone()
     }
 
     /// Insert a node into the registry immediately, without going through the action queue.
@@ -94,11 +104,7 @@ impl Workspace {
         N: Node + ?Sized,
         A: ActionFor<N> + 'static,
     {
-        self.submit_action_dyn(Action {
-            dest: dest.erase(),
-            description: description.into(),
-            body: Box::new(body),
-        });
+        self.actions_handle.submit_action(dest, description, body);
     }
 
     pub fn send_request<N, R>(&self, dest: NodeUid<N>, body: R) -> Option<R::Response>
@@ -134,7 +140,7 @@ impl Workspace {
     }
 
     pub fn insert_node<T: Node>(&self, node: T) -> NodeUid<T> {
-        self.insert_node_dyn(Arc::new(node)).cast()
+        self.actions_handle.insert_node(node)
     }
 
     /**
@@ -142,14 +148,7 @@ impl Workspace {
         Functions similar to [`Workspace::insert_node`], but for a node whose id must be known.
     */
     pub fn insert_node_at<T: Node>(&self, uid: NodeUid<T>, node: T) {
-        self.submit_action_dyn(Action {
-            dest: NodeUid::nil(),
-            description: format!("Inserted node of type {}", node.type_name()).into(),
-            body: Box::new(PushWorkspaceNode {
-                node: Arc::new(node),
-                uid: uid.erase(),
-            }),
-        });
+        self.actions_handle.insert_node_at(uid, node);
     }
 
     /// Drain the pending action queue now. Used after building the initial node
@@ -159,18 +158,7 @@ impl Workspace {
     }
 
     pub fn insert_node_dyn(&self, node: Arc<dyn Node>) -> NodeUid {
-        let uid = NodeUid::new_workspace();
-
-        self.submit_action_dyn(Action {
-            dest: NodeUid::nil(),
-            description: format!("Inserted node of type {}", node.type_name()).into(),
-            body: Box::new(PushWorkspaceNode {
-                node,
-                uid: uid.erase(),
-            }),
-        });
-
-        uid
+        self.actions_handle.insert_node_dyn(node)
     }
 
     pub fn draw_frame(&mut self, ui: &mut Ui, draw_area: Rect) {
@@ -210,11 +198,7 @@ impl Workspace {
 
     /// Delete a node from the workspace; its [`Node::on_delete`] handler will run.
     pub fn delete_node(&self, uid: NodeUid) {
-        self.submit_action_dyn(Action {
-            dest: NodeUid::nil(),
-            description: "Deleted node".into(),
-            body: Box::new(RemoveWorkspaceNode { uid }),
-        });
+        self.actions_handle.delete_node(uid);
     }
 
     fn remove_node(&mut self, uid: NodeUid) {
@@ -229,9 +213,7 @@ impl Workspace {
     }
 
     pub fn submit_action_dyn(&self, action: Action) {
-        self.action_sender
-            .send(action)
-            .expect("Actions should not fail to send!");
+        self.actions_handle.submit_action_dyn(action);
     }
 
     fn process_actions(&mut self) {
@@ -293,8 +275,101 @@ impl Workspace {
         self.scheduler.submit_task(task);
     }
 
+    /// Spawn a script on a new compute worker, on behalf of `requester`.
+    pub fn spawn_script(&self, requester: NodeUid, lang: ScriptLang, source: String) {
+        let task = ComputeTask::new(requester, move || {
+            let (handle, actions) = WorkspaceActionHandle::buffered();
+            if let Err(e) = run_script(lang, &source, &handle) {
+                eprintln!("dex script error: {e}");
+            }
+            // Close the channel so the drain terminates.
+            drop(handle);
+            actions.into_iter().collect()
+        });
+        self.submit_task(task);
+    }
+
     pub fn cancel_all_tasks_for(&self, uid: NodeUid) {
         self.scheduler.cancel_all_tasks_for(uid);
+    }
+}
+
+/// A cheap, `Send` handle over a [`Workspace`]'s action queue.
+#[utils::dynamic_type]
+#[derive(Clone)]
+pub struct WorkspaceActionHandle {
+    action_sender: mpsc::Sender<Action>,
+}
+
+impl WorkspaceActionHandle {
+    /**
+       A standalone handle that can be used in place of one connected to a [`Workspace`].
+
+       [`mpsc::Receiver::iter`] should be called on the returned [`mpsc::Receiver`] to drain [`actions`](Action).
+    */
+    pub fn buffered() -> (Self, mpsc::Receiver<Action>) {
+        let (action_sender, rx) = mpsc::channel();
+        (Self { action_sender }, rx)
+    }
+
+    pub fn submit_action<N, A>(
+        &self,
+        dest: NodeUid<N>,
+        description: impl Into<Cow<'static, str>>,
+        body: A,
+    ) where
+        N: Node + ?Sized,
+        A: ActionFor<N> + 'static,
+    {
+        self.submit_action_dyn(Action {
+            dest: dest.erase(),
+            description: description.into(),
+            body: Box::new(body),
+        });
+    }
+
+    pub fn submit_action_dyn(&self, action: Action) {
+        self.action_sender
+            .send(action)
+            .expect("Actions should not fail to send!");
+    }
+
+    pub fn insert_node<T: Node>(&self, node: T) -> NodeUid<T> {
+        self.insert_node_dyn(Arc::new(node)).cast()
+    }
+
+    pub fn insert_node_at<T: Node>(&self, uid: NodeUid<T>, node: T) {
+        self.submit_action_dyn(Action {
+            dest: NodeUid::nil(),
+            description: format!("Inserted node of type {}", node.type_name()).into(),
+            body: Box::new(PushWorkspaceNode {
+                node: Arc::new(node),
+                uid: uid.erase(),
+            }),
+        });
+    }
+
+    pub fn insert_node_dyn(&self, node: Arc<dyn Node>) -> NodeUid {
+        let uid = NodeUid::new_workspace();
+
+        self.submit_action_dyn(Action {
+            dest: NodeUid::nil(),
+            description: format!("Inserted node of type {}", node.type_name()).into(),
+            body: Box::new(PushWorkspaceNode {
+                node,
+                uid: uid.erase(),
+            }),
+        });
+
+        uid
+    }
+
+    pub fn delete_node(&self, uid: NodeUid) {
+        self.submit_action_dyn(Action {
+            dest: NodeUid::nil(),
+            description: "Deleted node".into(),
+            body: Box::new(RemoveWorkspaceNode { uid }),
+        });
     }
 }
 

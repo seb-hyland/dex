@@ -2,17 +2,17 @@ pub mod shapes;
 
 use dex_core::prelude::*;
 use egui::{Color32, Stroke, StrokeKind};
-use serde::{Deserialize, Serialize};
-use utils::{Reset, Transient};
+use utils::Transient;
 
 use crate::primitives::{
     interaction::{ContainsPointer, InteractionBox, WasDragged, WasHovered},
     shapes::Rect,
 };
 
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct CanvasNode {
-    pub child: NodeUid,
+    child: NodeUid,
     /// Top-left position of this node in canvas space and size.
     pub committed: ConstraintsTuple,
     /// Uncommitted preview accumulated during interaction.
@@ -26,10 +26,11 @@ pub struct CanvasNode {
     grips: [NodeUid<InteractionBox>; 8],
 }
 
+#[utils::dynamic_methods]
 impl CanvasNode {
     /// Build a canvas node (wrapping `child`) and its sensors into `ws`.
     pub fn build(
-        ws: &Workspace,
+        ws: WorkspaceActionHandle,
         child: NodeUid,
         canvas_pos: Vector,
         size: Vector,
@@ -396,7 +397,9 @@ impl Node for CanvasNode {
     }
 }
 
-#[derive(Clone, Copy, Reset, Serialize, Deserialize)]
+#[derive(Copy)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct ConstraintsTuple {
     /// Top-left position in canvas space.
     pub pos: Vector,

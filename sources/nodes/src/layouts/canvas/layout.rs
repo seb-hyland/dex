@@ -1,14 +1,14 @@
 use dex_core::prelude::*;
 use egui::{Pos2, Rect};
-use serde::{Deserialize, Serialize};
-use utils::{Reset, Transient};
+use utils::Transient;
 
 use crate::{
     layouts::canvas::nodes::{CanvasNode, CanvasNodeConstraints, ConstraintsTuple},
     primitives::interaction::{InteractionBox, WasDragged},
 };
 
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct Canvas {
     children: Vec<NodeUid<CanvasNode>>,
     /// Background drag sensor (a registered child) used for panning.
@@ -18,9 +18,10 @@ pub struct Canvas {
     viewport: Transient<ScreenRegion>,
 }
 
+#[utils::dynamic_methods]
 impl Canvas {
     /// Build an empty canvas into `ws`.
-    pub fn build(ws: &Workspace) -> NodeUid<Canvas> {
+    pub fn build(ws: WorkspaceActionHandle) -> NodeUid<Canvas> {
         let drag_interaction = ws.insert_node(InteractionBox::sensing(false, false, true));
         ws.insert_node(Self {
             children: Vec::new(),
@@ -142,7 +143,8 @@ defhandlers! { Canvas {
                 .unwrap_or(Vector::splat(0.0));
             let canvas_pos =
                 this.screen_offset() + visible_size / 2.0 - DEFAULT_CHILD_SIZE / 2.0;
-            let node_id = CanvasNode::build(ctx.workspace, child_id, canvas_pos, DEFAULT_CHILD_SIZE);
+            let node_id =
+                CanvasNode::build(ctx.workspace.action_handle(), child_id, canvas_pos, DEFAULT_CHILD_SIZE);
             this.children.push(node_id);
         },
     ],

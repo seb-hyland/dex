@@ -6,4 +6,4 @@ mod macros;
 pub use any::AsAny;
 pub use cell::{Reset, Transient};
 pub use history::{Epoch, HistoryGraph, Timestamp};
-pub use utils_proc_macro::Reset;
+pub use utils_proc_macro::{Reset, dynamic_methods, dynamic_type, portable};

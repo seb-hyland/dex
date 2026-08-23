@@ -4,13 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-egui.workspace = true
-serde.workspace = true
 dex-core.path = "../core/"
-typetag.workspace = true
-pyo3.workspace = true
-utils.workspace = true
+dex-dynamic.workspace = true
+egui.workspace = true
 egui_code_editor = { path = "../../vendored/egui_code_editor/" }
+pyo3.workspace = true
+serde.workspace = true
+typetag.workspace = true
+utils.workspace = true
 
 [dev-dependencies]
 eframe = "0.35.0"

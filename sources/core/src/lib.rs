@@ -3,11 +3,16 @@ use std::borrow::Cow;
 use dyn_clone::DynClone;
 use egui::Ui;
 
+// Allows macro-generated `::dex_core::...` paths to resolve within this crate itself.
+extern crate self as dex_core;
+
 mod compute;
 mod constraints;
 pub mod messages;
 mod pool;
 mod region;
+pub mod scripting;
+mod style;
 mod theme;
 mod workspace;
 
@@ -17,7 +22,9 @@ pub mod prelude {
         messages::*,
         pool::NodeUid,
         region::{ScreenPos, ScreenRegion, Vector},
-        workspace::Workspace,
+        scripting::{NodeHandle, ScriptError, ScriptLang, run_script},
+        style::{Color, Font, Stroke, StrokeKind},
+        workspace::{Workspace, WorkspaceActionHandle},
         *,
     };
     pub use std::sync::Arc;

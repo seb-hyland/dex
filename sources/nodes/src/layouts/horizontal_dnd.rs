@@ -1,7 +1,6 @@
 use dex_core::prelude::*;
 use egui::{Color32, Stroke, StrokeKind};
-use serde::{Deserialize, Serialize};
-use utils::{Reset, Transient};
+use utils::Transient;
 
 use crate::primitives::{
     interaction::{DragPointerPos, InteractionBox, WasDragReleased},
@@ -14,7 +13,8 @@ use crate::primitives::{
    This is a self-contained node that owns its children and the drag-and-drop state.
    Use [`AddChild`]/[`RemoveChild`] to mutate the list.
 */
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct HorizontalDnD {
     children: Vec<NodeUid>,
     sensors: Vec<NodeUid<InteractionBox>>,
@@ -33,9 +33,14 @@ struct PendingReorder {
     to: usize,
 }
 
+#[utils::dynamic_methods]
 impl HorizontalDnD {
     /// Build the container into `ws`, minting one drag sensor per child.
-    pub fn build(ws: &Workspace, children: Vec<NodeUid>, spacing: f32) -> NodeUid<HorizontalDnD> {
+    pub fn build(
+        ws: WorkspaceActionHandle,
+        children: Vec<NodeUid>,
+        spacing: f32,
+    ) -> NodeUid<HorizontalDnD> {
         let sensors = children
             .iter()
             .map(|_| ws.insert_node(InteractionBox::sensing(false, false, true)))

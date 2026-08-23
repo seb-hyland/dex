@@ -1,11 +1,10 @@
 use dex_core::prelude::*;
 use egui::{Color32, Stroke, StrokeKind};
-use serde::{Deserialize, Serialize};
-use utils::Reset;
 
 use crate::primitives::shapes::{self, Line};
 
-#[derive(Clone, Copy, Reset, Serialize, Deserialize)]
+#[derive(Copy)]
+#[utils::portable(noop_reset)]
 pub struct CanvasRect;
 
 #[typetag::serde]
@@ -39,7 +38,8 @@ impl Node for CanvasRect {
 
 defhandlers! { CanvasRect {} }
 
-#[derive(Clone, Copy, Reset, Serialize, Deserialize)]
+#[derive(Copy)]
+#[utils::portable(noop_reset)]
 pub struct CanvasCircle;
 
 #[typetag::serde]
@@ -71,7 +71,8 @@ impl Node for CanvasCircle {
 
 defhandlers! { CanvasCircle {} }
 
-#[derive(Clone, Copy, Reset, Serialize, Deserialize)]
+#[derive(Copy)]
+#[utils::portable(noop_reset)]
 pub struct SectionDivider;
 
 #[typetag::serde]

@@ -1,7 +1,6 @@
 use dex_core::prelude::*;
 use egui::{Color32, LayerId, Stroke, StrokeKind};
-use serde::{Deserialize, Serialize};
-use utils::{Reset, Transient};
+use utils::Transient;
 
 use crate::{
     composites::button::Button,
@@ -25,7 +24,8 @@ use crate::{
    sidebar (adds items to the active canvas), a drag-and-drop tab bar, and the
    active canvas.
 */
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct Desktops {
     tab_bar: NodeUid<HorizontalDnD>,
     active: Option<NodeUid<Canvas>>,
@@ -37,11 +37,13 @@ pub struct Desktops {
     pending_sidebar_width: Transient<f32>,
 }
 
+#[utils::dynamic_methods]
 impl Desktops {
     /// Build a fresh workspace with a [`Desktops`] instance as its root.
+    #[dynamic(skip)]
     pub fn new_workspace() -> Workspace {
         let mut ws = Workspace::new_empty();
-        let root = Desktops::build(&ws);
+        let root = Desktops::build(ws.action_handle());
         // Drain the queued inserts so the tree is live before the first frame.
         ws.process_pending();
         ws.set_root(root.erase());
@@ -49,14 +51,14 @@ impl Desktops {
     }
 
     /// Build the desktops root (and its whole subtree) into `ws`.
-    pub fn build(ws: &Workspace) -> NodeUid<Desktops> {
+    pub fn build(ws: WorkspaceActionHandle) -> NodeUid<Desktops> {
         let id = NodeUid::<Desktops>::new_workspace();
 
-        let canvas = Canvas::build(ws);
-        let tab = DesktopTabView::build(ws, canvas, id, "Canvas 1".to_owned());
-        let tab_bar = HorizontalDnD::build(ws, vec![tab.erase()], TAB_SPACING);
-        let sidebar = CanvasSidebar::build(ws, id);
-        let add_button = Button::build(ws, Label::new("+".to_owned()));
+        let canvas = Canvas::build(ws.clone());
+        let tab = DesktopTabView::build(ws.clone(), canvas, id, "Canvas 1".to_owned());
+        let tab_bar = HorizontalDnD::build(ws.clone(), vec![tab.erase()], TAB_SPACING);
+        let sidebar = CanvasSidebar::build(ws.clone(), id);
+        let add_button = Button::build(ws.clone(), Label::new("+".to_owned()));
         let divider = ws.insert_node(InteractionBox::sensing(true, false, true));
 
         ws.insert_node_at(
@@ -259,8 +261,13 @@ impl Node for Desktops {
 defhandlers! { Desktops {
     actions: [
         AddCanvas => (this, _a, ctx) {
-            let canvas = Canvas::build(ctx.workspace);
-            let tab = DesktopTabView::build(ctx.workspace, canvas, ctx.id.cast(), "New canvas".to_owned());
+            let canvas = Canvas::build(ctx.workspace.action_handle());
+            let tab = DesktopTabView::build(
+                ctx.workspace.action_handle(),
+                canvas,
+                ctx.id.cast(),
+                "New canvas".to_owned(),
+            );
             ctx.workspace.submit_action(
                 this.tab_bar,
                 "Add tab",
@@ -281,7 +288,8 @@ defhandlers! { Desktops {
 }}
 
 /// Display node for a single tab (labelled by canvas name).
-#[derive(Clone, Copy, Reset, Serialize, Deserialize)]
+#[derive(Copy)]
+#[utils::portable]
 struct DesktopTabView {
     canvas: NodeUid<Canvas>,
     name: NodeUid<LabelEditable>,
@@ -293,7 +301,7 @@ struct DesktopTabView {
 impl DesktopTabView {
     /// Build a tab (its editable name + click sensor) into `ws`.
     fn build(
-        ws: &Workspace,
+        ws: WorkspaceActionHandle,
         canvas: NodeUid<Canvas>,
         parent: NodeUid<Desktops>,
         name_text: String,

@@ -1,6 +1,4 @@
 use dex_core::prelude::*;
-use serde::{Deserialize, Serialize};
-use utils::Reset;
 
 use crate::{
     composites::{button::Button, lambda::Lambda},
@@ -18,23 +16,25 @@ use crate::{
     },
 };
 
-#[derive(Clone, Reset, Serialize, Deserialize)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub struct CanvasSidebar {
-    pub desktops: NodeUid<Desktops>,
+    desktops: NodeUid<Desktops>,
     buttons: Vec<NodeUid<Button>>,
 }
 
+#[utils::dynamic_methods]
 impl CanvasSidebar {
     /// Labels for the option buttons, in order. The button at index `i` inserts
     /// the node produced by [`CanvasSidebar::dispatch`] for that index.
     pub const OPTIONS: [&'static str; 4] = ["Text", "Rect", "Circle", "Lambda"];
 
     /// Build the sidebar and its option buttons into `ws`.
-    pub fn build(ws: &Workspace, desktops: NodeUid<Desktops>) -> NodeUid<CanvasSidebar> {
+    pub fn build(ws: WorkspaceActionHandle, desktops: NodeUid<Desktops>) -> NodeUid<CanvasSidebar> {
         let buttons = Self::OPTIONS
             .iter()
             .map(|label| {
-                Button::build_with(ws, Label::new((*label).to_owned()), |b| {
+                Button::build_with(ws.clone(), Label::new((*label).to_owned()), |b| {
                     b.corner_radius = 5.0
                 })
             })
@@ -43,7 +43,7 @@ impl CanvasSidebar {
     }
 
     /// The insert action for the option at `index`.
-    fn dispatch(&self, index: usize, ws: &Workspace) -> Option<Action> {
+    fn dispatch(&self, index: usize, ws: WorkspaceActionHandle) -> Option<Action> {
         let dest = self.desktops.erase();
         let child: Arc<dyn Node> = match index {
             0 => Arc::new(LabelEditable::new("Text here".to_owned())),
@@ -87,7 +87,7 @@ impl Node for CanvasSidebar {
                 .workspace
                 .send_request(btn.erase(), WasClicked)
                 .unwrap_or(false)
-                && let Some(action) = self.dispatch(i, ctx.node.workspace)
+                && let Some(action) = self.dispatch(i, ctx.node.workspace.action_handle())
             {
                 ctx.node.workspace.submit_action_dyn(action);
             }
