@@ -9,6 +9,24 @@ pub enum LayoutChild {
 }
 
 impl LayoutChild {
+    /// Build a child from a Python value.
+    pub fn from_dynamic_py(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> Self {
+        use pyo3::prelude::*;
+        if let Ok(handle) = obj.extract::<dex_core::NodeHandle>() {
+            return LayoutChild::Id(handle.0);
+        }
+        LayoutChild::Node(crate::scripting::to_dyn_node_py(obj))
+    }
+
+    /// Build a child from a Steel value.
+    pub fn from_dynamic_steel(val: &dex_dynamic::__rt::steel::rvals::SteelVal) -> Self {
+        use dex_dynamic::__rt::steel::rvals::FromSteelVal;
+        if let Ok(handle) = dex_core::NodeHandle::from_steelval(val) {
+            return LayoutChild::Id(handle.0);
+        }
+        LayoutChild::Node(crate::scripting::to_dyn_node_steel(val))
+    }
+
     /// Draw this child under `constraints`.
     pub(crate) fn draw(&self, ctx: &mut DrawContext, constraints: DrawConstraints) -> DrawResult {
         match self {

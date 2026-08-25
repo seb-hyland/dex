@@ -50,7 +50,7 @@ impl CanvasNode {
     }
 }
 
-#[typetag::serde]
+#[utils::dynamic_node]
 impl Node for CanvasNode {
     fn type_name(&self) -> String {
         "Canvas Node".into()

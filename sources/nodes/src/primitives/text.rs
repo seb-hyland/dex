@@ -16,7 +16,7 @@ pub struct Label {
     pub color: Color,
 }
 
-#[typetag::serde]
+#[utils::dynamic_node]
 impl Node for Label {
     fn type_name(&self) -> String {
         "Label".into()
@@ -50,7 +50,15 @@ impl Node for Label {
     }
 }
 
-defhandlers! { Label {} }
+defhandlers! { Label {
+    requests: [
+        ValueVersion => (_this, _q, ctx): u64 { ctx.workspace.node_version(ctx.id) },
+    ],
+    extern_requests: [
+        // Value probe: a label's text is its value.
+        GetText => (this, _q): String { this.text.clone() },
+    ],
+}}
 
 #[utils::dynamic_methods]
 impl Label {
@@ -297,7 +305,7 @@ impl LabelEditable {
     }
 }
 
-#[typetag::serde]
+#[utils::dynamic_node]
 impl Node for LabelEditable {
     fn type_name(&self) -> String {
         "Editable Label".to_owned()
@@ -443,6 +451,14 @@ defhandlers! { LabelEditable {
     requests: [
         IsInteractive => (this, _q): bool { this.interactive },
     ],
+    extern_requests: [
+        // Value probe: the live buffer if mid-edit, else the committed value.
+        GetText => (this, _q): String {
+            this.buf.val().clone().unwrap_or_else(|| this.value.clone())
+        },
+        // Change probe: this node's own version.
+        ValueVersion => (_this, _q, ctx): u64 { ctx.workspace.node_version(ctx.id) },
+    ],
 }}
 
 #[utils::dynamic_type]
@@ -476,7 +492,7 @@ impl CodeEditor {
     }
 }
 
-#[typetag::serde]
+#[utils::dynamic_node]
 impl Node for CodeEditor {
     fn type_name(&self) -> String {
         "Code Editor".to_owned()
@@ -575,6 +591,16 @@ impl Node for CodeEditor {
 defhandlers! { CodeEditor {
     extern_actions: [
         SetText => (this, s) { this.value = s.value },
+    ],
+    requests: [
+        // The live buffer if mid-edit, else the committed value — `value` only
+        // catches up on focus loss.
+        GetText => (this, _q): String {
+            match this.buf.val().as_ref() {
+                Some(text) => text.clone(),
+                None => this.value.clone(),
+            }
+        },
     ],
 }}
 

@@ -10,6 +10,8 @@ pub struct VerticalLayout {
     #[dynamic(skip)]
     pub children: Vec<LayoutChild>,
     pub spacing: f32,
+    /// Give the last child all remaining vertical space, and always report the full available height.
+    pub fill_last: bool,
 }
 
 #[utils::dynamic_methods]
@@ -23,11 +25,21 @@ impl VerticalLayout {
         ws.insert_node(Self {
             children: children.into_iter().map(LayoutChild::Id).collect(),
             spacing,
+            fill_last: false,
         })
+    }
+
+    /// A column composed from dynamic children (values or node handles).
+    pub fn new(children: Vec<LayoutChild>, spacing: f32) -> VerticalLayout {
+        VerticalLayout {
+            children,
+            spacing,
+            fill_last: false,
+        }
     }
 }
 
-#[typetag::serde]
+#[utils::dynamic_node]
 impl Node for VerticalLayout {
     fn type_name(&self) -> String {
         "Vertical Layout".into()
@@ -49,7 +61,11 @@ impl Node for VerticalLayout {
         let mut max_width = 0.0_f32;
         let mut is_first = true;
 
-        for child in &self.children {
+        // Filling the last child only makes sense with a bounded height to fill.
+        let fill_last = self.fill_last && avail_h.is_finite();
+        let last_index = self.children.len().saturating_sub(1);
+
+        for (i, child) in self.children.iter().enumerate() {
             let y_offset = if is_first {
                 // No spacing on top of first child
                 consumed_height
@@ -62,6 +78,15 @@ impl Node for VerticalLayout {
                 break;
             }
 
+            let remaining = avail_h - y_offset;
+            let is_last = i == last_index;
+            let y_constraint = if is_last && fill_last {
+                // Hand the last child every remaining pixel.
+                AxisConstraint::Exactly(remaining)
+            } else {
+                AxisConstraint::AtMost(remaining)
+            };
+
             let child_constraints = DrawConstraints {
                 pos: ctx.constraints.pos
                     + Vector {
@@ -69,7 +94,7 @@ impl Node for VerticalLayout {
                         y: y_offset,
                     },
                 x: Some(AxisConstraint::AtMost(avail_w)),
-                y: Some(AxisConstraint::AtMost(avail_h - y_offset)),
+                y: Some(y_constraint),
                 wrap: WrapConstraints::NotAllowed,
                 should_clip: ctx.constraints.should_clip,
             };
@@ -80,6 +105,11 @@ impl Node for VerticalLayout {
                 max_width = max_width.max(size.x);
                 is_first = false;
             }
+        }
+
+        // Reserve the whole height when filling.
+        if fill_last {
+            consumed_height = avail_h;
         }
 
         DrawResult::Complete {

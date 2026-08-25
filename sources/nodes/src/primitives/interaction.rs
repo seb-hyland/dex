@@ -59,7 +59,7 @@ impl InteractionBox {
     }
 }
 
-#[typetag::serde]
+#[utils::dynamic_node]
 impl Node for InteractionBox {
     fn type_name(&self) -> String {
         "Interaction Sensor".into()

@@ -55,7 +55,7 @@ impl Canvas {
     }
 }
 
-#[typetag::serde]
+#[utils::dynamic_node]
 impl Node for Canvas {
     fn type_name(&self) -> String {
         "Canvas".into()
@@ -131,9 +131,7 @@ impl Node for Canvas {
 
 defhandlers! { Canvas {
     actions: [
-        AddCanvasItem { child: Arc<dyn Node> } => (this, a, ctx) {
-            const DEFAULT_CHILD_SIZE: Vector = Vector { x: 160.0, y: 40.0 };
-
+        AddCanvasItem { child: Arc<dyn Node>, size: Vector } => (this, a, ctx) {
             let child_id = ctx.workspace.insert_node_dyn(a.child);
             // Center new nodes in the currently visible section of the canvas.
             let visible_size = this
@@ -141,10 +139,9 @@ defhandlers! { Canvas {
                 .val()
                 .map(|r| r.size())
                 .unwrap_or(Vector::splat(0.0));
-            let canvas_pos =
-                this.screen_offset() + visible_size / 2.0 - DEFAULT_CHILD_SIZE / 2.0;
+            let canvas_pos = this.screen_offset() + visible_size / 2.0 - a.size / 2.0;
             let node_id =
-                CanvasNode::build(ctx.workspace.action_handle(), child_id, canvas_pos, DEFAULT_CHILD_SIZE);
+                CanvasNode::build(ctx.workspace.action_handle(), child_id, canvas_pos, a.size);
             this.children.push(node_id);
         },
     ],

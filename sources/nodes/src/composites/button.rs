@@ -45,7 +45,7 @@ impl Button {
     }
 }
 
-#[typetag::serde]
+#[utils::dynamic_node]
 impl Node for Button {
     fn type_name(&self) -> String {
         "Button".into()

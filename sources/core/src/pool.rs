@@ -7,7 +7,7 @@ use std::{
 
 use rpds::HashTrieMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use slotmap::{SlotMap, new_key_type};
+use slotmap::{Key, SlotMap, new_key_type};
 use utils::{HistoryGraph, Reset, Timestamp, impl_Reset_noop};
 use uuid::Uuid;
 
@@ -156,6 +156,17 @@ impl Registry {
         }
     }
 
+    /// An version token for the current content referenced by a [`NodeUid`]. No ordering guarantees are provided.
+    pub(crate) fn version(&self, uid: NodeUid) -> u64 {
+        self.history
+            .current_epoch()
+            .data
+            .map
+            .get(&uid)
+            .map(|nobj| nobj.current_ref().data().as_ffi())
+            .unwrap_or(0)
+    }
+
     pub(crate) fn get(&self, id: NodeUid) -> Option<Arc<dyn Node>> {
         let maybe_nobj = self.history.current_epoch().data.map.get(&id);
         maybe_nobj.map(|nobj| nobj.current(&self.pool))
@@ -224,6 +235,10 @@ impl NodeObject {
         let cur_epoch = self.history.current_epoch();
         pool.get(cur_epoch.data)
             .expect("Reference in use should not be freed")
+    }
+
+    fn current_ref(&self) -> NodeRef {
+        self.history.current_epoch().data
     }
 
     /// Record `node` as this object's current state, starting a new history epoch labelled with `edge`

@@ -24,3 +24,9 @@ pub fn dynamic_type(attr_tokens: TokenStream, body_tokens: TokenStream) -> Token
 pub fn dynamic_methods(attr_tokens: TokenStream, body_tokens: TokenStream) -> TokenStream {
     dynamic::dynamic_methods_impl(attr_tokens, body_tokens)
 }
+
+/// Mark an `impl Node for T` block to implement `#[typetag::serde]` and allow it to be returned by value.
+#[proc_macro_attribute]
+pub fn dynamic_node(attr_tokens: TokenStream, body_tokens: TokenStream) -> TokenStream {
+    dynamic::dynamic_node_impl(attr_tokens, body_tokens)
+}

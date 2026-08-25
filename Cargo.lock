@@ -957,6 +957,7 @@ dependencies = [
  "egui_code_editor",
  "pyo3",
  "serde",
+ "steel-core",
  "typetag",
  "utils",
 ]

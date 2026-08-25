@@ -45,22 +45,26 @@ impl CanvasSidebar {
     /// The insert action for the option at `index`.
     fn dispatch(&self, index: usize, ws: WorkspaceActionHandle) -> Option<Action> {
         let dest = self.desktops.erase();
-        let child: Arc<dyn Node> = match index {
-            0 => Arc::new(LabelEditable::new("Text here".to_owned())),
-            1 => Arc::new(CanvasRect),
-            2 => Arc::new(CanvasCircle),
-            3 => Arc::new(Lambda::new(ws)),
+        const DEFAULT: Vector = Vector { x: 160.0, y: 40.0 };
+        let (child, size): (Arc<dyn Node>, Vector) = match index {
+            0 => (
+                Arc::new(LabelEditable::new("Text here".to_owned())),
+                DEFAULT,
+            ),
+            1 => (Arc::new(CanvasRect), DEFAULT),
+            2 => (Arc::new(CanvasCircle), DEFAULT),
+            3 => (Arc::new(Lambda::new(ws)), Vector { x: 420.0, y: 340.0 }),
             _ => return None,
         };
         Some(Action {
             dest,
             description: "Insert new node".into(),
-            body: Box::new(AddCanvasItem { child }),
+            body: Box::new(AddCanvasItem { child, size }),
         })
     }
 }
 
-#[typetag::serde]
+#[utils::dynamic_node]
 impl Node for CanvasSidebar {
     fn type_name(&self) -> String {
         "Canvas Sidebar".into()

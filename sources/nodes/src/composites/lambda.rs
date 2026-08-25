@@ -3,19 +3,35 @@ use dex_core::prelude::*;
 use egui::{Color32, Id, LayerId, Order, Stroke};
 use utils::Transient;
 
-use crate::composites::button::Button;
-use crate::layouts::canvas::layout::{CanvasNodeAt, CanvasNodeScreenRect};
-use crate::layouts::canvas::nodes::CanvasNode;
-use crate::layouts::canvas::nodes::shapes::SectionDivider;
-use crate::layouts::{Bordered, HorizontalLayout, LayoutChild, VerticalLayout};
-use crate::primitives::interaction::{DragPointerPos, InteractionBox, WasClicked, WasDragReleased};
-use crate::primitives::shapes::{Circle, Line};
-use crate::primitives::text::{CodeEditor, Label, LabelEditable};
+use crate::scripting::{ScriptLang, ScriptOutput, is_valid_ident, run_script};
+
+use crate::{
+    composites::{
+        button::Button,
+        selection_box::{Selected, SelectionBox},
+    },
+    layouts::{
+        Bordered, HorizontalLayout, LayoutChild, VerticalLayout,
+        canvas::{
+            layout::{CanvasNodeAt, CanvasNodeScreenRect},
+            nodes::{CanvasNode, shapes::SectionDivider},
+        },
+        error::ErrorLayout,
+        pending::{IsPending, PendingLayout},
+    },
+    primitives::{
+        interaction::{DragPointerPos, InteractionBox, WasClicked, WasDragReleased},
+        nothing::Nothing,
+        shapes::{Circle, Line},
+        text::{CodeEditor, GetText, Label, LabelEditable, ValueVersion},
+    },
+};
 
 #[utils::dynamic_type]
 #[utils::portable]
 pub struct LambdaEditor {
     active: LambdaLang,
+    lang_selector: NodeUid<SelectionBox>,
     steel: NodeUid<CodeEditor>,
     python: NodeUid<CodeEditor>,
 }
@@ -24,47 +40,88 @@ pub struct LambdaEditor {
 impl LambdaEditor {
     /// Build a lambda editor into `ws`.
     pub fn build(ws: WorkspaceActionHandle) -> NodeUid<LambdaEditor> {
+        let lang_selector =
+            SelectionBox::build(ws.clone(), vec!["Python".to_owned(), "Steel".to_owned()]);
+
         let steel = ws.insert_node(CodeEditor::new(String::new(), "steel".to_owned()));
         let python = ws.insert_node(CodeEditor::new(String::new(), "python".to_owned()));
+
         ws.insert_node(Self {
             active: LambdaLang::Python,
+            lang_selector,
             steel,
             python,
         })
     }
 }
 
-#[typetag::serde]
+#[utils::dynamic_node]
 impl Node for LambdaEditor {
     fn type_name(&self) -> String {
         "Lambda Editor".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        // Delegate entirely to whichever code editor is currently active.
-        let active = self
-            .deref_target()
-            .expect("Deref to active editor should be implemented");
-        let constraints = ctx.constraints;
-        ctx.draw_workspace_node(active, constraints)
-            .unwrap_or(DrawResult::Complete { region: None })
-    }
+        const GAP: f32 = 4.0;
 
-    fn deref_target(&self) -> Option<NodeUid> {
-        Some(match self.active {
+        // Keep `active` in sync with the language selector.
+        let selected = ctx
+            .node
+            .workspace
+            .send_request(self.lang_selector, Selected)
+            .unwrap_or(0);
+        let lang = match selected {
+            0 => LambdaLang::Python,
+            1 => LambdaLang::Steel,
+            _ => unreachable!(),
+        };
+        if lang != self.active {
+            ctx.submit_action_for_self::<Self, _>(SetActive { lang }, "Set lambda language");
+        }
+        let active_editor = match self.active {
             LambdaLang::Steel => self.steel.erase(),
             LambdaLang::Python => self.python.erase(),
-        })
+        };
+
+        let body = VerticalLayout {
+            children: vec![
+                LayoutChild::from(self.lang_selector),
+                LayoutChild::Id(active_editor),
+            ],
+            spacing: GAP,
+            fill_last: false,
+        };
+        let constraints = ctx.constraints;
+        ctx.draw_node(&body, constraints)
     }
 
     fn on_delete(&self, ctx: NodeContext) {
+        ctx.workspace.delete_node(self.lang_selector.erase());
         ctx.workspace.delete_node(self.steel.erase());
         ctx.workspace.delete_node(self.python.erase());
     }
 }
 
-defhandlers! { LambdaEditor {} }
+defhandlers! { LambdaEditor {
+    actions: [
+        SetActive { lang: LambdaLang } => (this, s) { this.active = s.lang; },
+    ],
+    requests: [
+        // The active editor's source and language.
+        ActiveScript => (this, _q, ctx): (String, ScriptLang) {
+            let selected = ctx.workspace.send_request(this.lang_selector, Selected).unwrap_or(0);
+            let (editor, lang) = if selected == 1 {
+                (this.steel, ScriptLang::Steel)
+            } else {
+                (this.python, ScriptLang::Python)
+            };
+            let source = ctx.workspace.send_request(editor, GetText).unwrap_or_default();
+            (source, lang)
+        },
+    ],
+}}
 
+#[derive(Copy, PartialEq)]
 #[utils::portable(noop_reset)]
 pub enum LambdaLang {
     Steel,
@@ -92,7 +149,7 @@ impl ConnectionPort {
     }
 }
 
-#[typetag::serde]
+#[utils::dynamic_node]
 impl Node for ConnectionPort {
     fn type_name(&self) -> String {
         "Connection Port".into()
@@ -211,6 +268,10 @@ defhandlers! { ConnectionPort {
             this.connected = s.target;
         },
     ],
+    requests: [
+        // The canvas node this port is wired to, if any.
+        ConnectedTarget => (this, _q): Option<NodeUid<CanvasNode>> { this.connected },
+    ],
 }}
 
 #[utils::dynamic_type]
@@ -236,7 +297,7 @@ impl LambdaArg {
     }
 }
 
-#[typetag::serde]
+#[utils::dynamic_node]
 impl Node for LambdaArg {
     fn type_name(&self) -> String {
         "Lambda Argument".into()
@@ -274,7 +335,16 @@ impl Node for LambdaArg {
     }
 }
 
-defhandlers! { LambdaArg {} }
+defhandlers! { LambdaArg {
+    requests: [
+        // This argument's parameter name and the canvas node it is wired to.
+        ArgBinding => (this, _q, ctx): (String, Option<NodeUid<CanvasNode>>) {
+            let name = ctx.workspace.send_request(this.param_name, GetText).unwrap_or_default();
+            let target = ctx.workspace.send_request(this.port, ConnectedTarget).flatten();
+            (name, target)
+        },
+    ],
+}}
 
 #[utils::dynamic_type]
 #[utils::portable]
@@ -297,7 +367,7 @@ impl LambdaArgs {
     }
 }
 
-#[typetag::serde]
+#[utils::dynamic_node]
 impl Node for LambdaArgs {
     fn type_name(&self) -> String {
         "Lambda Arguments".into()
@@ -327,6 +397,7 @@ impl Node for LambdaArgs {
         let layout = VerticalLayout {
             children: rows,
             spacing: V_ROW_GAP,
+            fill_last: false,
         };
         let region = ctx
             .draw_node(&layout, constraints)
@@ -398,26 +469,146 @@ defhandlers! { LambdaArgs {
             }
         },
     ],
+    requests: [
+        // Each argument's parameter name and wired canvas node, in order.
+        ArgBindings => (this, _q, ctx): Vec<(String, Option<NodeUid<CanvasNode>>)> {
+            this.args
+                .iter()
+                .map(|arg| ctx.workspace.send_request(*arg, ArgBinding).unwrap_or_default())
+                .collect()
+        },
+    ],
 }}
 
 #[utils::dynamic_type]
 #[utils::portable]
 pub struct Lambda {
+    /// An editable display name.
+    name: NodeUid<LabelEditable>,
     args: NodeUid<LambdaArgs>,
     editor: NodeUid<LambdaEditor>,
+    update_button: NodeUid<Button>,
+    /// The node this lambda computes. A stable id whose content is recomputed.
+    output: NodeUid,
+
+    /// Last-seen value version of each wired upstream node, so a change re-fires this lambda.
+    #[dynamic(skip)]
+    seen_deps: Transient<std::collections::HashMap<NodeUid, u64>>,
 }
 
 #[utils::dynamic_methods]
 impl Lambda {
     /// Build a lambda into `ws`.
     pub fn new(ws: WorkspaceActionHandle) -> Lambda {
+        let name = ws.insert_node(LabelEditable::new("Lambda".to_owned()));
         let editor = LambdaEditor::build(ws.clone());
-        let args = LambdaArgs::build(ws);
-        Self { args, editor }
+        let args = LambdaArgs::build(ws.clone());
+        let update_button = Button::build(ws.clone(), Label::new("Update".to_owned()));
+        let output = ws.insert_node(Nothing).erase();
+        Self {
+            name,
+            args,
+            editor,
+            update_button,
+            output,
+            seen_deps: Transient::default(),
+        }
+    }
+
+    /// Recompute [`Lambda::output`]: flip it to a pending view, then run the active script + commit on a worker thread.
+    fn run_update(&self, ctx: &DrawContext) {
+        let workspace = ctx.node.workspace;
+
+        // Cancel any in-flight computation first.
+        workspace.cancel_all_tasks_for(ctx.node.id);
+
+        let Some((source, lang)) = workspace.send_request(self.editor, ActiveScript) else {
+            return;
+        };
+
+        // Resolve each argument to a `name = value` pair.
+        let bindings = workspace
+            .send_request(self.args, ArgBindings)
+            .unwrap_or_default();
+        let mut args: Vec<(String, String)> = Vec::new();
+        for (name, target) in bindings {
+            if !is_valid_ident(&name) {
+                continue;
+            }
+            if let Some(target) = target
+                && let Some(value) = workspace.send_request(target.erase(), GetText)
+            {
+                args.push((name, value));
+            }
+        }
+
+        // Show the previous output under a pending marker while recomputing.
+        let previous = workspace
+            .get_node(self.output)
+            .unwrap_or_else(|| Arc::new(Nothing));
+        let new_pending = if previous.as_any_ref().is::<PendingLayout>() {
+            // Child already displayed pending
+            previous
+        } else {
+            Arc::new(PendingLayout {
+                child: LayoutChild::Node(previous),
+            })
+        };
+        workspace.action_handle().insert_node_at_dyn(
+            self.output,
+            Arc::new(PendingLayout {
+                child: LayoutChild::Node(new_pending),
+            }),
+        );
+
+        let output = self.output;
+        let task = ComputeTask::new(ctx.node.id, move || {
+            let (handle, actions) = WorkspaceActionHandle::buffered();
+            match run_script(lang, &source, &handle, &args) {
+                Ok(ScriptOutput::Nothing) => handle.insert_node_at_dyn(output, Arc::new(Nothing)),
+                Ok(ScriptOutput::Node(node)) => handle.insert_node_at_dyn(output, node),
+                Ok(ScriptOutput::Handle(uid)) => handle.commit_output(output, uid),
+                Err(e) => {
+                    handle.insert_node_at_dyn(output, Arc::new(ErrorLayout::message(e.to_string())))
+                }
+            }
+            drop(handle);
+            actions.try_iter().collect()
+        });
+        workspace.submit_task(task);
+    }
+
+    /// Poll wired nodes; returns `true` if any dependency's version has changed since last check.
+    fn poll_dependencies(&self, ctx: &DrawContext) -> bool {
+        let workspace = ctx.node.workspace;
+        let bindings = workspace
+            .send_request(self.args, ArgBindings)
+            .unwrap_or_default();
+
+        let mut changed = false;
+        let mut seen = self
+            .seen_deps
+            .val_mut_or_else(std::collections::HashMap::new);
+        for (_name, target) in bindings {
+            let Some(target) = target else { continue };
+            let uid = target.erase();
+            // Don't sample a source that is recomputing; wait for it to settle.
+            if workspace.send_request(uid, IsPending).unwrap_or(false) {
+                continue;
+            }
+            let version = workspace.send_request(uid, ValueVersion).unwrap_or(0);
+            if let Some(&prev) = seen.get(&uid)
+                && prev != version
+            {
+                changed = true;
+            }
+            seen.insert(uid, version);
+        }
+        changed
     }
 }
 
-#[typetag::serde]
+#[utils::dynamic_node]
 impl Node for Lambda {
     fn type_name(&self) -> String {
         "Lambda".into()
@@ -443,17 +634,23 @@ impl Node for Lambda {
 
         let body = VerticalLayout {
             children: vec![
+                LayoutChild::from(self.name),
                 LayoutChild::from(self.args),
                 LayoutChild::Node(Arc::new(SectionDivider)),
                 LayoutChild::from(self.editor),
+                LayoutChild::from(self.update_button),
+                LayoutChild::Node(Arc::new(SectionDivider)),
+                LayoutChild::Id(self.output),
             ],
             spacing: V_SECTIONS_GAP,
+            // The output claims the remaining height
+            fill_last: true,
         };
         let bordered = Bordered {
             child: LayoutChild::Node(Arc::new(body)),
             padding: OUTER_PADDING,
             corner_radius: 4.0,
-            fill_color: Color::TRANSPARENT,
+            fill_color: Color::WHITE,
             border_width: 1.0,
             border_color: Color::gray(170),
         };
@@ -468,15 +665,42 @@ impl Node for Lambda {
             },
         );
 
+        // Recompute when the update button is clicked, or when a dependency has changed.
+        let clicked = ctx
+            .node
+            .workspace
+            .send_request(self.update_button.erase(), WasClicked)
+            .unwrap_or(false);
+        let deps_changed = self.poll_dependencies(&ctx);
+        if clicked || deps_changed {
+            self.run_update(&ctx);
+        }
+
         DrawResult::Complete {
             region: Some(ScreenRegion::from_min_size(origin, node_size)),
         }
     }
 
     fn on_delete(&self, ctx: NodeContext) {
+        ctx.workspace.delete_node(self.name.erase());
         ctx.workspace.delete_node(self.args.erase());
         ctx.workspace.delete_node(self.editor.erase());
+        ctx.workspace.delete_node(self.update_button.erase());
+        ctx.workspace.delete_node(self.output);
     }
 }
 
-defhandlers! { Lambda {} }
+defhandlers! { Lambda {
+    extern_requests: [
+        // Value probe: a lambda's value is its resolved output's value.
+        GetText => (this, _q, ctx): String {
+            ctx.workspace.send_request(this.output, GetText).unwrap_or_default()
+        },
+        // Change probe: a lambda's version is its output node's version.
+        ValueVersion => (this, _q, ctx): u64 { ctx.workspace.node_version(this.output) },
+        // A lambda is pending while its output is mid-recompute.
+        IsPending => (this, _q, ctx): bool {
+            ctx.workspace.send_request(this.output, IsPending).unwrap_or(false)
+        },
+    ],
+}}

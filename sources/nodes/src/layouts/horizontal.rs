@@ -31,11 +31,20 @@ impl HorizontalLayout {
             allow_wrap,
         })
     }
+
+    /// A row composed from dynamic children (values or node handles).
+    pub fn new(children: Vec<LayoutChild>, spacing: f32, allow_wrap: bool) -> HorizontalLayout {
+        HorizontalLayout {
+            children,
+            spacing,
+            allow_wrap,
+        }
+    }
 }
 
 defhandlers! { HorizontalLayout {} }
 
-#[typetag::serde]
+#[utils::dynamic_node]
 impl Node for HorizontalLayout {
     fn type_name(&self) -> String {
         "Horizontal Layout".into()

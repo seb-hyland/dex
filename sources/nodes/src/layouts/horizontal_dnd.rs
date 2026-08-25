@@ -55,7 +55,7 @@ impl HorizontalDnD {
     }
 }
 
-#[typetag::serde]
+#[utils::dynamic_node]
 impl Node for HorizontalDnD {
     fn type_name(&self) -> String {
         "Horizontal Drag-and-Drop".into()

@@ -15,7 +15,6 @@ use crate::{
     compute::{ComputeScheduler, ComputeSchedulerHandle, ComputeTask},
     messages::{Action, ActionGroup, Request, downcast_resp},
     pool::{NodeUid, Registry},
-    scripting::{ScriptLang, run_script},
 };
 
 pub struct Workspace {
@@ -232,6 +231,16 @@ impl Workspace {
                 remove_action: RemoveWorkspaceNode => {
                     self.remove_node(remove_action.uid);
                 },
+                commit: CommitOutput => {
+                    // Point `target` at the node `source` currently holds.
+                    // `target`'s id remains stable.
+                    if let Some(node) = self.registry.get(commit.source) {
+                        self.registry.push(PushWorkspaceNode {
+                            node,
+                            uid: commit.target,
+                        });
+                    }
+                },
                 _ => self.apply_action(act),
             }
         }
@@ -275,18 +284,13 @@ impl Workspace {
         self.scheduler.submit_task(task);
     }
 
-    /// Spawn a script on a new compute worker, on behalf of `requester`.
-    pub fn spawn_script(&self, requester: NodeUid, lang: ScriptLang, source: String) {
-        let task = ComputeTask::new(requester, move || {
-            let (handle, actions) = WorkspaceActionHandle::buffered();
-            if let Err(e) = run_script(lang, &source, &handle) {
-                eprintln!("dex script error: {e}");
-            }
-            // Close the channel so the drain terminates.
-            drop(handle);
-            actions.into_iter().collect()
-        });
-        self.submit_task(task);
+    /// The node currently held at `uid`, if any.
+    pub fn get_node(&self, uid: NodeUid) -> Option<Arc<dyn Node>> {
+        self.registry.get(uid)
+    }
+
+    pub fn node_version(&self, uid: NodeUid) -> u64 {
+        self.registry.version(uid)
     }
 
     pub fn cancel_all_tasks_for(&self, uid: NodeUid) {
@@ -371,6 +375,25 @@ impl WorkspaceActionHandle {
             body: Box::new(RemoveWorkspaceNode { uid }),
         });
     }
+
+    /// Commit `node` as the content of an existing `uid`, keeping the id stable.
+    pub fn insert_node_at_dyn(&self, uid: NodeUid, node: Arc<dyn Node>) {
+        self.submit_action_dyn(Action {
+            dest: NodeUid::nil(),
+            description: "Committed node output".into(),
+            body: Box::new(PushWorkspaceNode { node, uid }),
+        });
+    }
+
+    /// Point `target` at the node `source` currently holds, keeping `target`'s
+    /// id stable. Resolved workspace-side, so `source` must already be queued.
+    pub fn commit_output(&self, target: NodeUid, source: NodeUid) {
+        self.submit_action_dyn(Action {
+            dest: NodeUid::nil(),
+            description: "Committed node output".into(),
+            body: Box::new(CommitOutput { target, source }),
+        });
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -389,6 +412,15 @@ pub(crate) struct RemoveWorkspaceNode {
 
 #[typetag::serde]
 impl ActionBody for RemoveWorkspaceNode {}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct CommitOutput {
+    pub target: NodeUid,
+    pub source: NodeUid,
+}
+
+#[typetag::serde]
+impl ActionBody for CommitOutput {}
 
 impl<'ctx> DrawContext<'ctx> {
     pub fn get_workspace_node<T: ?Sized>(&self, id: NodeUid<T>) -> Option<Arc<dyn Node>> {

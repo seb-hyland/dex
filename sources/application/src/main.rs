@@ -20,6 +20,9 @@ fn build_workspace() -> Workspace {
 }
 
 fn main() -> eframe::Result {
+    // Initialise Python on the main thread.
+    dex_nodes::scripting::init_python();
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([900.0, 600.0]),
         ..Default::default()

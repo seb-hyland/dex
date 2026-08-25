@@ -7,7 +7,7 @@ use crate::primitives::shapes::{self, Line};
 #[utils::portable(noop_reset)]
 pub struct CanvasRect;
 
-#[typetag::serde]
+#[utils::dynamic_node(skip)]
 impl Node for CanvasRect {
     fn type_name(&self) -> String {
         "Canvas Rect".into()
@@ -42,7 +42,7 @@ defhandlers! { CanvasRect {} }
 #[utils::portable(noop_reset)]
 pub struct CanvasCircle;
 
-#[typetag::serde]
+#[utils::dynamic_node(skip)]
 impl Node for CanvasCircle {
     fn type_name(&self) -> String {
         "Canvas Circle".into()
@@ -75,7 +75,7 @@ defhandlers! { CanvasCircle {} }
 #[utils::portable(noop_reset)]
 pub struct SectionDivider;
 
-#[typetag::serde]
+#[utils::dynamic_node(skip)]
 impl Node for SectionDivider {
     fn type_name(&self) -> String {
         "Section Divider".into()

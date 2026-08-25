@@ -18,11 +18,12 @@ mod workspace;
 
 pub mod prelude {
     pub use crate::{
+        compute::ComputeTask,
         constraints::*,
         messages::*,
         pool::NodeUid,
         region::{ScreenPos, ScreenRegion, Vector},
-        scripting::{NodeHandle, ScriptError, ScriptLang, run_script},
+        scripting::{NodeExtractor, NodeHandle},
         style::{Color, Font, Stroke, StrokeKind},
         workspace::{Workspace, WorkspaceActionHandle},
         *,

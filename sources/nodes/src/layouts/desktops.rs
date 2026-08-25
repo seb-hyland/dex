@@ -83,7 +83,7 @@ const SIDEBAR_MAX: f32 = 500.0;
 const TAB_BAR_H: f32 = 42.0;
 const TAB_SPACING: f32 = 6.0;
 
-#[typetag::serde]
+#[utils::dynamic_node]
 impl Node for Desktops {
     fn type_name(&self) -> String {
         "Desktops".into()
@@ -317,7 +317,7 @@ impl DesktopTabView {
     }
 }
 
-#[typetag::serde]
+#[utils::dynamic_node(skip)]
 impl Node for DesktopTabView {
     fn type_name(&self) -> String {
         "Canvas Tab".into()

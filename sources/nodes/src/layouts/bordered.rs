@@ -3,8 +3,11 @@ use dex_core::prelude::*;
 use crate::layouts::child::LayoutChild;
 use crate::primitives::shapes::Rect;
 
+#[utils::dynamic_type]
 #[utils::portable]
 pub struct Bordered {
+    // `LayoutChild` isn't bindable; compose it from node handles/values instead.
+    #[dynamic(skip)]
     pub child: LayoutChild,
     pub padding: f32,
     pub corner_radius: f32,
@@ -13,7 +16,23 @@ pub struct Bordered {
     pub border_color: Color,
 }
 
-#[typetag::serde]
+#[utils::dynamic_methods]
+impl Bordered {
+    /// Wrap `child` in a border with sensible defaults. Tweak the `padding`,
+    /// `corner_radius`, colours, and `border_width` fields to taste.
+    pub fn new(child: LayoutChild) -> Bordered {
+        Bordered {
+            child,
+            padding: 8.0,
+            corner_radius: 4.0,
+            fill_color: Color::TRANSPARENT,
+            border_width: 1.0,
+            border_color: Color::gray(170),
+        }
+    }
+}
+
+#[utils::dynamic_node]
 impl Node for Bordered {
     fn type_name(&self) -> String {
         "Bordered".into()
@@ -29,6 +48,11 @@ impl Node for Bordered {
                 self.padding + self.border_width,
             )
         };
+
+        // The box sizes to the child, so we can't paint until the child is drawn, but the fill must sit behind.
+        // This reserves a slot.
+        let bg_idx = ctx.ui.painter().add(egui::Shape::Noop);
+
         let child_res = self.child.draw(&mut ctx, child_constraints);
 
         if let DrawResult::Complete {
@@ -54,11 +78,20 @@ impl Node for Bordered {
                 x: child_size_with_padding.x.min(avail_x),
                 y: child_size_with_padding.y.min(avail_y),
             };
+            let rect = egui::Rect::from_min_size(
+                ctx.constraints.pos.into(),
+                egui::vec2(box_size.x, box_size.y),
+            );
 
+            // Fill occupies the reserved slot (behind the child).
+            ctx.ui.painter().set(
+                bg_idx,
+                egui::Shape::rect_filled(rect, self.corner_radius, self.fill_color),
+            );
             Rect {
                 size: box_size,
                 corner_radius: self.corner_radius,
-                fill_color: self.fill_color.into(),
+                fill_color: egui::Color32::TRANSPARENT,
                 border: egui::Stroke::new(self.border_width, self.border_color),
                 stroke_kind: egui::StrokeKind::Inside,
             }

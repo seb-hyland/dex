@@ -10,6 +10,7 @@ egui.workspace = true
 egui_code_editor = { path = "../../vendored/egui_code_editor/" }
 pyo3.workspace = true
 serde.workspace = true
+steel-core.workspace = true
 typetag.workspace = true
 utils.workspace = true
 
