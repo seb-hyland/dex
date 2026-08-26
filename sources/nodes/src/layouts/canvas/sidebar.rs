@@ -16,6 +16,7 @@ use crate::{
     primitives::{
         interaction::WasClicked,
         text::{Label, LabelEditable},
+        typst::TypstEditor,
     },
 };
 
@@ -30,7 +31,8 @@ pub struct CanvasSidebar {
 impl CanvasSidebar {
     /// Labels for the option buttons, in order. The button at index `i` inserts
     /// the node produced by [`CanvasSidebar::dispatch`] for that index.
-    pub const OPTIONS: [&'static str; 5] = ["Text", "Rect", "Circle", "Lambda", "Canvas Lambda"];
+    pub const OPTIONS: [&'static str; 6] =
+        ["Text", "Rect", "Circle", "Typst", "Lambda", "Canvas Lambda"];
 
     /// Build the sidebar and its option buttons into `ws`.
     pub fn build(ws: WorkspaceActionHandle, desktops: NodeUid<Desktops>) -> NodeUid<CanvasSidebar> {
@@ -56,8 +58,12 @@ impl CanvasSidebar {
             ),
             1 => (Arc::new(CanvasRect), DEFAULT),
             2 => (Arc::new(CanvasCircle), DEFAULT),
-            3 => (Arc::new(Lambda::new(ws)), Vector { x: 420.0, y: 340.0 }),
-            4 => (
+            3 => (
+                Arc::new(TypstEditor::new(ws)),
+                Vector { x: 280.0, y: 220.0 },
+            ),
+            4 => (Arc::new(Lambda::new(ws)), Vector { x: 420.0, y: 340.0 }),
+            5 => (
                 Arc::new(CanvasLambda::new(ws)),
                 Vector { x: 280.0, y: 220.0 },
             ),

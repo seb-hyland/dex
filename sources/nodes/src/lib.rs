@@ -2,6 +2,7 @@
 extern crate self as dex_nodes;
 
 pub mod composites;
+pub mod fonts;
 pub mod layouts;
 pub mod primitives;
 pub mod scripting;

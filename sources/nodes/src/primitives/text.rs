@@ -464,6 +464,9 @@ pub struct CodeEditor {
     pub rows: usize,
     pub numlines: bool,
 
+    /// When set, grow to fill the available height.
+    pub fill: bool,
+
     /// Colour theme, matched by name against [`DEFAULT_THEMES`] (e.g. "Gruvbox")
     pub theme: String,
     /// Highlighting language (e.g. "rust", "python")
@@ -479,6 +482,7 @@ impl CodeEditor {
             font_size: 14.0,
             rows: 6,
             numlines: true,
+            fill: false,
             theme: "Gruvbox".to_owned(),
             language,
         }
@@ -541,12 +545,19 @@ impl Node for CodeEditor {
         let origin = ctx.constraints.pos;
         let rect = Rect::from_min_size(origin.into(), size.into());
 
+        // When filling, derive the visible row count from the available height.
+        let rows = if self.fill && row_h > 0.0 {
+            (block_h / row_h).floor().max(1.0) as usize
+        } else {
+            self.rows
+        };
+
         let syntax = syntax_for(&self.language);
         let editor_id = egui::Id::new(ctx.node.id);
         let mut editor = CodeEditorWidget::default()
             .with_id(editor_id)
             .with_fontsize(self.font_size)
-            .with_rows(self.rows)
+            .with_rows(rows)
             .with_numlines(self.numlines)
             .with_theme(theme_for(&self.theme))
             .desired_width(block_w);

@@ -35,6 +35,7 @@ fn main() -> eframe::Result {
             cc.egui_ctx
                 .options_mut(|opt| opt.theme_preference = egui::ThemePreference::Light);
             dex_nodes::primitives::image::install_image_support(&cc.egui_ctx);
+            dex_nodes::fonts::install_fonts(&cc.egui_ctx);
             Ok(Box::new(App {
                 workspace: build_workspace(),
             }) as Box<dyn eframe::App>)

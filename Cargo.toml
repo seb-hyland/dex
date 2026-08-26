@@ -6,6 +6,7 @@ members = ["sources/*"]
 dex-dynamic.path = "sources/dynamic/"
 dyn-clone = "1.0.20"
 egui = { version = "0.35.0", features = ["serde"] }
+egui_extras = { version = "0.35.0", features = ["image", "svg"] }
 inventory = "0.3.22"
 parking_lot = "0.12.5"
 petgraph = { version = "0.8.3", features = ["serde-1"] }
@@ -16,6 +17,9 @@ serde_json = "1.0.150"
 slotmap = { version = "1.1.1", features = ["serde"] }
 steel-core = "0.8.3"
 typetag = "0.2.22"
+typst = "0.15.1"
+typst-svg = "0.15.1"
+typst-layout = "0.15.1"
 utils.path = "sources/utils/"
 utils-proc-macro.path = "sources/utils-proc-macro/"
 uuid = { version = "1.23.4", features = ["serde", "v4", "v5", "v7"] }
