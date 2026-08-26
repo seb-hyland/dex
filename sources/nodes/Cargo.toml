@@ -8,6 +8,7 @@ dex-core.path = "../core/"
 dex-dynamic.workspace = true
 egui.workspace = true
 egui_code_editor = { path = "../../vendored/egui_code_editor/" }
+egui_extras = { version = "0.35.0", features = ["image", "svg"] }
 pyo3.workspace = true
 serde.workspace = true
 steel-core.workspace = true

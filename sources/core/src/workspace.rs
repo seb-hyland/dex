@@ -436,6 +436,14 @@ pub(crate) struct CommitOutput {
 impl ActionBody for CommitOutput {}
 
 impl<'ctx> DrawContext<'ctx> {
+    pub fn for_ui(node: NodeContext<'ctx>, constraints: DrawConstraints, ui: &'ctx mut Ui) -> Self {
+        DrawContext {
+            node,
+            constraints,
+            ui,
+        }
+    }
+
     pub fn get_workspace_node<T: ?Sized>(&self, id: NodeUid<T>) -> Option<Arc<dyn Node>> {
         self.node.workspace.registry.get(id.erase())
     }

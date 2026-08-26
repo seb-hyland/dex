@@ -34,6 +34,7 @@ fn main() -> eframe::Result {
             // Always run in light mode, ignoring system theme changes
             cc.egui_ctx
                 .options_mut(|opt| opt.theme_preference = egui::ThemePreference::Light);
+            dex_nodes::primitives::image::install_image_support(&cc.egui_ctx);
             Ok(Box::new(App {
                 workspace: build_workspace(),
             }) as Box<dyn eframe::App>)
