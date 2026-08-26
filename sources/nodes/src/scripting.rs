@@ -1,11 +1,14 @@
 use std::ffi::{CString, NulError};
 
+use dex_core::messages::TypedRequestBody;
 use dex_core::prelude::*;
 
+use crate::composites::lambda::ComputeParam;
 use crate::layouts::error::ErrorLayout;
+use crate::layouts::pending::PendingLayout;
 use crate::primitives::dynamic::DynamicNode;
 use crate::primitives::nothing::Nothing;
-use crate::primitives::text::Label;
+use crate::primitives::text::{Label, LabelEditable};
 
 /// Initialise the Python interpreter.
 pub fn init_python() {
@@ -25,6 +28,103 @@ pub enum ScriptOutput {
     Nothing,
     Node(Arc<dyn Node>),
     Handle(NodeUid),
+}
+
+/// A resolved argument value, injected into scripts by type.
+#[derive(Clone, Debug)]
+pub enum ScriptValue {
+    Nothing,
+    Str(String),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Node(NodeUid),
+}
+
+impl ScriptValue {
+    /// A plain-text rendering (for previews and string-typed sinks).
+    pub fn display(&self) -> String {
+        match self {
+            ScriptValue::Str(s) => s.clone(),
+            ScriptValue::Int(i) => i.to_string(),
+            ScriptValue::Float(f) => f.to_string(),
+            ScriptValue::Bool(b) => b.to_string(),
+            ScriptValue::Node(_) => "⟨node⟩".to_owned(),
+            ScriptValue::Nothing => "⟨nothing⟩".to_owned(),
+        }
+    }
+}
+
+/// "My value is really this other node's value."
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct ValueDelegate;
+
+impl TypedRequestBody for ValueDelegate {
+    type Response = Option<NodeUid>;
+}
+
+/// A wired argument resolved to its leaf value.
+pub struct ResolvedArg {
+    /// The leaf's value, if it is a value-bearing node.
+    pub value: ScriptValue,
+    /// A change token — differs iff the resolved value changed.
+    pub version: u64,
+    /// Whether the delegation chain passed through a pending marker.
+    pub pending: bool,
+}
+
+/// Follow `start`'s value-delegation chain to its leaf.
+pub fn resolve_arg(ws: &Workspace, start: NodeUid) -> ResolvedArg {
+    let mut cur = start;
+    let mut pending = false;
+    loop {
+        if ws
+            .get_node(cur)
+            .is_some_and(|n| n.as_ref().as_any_ref().is::<PendingLayout>())
+        {
+            pending = true;
+        }
+        match ws.send_request(cur, ValueDelegate).flatten() {
+            Some(next) => cur = next,
+            None => break,
+        }
+    }
+    // A value-bearing leaf resolves to its value; the empty node to nothing;
+    // any other node to a reference the script can use as a node.
+    let value = ws
+        .get_node(cur)
+        .and_then(|n| {
+            let value = node_to_value(&*n).unwrap_or_else(|| {
+                if n.as_ref().as_any_ref().is::<Nothing>() {
+                    ScriptValue::Nothing
+                } else {
+                    ScriptValue::Node(cur)
+                }
+            });
+            Some(value)
+        })
+        .unwrap_or(ScriptValue::Nothing);
+    ResolvedArg {
+        value: if pending { ScriptValue::Nothing } else { value },
+        version: ws.node_version(cur),
+        pending,
+    }
+}
+
+/// The single place a value-bearing node becomes a primitive [`ScriptValue`].
+/// A node not handled here is passed to the script by reference (as a node).
+pub fn node_to_value(node: &dyn Node) -> Option<ScriptValue> {
+    let any = node.as_any_ref();
+    if let Some(l) = any.downcast_ref::<Label>() {
+        return Some(ScriptValue::Str(l.text.clone()));
+    }
+    if let Some(l) = any.downcast_ref::<LabelEditable>() {
+        return Some(ScriptValue::Str(l.resolved_text()));
+    }
+    if let Some(p) = any.downcast_ref::<ComputeParam>() {
+        return Some(ScriptValue::Str(p.value.clone()));
+    }
+    None
 }
 
 /// The one canonical mapping from a Python value to a node.
@@ -219,7 +319,7 @@ pub fn run_script(
     lang: ScriptLang,
     source: &str,
     handle: &WorkspaceActionHandle,
-    args: &[(String, String)],
+    args: &[(String, ScriptValue)],
 ) -> Result<ScriptOutput, ScriptError> {
     match lang {
         ScriptLang::Python => run_python(source, handle, args),
@@ -230,7 +330,7 @@ pub fn run_script(
 fn run_python(
     source: &str,
     handle: &WorkspaceActionHandle,
-    args: &[(String, String)],
+    args: &[(String, ScriptValue)],
 ) -> Result<ScriptOutput, ScriptError> {
     use pyo3::prelude::*;
     use pyo3::types::PyDict;
@@ -247,9 +347,20 @@ fn run_python(
         let globals = PyDict::new(py);
         globals.set_item("dex", &dex_mod).map_err(map_err)?;
 
-        // Seed each argument as a global the transform can reference by name.
+        // Seed each argument as a global.
         for (name, value) in args {
-            globals.set_item(name, value).map_err(map_err)?;
+            match value {
+                ScriptValue::Str(s) => globals.set_item(name, s),
+                ScriptValue::Int(i) => globals.set_item(name, *i),
+                ScriptValue::Float(f) => globals.set_item(name, *f),
+                ScriptValue::Bool(b) => globals.set_item(name, *b),
+                ScriptValue::Node(uid) => {
+                    let handle = Bound::new(py, NodeHandle(*uid)).map_err(map_err)?;
+                    globals.set_item(name, handle)
+                }
+                ScriptValue::Nothing => globals.set_item(name, ()),
+            }
+            .map_err(map_err)?;
         }
 
         // Run the source (defining `transform` into `globals`), then call it.
@@ -268,7 +379,7 @@ fn run_python(
 fn run_steel(
     source: &str,
     handle: &WorkspaceActionHandle,
-    args: &[(String, String)],
+    args: &[(String, ScriptValue)],
 ) -> Result<ScriptOutput, ScriptError> {
     let mut engine = dex_dynamic::build_steel_engine();
     let to_err = |e: steel::rerrs::SteelErr| ScriptError::Steel(e.to_string());
@@ -278,11 +389,17 @@ fn run_steel(
         .register_external_value("ws", handle.clone())
         .map_err(to_err)?;
 
-    // Seed each argument as a global bound to its string value.
+    // Seed each argument as a global bound to its native value.
     for (name, value) in args {
-        engine
-            .register_external_value(name, value.clone())
-            .map_err(to_err)?;
+        match value {
+            ScriptValue::Str(s) => engine.register_external_value(name, s.clone()),
+            ScriptValue::Int(i) => engine.register_external_value(name, *i),
+            ScriptValue::Float(f) => engine.register_external_value(name, *f),
+            ScriptValue::Bool(b) => engine.register_external_value(name, *b),
+            ScriptValue::Node(uid) => engine.register_external_value(name, NodeHandle(*uid)),
+            ScriptValue::Nothing => engine.register_external_value(name, ()),
+        }
+        .map_err(to_err)?;
     }
 
     // Run the source (defining `transform`), then call it via the engine env — a

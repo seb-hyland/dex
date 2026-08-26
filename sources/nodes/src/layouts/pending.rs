@@ -40,9 +40,4 @@ impl Node for PendingLayout {
     }
 }
 
-defhandlers! { PendingLayout {
-    requests: [
-        // Lets a lambda detect that its output is mid-recompute.
-        IsPending => (this, _q): bool { true },
-    ],
-}}
+defhandlers! { PendingLayout {} }

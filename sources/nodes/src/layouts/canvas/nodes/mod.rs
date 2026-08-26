@@ -8,6 +8,7 @@ use crate::primitives::{
     interaction::{ContainsPointer, InteractionBox, WasDragged, WasHovered},
     shapes::Rect,
 };
+use crate::scripting::ValueDelegate;
 
 #[utils::dynamic_type]
 #[utils::portable]
@@ -447,5 +448,9 @@ defhandlers! { CanvasNode {
         },
         // The workspace node this canvas node wraps.
         CanvasNodeChild => (this, _q): NodeUid { this.child },
+    ],
+    extern_requests: [
+        // A canvas node represents its wrapped child for value resolution.
+        ValueDelegate => (this, _q): Option<NodeUid> { Some(this.child) },
     ],
 }}

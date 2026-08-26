@@ -172,6 +172,17 @@ impl Registry {
         maybe_nobj.map(|nobj| nobj.current(&self.pool))
     }
 
+    /// The ids of every node currently in the workspace.
+    pub(crate) fn live_ids(&self) -> Vec<NodeUid> {
+        self.history
+            .current_epoch()
+            .data
+            .map
+            .keys()
+            .copied()
+            .collect()
+    }
+
     pub(crate) fn push(&mut self, action: PushWorkspaceNode) {
         self.history
             .current_epoch_mut()

@@ -161,8 +161,21 @@ impl Workspace {
     }
 
     pub fn draw_frame(&mut self, ui: &mut Ui, draw_area: Rect) {
+        self.tick_all();
         self.draw_root(ui, draw_area);
         self.process_actions();
+    }
+
+    /// Tick every live node, drawn or not.
+    fn tick_all(&self) {
+        for id in self.registry.live_ids() {
+            if let Some(node) = self.registry.get(id) {
+                node.tick(NodeContext {
+                    id,
+                    workspace: self,
+                });
+            }
+        }
     }
 
     fn draw_root(&mut self, ui: &mut Ui, draw_area: Rect) {

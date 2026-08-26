@@ -50,15 +50,7 @@ impl Node for Label {
     }
 }
 
-defhandlers! { Label {
-    requests: [
-        ValueVersion => (_this, _q, ctx): u64 { ctx.workspace.node_version(ctx.id) },
-    ],
-    extern_requests: [
-        // Value probe: a label's text is its value.
-        GetText => (this, _q): String { this.text.clone() },
-    ],
-}}
+defhandlers! { Label {} }
 
 #[utils::dynamic_methods]
 impl Label {
@@ -235,6 +227,12 @@ impl LabelEditable {
             font: Font::proportional(16.0),
             color: Color::BLACK,
         }
+    }
+
+    /// The current text.
+    #[dynamic(skip)]
+    pub fn resolved_text(&self) -> String {
+        self.buf.val().clone().unwrap_or_else(|| self.value.clone())
     }
 
     /// A label that starts as static text, becomes editable on [`SetInteractive`], and locks again on focus loss.
@@ -452,12 +450,7 @@ defhandlers! { LabelEditable {
         IsInteractive => (this, _q): bool { this.interactive },
     ],
     extern_requests: [
-        // Value probe: the live buffer if mid-edit, else the committed value.
-        GetText => (this, _q): String {
-            this.buf.val().clone().unwrap_or_else(|| this.value.clone())
-        },
-        // Change probe: this node's own version.
-        ValueVersion => (_this, _q, ctx): u64 { ctx.workspace.node_version(ctx.id) },
+        GetText => (this, _q): String { this.resolved_text() },
     ],
 }}
 

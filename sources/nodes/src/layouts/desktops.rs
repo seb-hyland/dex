@@ -35,6 +35,11 @@ pub struct Desktops {
 
     sidebar_width: f32,
     pending_sidebar_width: Transient<f32>,
+
+    /// A stack of surfaces temporarily shown fullscreen in place of the tabs + active canvas.
+    #[dynamic(skip)]
+    override_stack: Vec<NodeUid>,
+    close_override_button: NodeUid<Button>,
 }
 
 #[utils::dynamic_methods]
@@ -60,6 +65,7 @@ impl Desktops {
         let sidebar = CanvasSidebar::build(ws.clone(), id);
         let add_button = Button::build(ws.clone(), Label::new("+".to_owned()));
         let divider = ws.insert_node(InteractionBox::sensing(true, false, true));
+        let close_override_button = Button::build(ws.clone(), Label::new("← Close".to_owned()));
 
         ws.insert_node_at(
             id,
@@ -69,8 +75,10 @@ impl Desktops {
                 sidebar,
                 add_button,
                 divider,
+                close_override_button,
                 sidebar_width: 200.0,
                 pending_sidebar_width: Transient::default(),
+                override_stack: Vec::new(),
             },
         );
         id
@@ -133,55 +141,83 @@ impl Node for Desktops {
             },
         );
 
-        // Tab bar, then the add-canvas button, laid out in a row.
-        let layout = HorizontalLayout {
-            children: vec![
-                LayoutChild::from(self.tab_bar),
-                LayoutChild::from(self.add_button),
-            ],
-            spacing: TAB_SPACING,
-            allow_wrap: false,
+        let content_pos = ScreenPos {
+            x: right_x,
+            y: origin.y + TAB_BAR_H,
         };
-        ctx.draw_node(
-            &layout,
-            DrawConstraints {
-                pos: right_origin
-                    + Vector {
-                        x: TAB_SPACING,
-                        y: TAB_SPACING,
-                    },
-                x: Some(AxisConstraint::AtMost(
-                    (right_w - 2.0 * TAB_SPACING).max(0.0),
-                )),
-                y: Some(AxisConstraint::AtMost((TAB_BAR_H - TAB_SPACING).max(0.0))),
-                wrap: WrapConstraints::NotAllowed,
-                should_clip: false,
-            },
-        );
-        if ctx
-            .node
-            .workspace
-            .send_request(self.add_button.erase(), WasClicked)
-            .unwrap_or(false)
-        {
-            ctx.submit_action_for_self::<Self, _>(AddCanvas, "Add canvas");
-        }
+        let content_constraints = DrawConstraints {
+            pos: content_pos,
+            x: Some(AxisConstraint::Exactly(right_w)),
+            y: Some(AxisConstraint::Exactly((avail_h - TAB_BAR_H).max(0.0))),
+            wrap: WrapConstraints::NotAllowed,
+            should_clip: true,
+        };
 
-        // Draw active canvas -------------------------------------------------
-        if let Some(active) = self.active {
+        if let Some(&opened) = self.override_stack.last() {
+            // An override is open; draw a close button in the tab row and the override filling the content area.
             ctx.draw_workspace_node(
-                active,
+                self.close_override_button,
                 DrawConstraints {
-                    pos: ScreenPos {
-                        x: right_x,
-                        y: origin.y + TAB_BAR_H,
-                    },
-                    x: Some(AxisConstraint::Exactly(right_w)),
-                    y: Some(AxisConstraint::Exactly((avail_h - TAB_BAR_H).max(0.0))),
+                    pos: right_origin
+                        + Vector {
+                            x: TAB_SPACING,
+                            y: TAB_SPACING,
+                        },
+                    x: Some(AxisConstraint::AtMost(
+                        (right_w - 2.0 * TAB_SPACING).max(0.0),
+                    )),
+                    y: Some(AxisConstraint::AtMost((TAB_BAR_H - TAB_SPACING).max(0.0))),
                     wrap: WrapConstraints::NotAllowed,
-                    should_clip: true,
+                    should_clip: false,
                 },
             );
+            if ctx
+                .node
+                .workspace
+                .send_request(self.close_override_button.erase(), WasClicked)
+                .unwrap_or(false)
+            {
+                ctx.submit_action_for_self::<Self, _>(PopOverride, "Close override");
+            }
+            ctx.draw_workspace_node(opened, content_constraints);
+        } else {
+            // Tab bar, then the add-canvas button, laid out in a row.
+            let layout = HorizontalLayout {
+                children: vec![
+                    LayoutChild::from(self.tab_bar),
+                    LayoutChild::from(self.add_button),
+                ],
+                spacing: TAB_SPACING,
+                allow_wrap: false,
+            };
+            ctx.draw_node(
+                &layout,
+                DrawConstraints {
+                    pos: right_origin
+                        + Vector {
+                            x: TAB_SPACING,
+                            y: TAB_SPACING,
+                        },
+                    x: Some(AxisConstraint::AtMost(
+                        (right_w - 2.0 * TAB_SPACING).max(0.0),
+                    )),
+                    y: Some(AxisConstraint::AtMost((TAB_BAR_H - TAB_SPACING).max(0.0))),
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip: false,
+                },
+            );
+            if ctx
+                .node
+                .workspace
+                .send_request(self.add_button.erase(), WasClicked)
+                .unwrap_or(false)
+            {
+                ctx.submit_action_for_self::<Self, _>(AddCanvas, "Add canvas");
+            }
+
+            if let Some(active) = self.active {
+                ctx.draw_workspace_node(active, content_constraints);
+            }
         }
 
         // Draw sidebar splitter ----------------------------------------
@@ -252,9 +288,11 @@ impl Node for Desktops {
     }
 
     fn deref_target(&self) -> Option<NodeUid> {
-        // Actions/requests we do not handle (e.g. sidebar inserts) fall through
-        // to the active canvas. This is the "send to the active canvas" API.
-        self.active.map(|canvas| canvas.erase())
+        // Unhandled actions/requests fall through to the open override or the active canvas.
+        self.override_stack
+            .last()
+            .copied()
+            .or_else(|| self.active.map(|canvas| canvas.erase()))
     }
 }
 
@@ -280,6 +318,14 @@ defhandlers! { Desktops {
         },
         SetSidebarWidth { width: f32 } => (this, s) {
             this.sidebar_width = s.width;
+        },
+        // Open `node` fullscreen in place of the tabs/canvas.
+        PushOverride { node: NodeUid } => (this, s) {
+            this.override_stack.push(s.node);
+        },
+        // Return to the surface beneath the current override.
+        PopOverride => (this, _a) {
+            this.override_stack.pop();
         },
     ],
     requests: [

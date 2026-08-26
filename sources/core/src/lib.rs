@@ -35,7 +35,9 @@ pub use prelude::*;
 use utils::Reset;
 
 #[typetag::serde]
-pub trait Node: RequestableDyn + ActionHandler + Reset + 'static + DynClone + Send + Sync {
+pub trait Node:
+    RequestableDyn + ActionHandler + Reset + 'static + DynClone + Send + Sync + utils::AsAny
+{
     fn type_name(&self) -> String;
 
     /// Given some context, draw the node on screen
@@ -46,6 +48,9 @@ pub trait Node: RequestableDyn + ActionHandler + Reset + 'static + DynClone + Se
     fn deref_target(&self) -> Option<NodeUid> {
         None
     }
+
+    /// A tick run for every node regardless of whether it is drawn. Allows nodes to compute and sync offscreen.
+    fn tick(&self, _ctx: NodeContext) {}
 
     fn on_delete(&self, _ctx: NodeContext) {}
 }

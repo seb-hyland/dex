@@ -146,8 +146,9 @@ defhandlers! { Canvas {
         },
     ],
     requests: [
-        // Find the top-most canvas node whose on-screen region contains `pos`.
-        CanvasNodeAt { pos: ScreenPos } => (this, s, ctx): Option<NodeUid<CanvasNode>> {
+        // The top-most connectable node whose on-screen region contains `pos`.
+        // Any surface can answer with its own connectable nodes.
+        ConnectableAt { pos: ScreenPos } => (this, s, ctx): Option<NodeUid> {
             this.children.iter().rev().copied().find(|&child| {
                 ctx.workspace
                     .send_request(child, CanvasNodeConstraints)
@@ -155,11 +156,12 @@ defhandlers! { Canvas {
                         Rect::from(this.map_to_screen(tuple)).contains(Pos2::from(s.pos))
                     })
             })
+            .map(|child| child.erase())
         },
-        // Map a canvas node's current layout into its on-screen region.
-        CanvasNodeScreenRect { node: NodeUid<CanvasNode> } => (this, s, ctx): Option<ScreenRegion> {
+        // Map a connectable node's current layout into its on-screen region.
+        NodeScreenRect { node: NodeUid } => (this, s, ctx): Option<ScreenRegion> {
             ctx.workspace
-                .send_request(s.node, CanvasNodeConstraints)
+                .send_request(s.node.cast::<CanvasNode>(), CanvasNodeConstraints)
                 .map(|tuple| this.map_to_screen(tuple))
         },
     ],

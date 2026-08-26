@@ -3,7 +3,9 @@ use dex_core::prelude::*;
 use egui::{Color32, Id, LayerId, Order, Stroke};
 use utils::Transient;
 
-use crate::scripting::{ScriptLang, ScriptOutput, is_valid_ident, run_script};
+use crate::scripting::{
+    ScriptLang, ScriptOutput, ScriptValue, ValueDelegate, is_valid_ident, resolve_arg, run_script,
+};
 
 use crate::{
     composites::{
@@ -13,19 +15,23 @@ use crate::{
     layouts::{
         Bordered, HorizontalLayout, LayoutChild, VerticalLayout,
         canvas::{
-            layout::{CanvasNodeAt, CanvasNodeScreenRect},
-            nodes::{CanvasNode, shapes::SectionDivider},
+            layout::{Canvas, ConnectableAt, NodeScreenRect},
+            nodes::shapes::SectionDivider,
         },
         error::ErrorLayout,
-        pending::{IsPending, PendingLayout},
+        pending::PendingLayout,
     },
     primitives::{
         interaction::{DragPointerPos, InteractionBox, WasClicked, WasDragReleased},
         nothing::Nothing,
         shapes::{Circle, Line},
-        text::{CodeEditor, GetText, Label, LabelEditable, ValueVersion},
+        text::{CodeEditor, GetText, Label, LabelEditable},
     },
 };
+
+// ================================================================================
+// LAMBDA EDITOR
+// ================================================================================
 
 #[utils::dynamic_type]
 #[utils::portable]
@@ -132,7 +138,7 @@ pub enum LambdaLang {
 #[utils::dynamic_type]
 #[utils::portable]
 pub struct ConnectionPort {
-    connected: Option<NodeUid<CanvasNode>>,
+    connected: Option<NodeUid>,
     drag_sensor: NodeUid<InteractionBox>,
     drag_pos: Transient<ScreenPos>,
 }
@@ -219,10 +225,7 @@ impl Node for ConnectionPort {
             && let Some(rect) = ctx
                 .node
                 .workspace
-                .send_request(
-                    ctx.node.workspace.root(),
-                    CanvasNodeScreenRect { node: target },
-                )
+                .send_request(ctx.node.workspace.root(), NodeScreenRect { node: target })
                 .flatten()
         {
             let target_anchor = ScreenPos {
@@ -245,7 +248,7 @@ impl Node for ConnectionPort {
             let target = ctx
                 .node
                 .workspace
-                .send_request(ctx.node.workspace.root(), CanvasNodeAt { pos })
+                .send_request(ctx.node.workspace.root(), ConnectableAt { pos })
                 .flatten();
             ctx.submit_action_for_self::<Self, _>(
                 SetConnection { target },
@@ -264,13 +267,13 @@ impl Node for ConnectionPort {
 
 defhandlers! { ConnectionPort {
     actions: [
-        SetConnection { target: Option<NodeUid<CanvasNode>> } => (this, s) {
+        SetConnection { target: Option<NodeUid> } => (this, s) {
             this.connected = s.target;
         },
     ],
     requests: [
-        // The canvas node this port is wired to, if any.
-        ConnectedTarget => (this, _q): Option<NodeUid<CanvasNode>> { this.connected },
+        // The node this port is wired to, if any.
+        ConnectedTarget => (this, _q): Option<NodeUid> { this.connected },
     ],
 }}
 
@@ -337,8 +340,8 @@ impl Node for LambdaArg {
 
 defhandlers! { LambdaArg {
     requests: [
-        // This argument's parameter name and the canvas node it is wired to.
-        ArgBinding => (this, _q, ctx): (String, Option<NodeUid<CanvasNode>>) {
+        // This argument's parameter name and the node it is wired to.
+        ArgBinding => (this, _q, ctx): (String, Option<NodeUid>) {
             let name = ctx.workspace.send_request(this.param_name, GetText).unwrap_or_default();
             let target = ctx.workspace.send_request(this.port, ConnectedTarget).flatten();
             (name, target)
@@ -470,8 +473,8 @@ defhandlers! { LambdaArgs {
         },
     ],
     requests: [
-        // Each argument's parameter name and wired canvas node, in order.
-        ArgBindings => (this, _q, ctx): Vec<(String, Option<NodeUid<CanvasNode>>)> {
+        // Each argument's parameter name and wired node, in order.
+        ArgBindings => (this, _q, ctx): Vec<(String, Option<NodeUid>)> {
             this.args
                 .iter()
                 .map(|arg| ctx.workspace.send_request(*arg, ArgBinding).unwrap_or_default())
@@ -516,28 +519,27 @@ impl Lambda {
     }
 
     /// Recompute [`Lambda::output`]: flip it to a pending view, then run the active script + commit on a worker thread.
-    fn run_update(&self, ctx: &DrawContext) {
-        let workspace = ctx.node.workspace;
+    fn run_update(&self, ctx: NodeContext) {
+        let workspace = ctx.workspace;
 
         // Cancel any in-flight computation first.
-        workspace.cancel_all_tasks_for(ctx.node.id);
+        workspace.cancel_all_tasks_for(ctx.id);
 
         let Some((source, lang)) = workspace.send_request(self.editor, ActiveScript) else {
             return;
         };
 
-        // Resolve each argument to a `name = value` pair.
+        // Resolve each argument to a typed `name = value` pair.
         let bindings = workspace
             .send_request(self.args, ArgBindings)
             .unwrap_or_default();
-        let mut args: Vec<(String, String)> = Vec::new();
+        let mut args: Vec<(String, ScriptValue)> = Vec::new();
         for (name, target) in bindings {
             if !is_valid_ident(&name) {
                 continue;
             }
-            if let Some(target) = target
-                && let Some(value) = workspace.send_request(target.erase(), GetText)
-            {
+            if let Some(target) = target {
+                let value = resolve_arg(workspace, target).value;
                 args.push((name, value));
             }
         }
@@ -562,7 +564,7 @@ impl Lambda {
         );
 
         let output = self.output;
-        let task = ComputeTask::new(ctx.node.id, move || {
+        let task = ComputeTask::new(ctx.id, move || {
             let (handle, actions) = WorkspaceActionHandle::buffered();
             match run_script(lang, &source, &handle, &args) {
                 Ok(ScriptOutput::Nothing) => handle.insert_node_at_dyn(output, Arc::new(Nothing)),
@@ -579,8 +581,8 @@ impl Lambda {
     }
 
     /// Poll wired nodes; returns `true` if any dependency's version has changed since last check.
-    fn poll_dependencies(&self, ctx: &DrawContext) -> bool {
-        let workspace = ctx.node.workspace;
+    fn poll_dependencies(&self, ctx: NodeContext) -> bool {
+        let workspace = ctx.workspace;
         let bindings = workspace
             .send_request(self.args, ArgBindings)
             .unwrap_or_default();
@@ -590,19 +592,18 @@ impl Lambda {
             .seen_deps
             .val_mut_or_else(std::collections::HashMap::new);
         for (_name, target) in bindings {
-            let Some(target) = target else { continue };
-            let uid = target.erase();
+            let Some(uid) = target else { continue };
+            let resolved = resolve_arg(workspace, uid);
             // Don't sample a source that is recomputing; wait for it to settle.
-            if workspace.send_request(uid, IsPending).unwrap_or(false) {
+            if resolved.pending {
                 continue;
             }
-            let version = workspace.send_request(uid, ValueVersion).unwrap_or(0);
             if let Some(&prev) = seen.get(&uid)
-                && prev != version
+                && prev != resolved.version
             {
                 changed = true;
             }
-            seen.insert(uid, version);
+            seen.insert(uid, resolved.version);
         }
         changed
     }
@@ -665,19 +666,26 @@ impl Node for Lambda {
             },
         );
 
-        // Recompute when the update button is clicked, or when a dependency has changed.
-        let clicked = ctx
+        // Recompute when the update button is clicked (dependency-driven reruns
+        // happen in `tick`, so they fire even when this lambda isn't drawn).
+        if ctx
             .node
             .workspace
             .send_request(self.update_button.erase(), WasClicked)
-            .unwrap_or(false);
-        let deps_changed = self.poll_dependencies(&ctx);
-        if clicked || deps_changed {
-            self.run_update(&ctx);
+            .unwrap_or(false)
+        {
+            self.run_update(ctx.node);
         }
 
         DrawResult::Complete {
             region: Some(ScreenRegion::from_min_size(origin, node_size)),
+        }
+    }
+
+    fn tick(&self, ctx: NodeContext) {
+        // Re-fire when a wired dependency's value changed.
+        if self.poll_dependencies(ctx) {
+            self.run_update(ctx);
         }
     }
 
@@ -692,15 +700,441 @@ impl Node for Lambda {
 
 defhandlers! { Lambda {
     extern_requests: [
-        // Value probe: a lambda's value is its resolved output's value.
-        GetText => (this, _q, ctx): String {
-            ctx.workspace.send_request(this.output, GetText).unwrap_or_default()
+        // A lambda represents its output for value resolution.
+        ValueDelegate => (this, _q): Option<NodeUid> { Some(this.output) },
+    ],
+}}
+
+// ================================================================================
+// LAMBDA CANVAS
+// ================================================================================
+
+/// One input parameter of a [`ComputeCanvas`].
+#[utils::dynamic_type]
+#[utils::portable]
+pub struct ComputeParam {
+    pub name: String,
+    pub value: String,
+}
+
+#[utils::dynamic_methods]
+impl ComputeParam {
+    pub fn build(ws: WorkspaceActionHandle, name: String) -> NodeUid<ComputeParam> {
+        ws.insert_node(Self {
+            name,
+            value: String::new(),
+        })
+    }
+}
+
+#[utils::dynamic_node]
+impl Node for ComputeParam {
+    fn type_name(&self) -> String {
+        "Compute Parameter".into()
+    }
+
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
+        let text = if self.value.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{}: {}", self.name, self.value)
+        };
+        let pill = Bordered {
+            child: LayoutChild::Node(Arc::new(Label::new(text))),
+            padding: 5.0,
+            corner_radius: 4.0,
+            fill_color: Color::gray(238),
+            border_width: 1.0,
+            border_color: Color::gray(160),
+        };
+        let constraints = ctx.constraints;
+        ctx.draw_node(&pill, constraints)
+    }
+}
+
+// A value leaf: `scripting::node_to_value` reads its `value`.
+defhandlers! { ComputeParam {
+    actions: [
+        // Push a fresh name + value.
+        SetParam { name: String, value: String } => (this, s) {
+            this.name = s.name;
+            this.value = s.value;
         },
-        // Change probe: a lambda's version is its output node's version.
-        ValueVersion => (this, _q, ctx): u64 { ctx.workspace.node_version(this.output) },
-        // A lambda is pending while its output is mid-recompute.
-        IsPending => (this, _q, ctx): bool {
-            ctx.workspace.send_request(this.output, IsPending).unwrap_or(false)
+    ],
+    requests: [
+        ParamEntry => (this, _q): (String, String) { (this.name.clone(), this.value.clone()) },
+    ],
+}}
+
+#[utils::dynamic_type]
+#[utils::portable]
+pub struct ComputeCanvas {
+    canvas: NodeUid<Canvas>,
+    #[dynamic(skip)]
+    params: Vec<NodeUid<ComputeParam>>,
+    output_port: NodeUid<ConnectionPort>,
+    /// Screen rects of the param pins this frame, for connection hit-testing.
+    #[dynamic(skip)]
+    param_rects: Transient<Vec<(NodeUid, ScreenRegion)>>,
+}
+
+#[utils::dynamic_methods]
+impl ComputeCanvas {
+    pub fn build(ws: WorkspaceActionHandle) -> NodeUid<ComputeCanvas> {
+        let canvas = Canvas::build(ws.clone());
+        let output_port = ConnectionPort::build(ws.clone());
+        ws.insert_node(Self {
+            canvas,
+            params: Vec::new(),
+            output_port,
+            param_rects: Transient::default(),
+        })
+    }
+}
+
+const CC_PARAM_H: f32 = 40.0;
+const CC_OUT_H: f32 = 34.0;
+const CC_GAP: f32 = 8.0;
+
+#[utils::dynamic_node]
+impl Node for ComputeCanvas {
+    fn type_name(&self) -> String {
+        "Compute Canvas".into()
+    }
+
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
+        let avail_w = ctx.constraints.x.map(|a| a.provided_value()).unwrap_or(0.0);
+        let avail_h = ctx.constraints.y.map(|a| a.provided_value()).unwrap_or(0.0);
+        let origin = ctx.constraints.pos;
+
+        // Parameter row along the top; record each pin's rect for hit-testing.
+        let mut rects: Vec<(NodeUid, ScreenRegion)> = Vec::new();
+        let mut x = origin.x + CC_GAP;
+        for &param in &self.params {
+            let res = ctx.draw_workspace_node(
+                param,
+                DrawConstraints {
+                    pos: ScreenPos {
+                        x,
+                        y: origin.y + CC_GAP,
+                    },
+                    x: Some(AxisConstraint::AtMost((avail_w - CC_GAP).max(0.0))),
+                    y: Some(AxisConstraint::AtMost(CC_PARAM_H - CC_GAP)),
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip: false,
+                },
+            );
+            if let Some(region) = res.and_then(|r| r.region()) {
+                rects.push((param.erase(), region));
+                x += region.size().x + CC_GAP;
+            }
+        }
+        self.param_rects.set(rects);
+
+        // Inner canvas fills the middle.
+        let canvas_y = origin.y + CC_PARAM_H;
+        let canvas_h = (avail_h - CC_PARAM_H - CC_OUT_H).max(0.0);
+        ctx.draw_workspace_node(
+            self.canvas,
+            DrawConstraints {
+                pos: ScreenPos {
+                    x: origin.x,
+                    y: canvas_y,
+                },
+                x: Some(AxisConstraint::Exactly(avail_w)),
+                y: Some(AxisConstraint::Exactly(canvas_h)),
+                wrap: WrapConstraints::NotAllowed,
+                should_clip: true,
+            },
+        );
+
+        // Output pin along the bottom: a label plus the outgoing port.
+        let out_y = origin.y + avail_h - CC_OUT_H + CC_GAP;
+        let label = Label::new("output →".to_owned());
+        ctx.draw_node(
+            &label,
+            DrawConstraints {
+                pos: ScreenPos {
+                    x: origin.x + CC_GAP,
+                    y: out_y,
+                },
+                x: Some(AxisConstraint::AtMost(120.0)),
+                y: None,
+                wrap: WrapConstraints::NotAllowed,
+                should_clip: false,
+            },
+        );
+        ctx.draw_workspace_node(
+            self.output_port,
+            DrawConstraints {
+                pos: ScreenPos {
+                    x: origin.x + CC_GAP + 90.0,
+                    y: out_y,
+                },
+                x: Some(AxisConstraint::Exactly(8.0)),
+                y: Some(AxisConstraint::Exactly(8.0)),
+                wrap: WrapConstraints::NotAllowed,
+                should_clip: false,
+            },
+        );
+
+        DrawResult::Complete {
+            region: Some(ScreenRegion::from_min_size(
+                origin,
+                Vector {
+                    x: avail_w,
+                    y: avail_h,
+                },
+            )),
+        }
+    }
+
+    fn deref_target(&self) -> Option<NodeUid> {
+        // Unhandled messages fall through to the inner canvas.
+        Some(self.canvas.erase())
+    }
+
+    fn on_delete(&self, ctx: NodeContext) {
+        ctx.workspace.delete_node(self.canvas.erase());
+        ctx.workspace.delete_node(self.output_port.erase());
+        for p in &self.params {
+            ctx.workspace.delete_node(p.erase());
+        }
+    }
+}
+
+defhandlers! { ComputeCanvas {
+    actions: [
+        // Reconcile the param pins to `entries` (name, value), preserving pin ids by index so existing connections survive.
+        SyncParams { entries: Vec<(String, String)> } => (this, s, ctx) {
+            while this.params.len() < s.entries.len() {
+                let p = ComputeParam::build(ctx.workspace.action_handle(), String::new());
+                this.params.push(p);
+            }
+            while this.params.len() > s.entries.len() {
+                if let Some(p) = this.params.pop() {
+                    ctx.workspace.delete_node(p.erase());
+                }
+            }
+            for (p, (name, value)) in this.params.iter().zip(&s.entries) {
+                // Only write (and thus bump the version) a param that changed to prevent unnecessary re-firing.
+                let cur = ctx.workspace.send_request(*p, ParamEntry).unwrap_or_default();
+                if &cur.0 != name || &cur.1 != value {
+                    ctx.workspace.submit_action(
+                        *p,
+                        "Sync compute param",
+                        SetParam { name: name.clone(), value: value.clone() },
+                    );
+                }
+            }
+        },
+    ],
+    requests: [
+        // The current (name, value) of each param pin, in order.
+        ParamEntries => (this, _q, ctx): Vec<(String, String)> {
+            this.params
+                .iter()
+                .map(|p| ctx.workspace.send_request(*p, ParamEntry).unwrap_or_default())
+                .collect()
+        },
+        // The inner node the output pin is wired to.
+        OutputConnected => (this, _q, ctx): Option<NodeUid> {
+            ctx.workspace.send_request(this.output_port, ConnectedTarget).flatten()
+        },
+    ],
+    extern_requests: [
+        // Connection hit-test: a param pin under `pos`, else defer to the canvas.
+        ConnectableAt => (this, s, ctx): Option<NodeUid> {
+            let pin = this.param_rects.val().as_ref().and_then(|rects| {
+                rects
+                    .iter()
+                    .find(|(_, rect)| egui::Rect::from(*rect).contains(egui::Pos2::from(s.pos)))
+                    .map(|(uid, _)| *uid)
+            });
+            pin.or_else(|| {
+                ctx.workspace.send_request(this.canvas, ConnectableAt { pos: s.pos }).flatten()
+            })
+        },
+        // Wire anchor: a param pin's rect, else defer to the canvas.
+        NodeScreenRect => (this, s, ctx): Option<ScreenRegion> {
+            let pin = this.param_rects.val().as_ref().and_then(|rects| {
+                rects.iter().find(|(uid, _)| *uid == s.node).map(|(_, rect)| *rect)
+            });
+            pin.or_else(|| {
+                ctx.workspace.send_request(this.canvas, NodeScreenRect { node: s.node }).flatten()
+            })
+        },
+    ],
+}}
+
+/// A lambda whose body is a [`ComputeCanvas`].
+#[utils::dynamic_type]
+#[utils::portable]
+pub struct CanvasLambda {
+    name: NodeUid<LabelEditable>,
+    args: NodeUid<LambdaArgs>,
+    open_button: NodeUid<Button>,
+    compute_canvas: NodeUid<ComputeCanvas>,
+}
+
+#[utils::dynamic_methods]
+impl CanvasLambda {
+    pub fn new(ws: WorkspaceActionHandle) -> CanvasLambda {
+        let name = ws.insert_node(LabelEditable::new("Canvas Lambda".to_owned()));
+        let args = LambdaArgs::build(ws.clone());
+        let open_button = Button::build(ws.clone(), Label::new("Open".to_owned()));
+        let compute_canvas = ComputeCanvas::build(ws.clone());
+        Self {
+            name,
+            args,
+            open_button,
+            compute_canvas,
+        }
+    }
+
+    /// The node the canvas's output pin is wired to, if any.
+    fn output_node(&self, ctx: NodeContext) -> Option<NodeUid> {
+        ctx.workspace
+            .send_request(self.compute_canvas, OutputConnected)
+            .flatten()
+    }
+}
+
+#[utils::dynamic_node]
+impl Node for CanvasLambda {
+    fn type_name(&self) -> String {
+        "Canvas Lambda".into()
+    }
+
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
+        const V_SECTIONS_GAP: f32 = 6.0;
+        const OUTER_PADDING: f32 = 8.0;
+        const FALLBACK_SIZE: Vector = Vector { x: 260.0, y: 200.0 };
+
+        let constraints = ctx.constraints;
+        let node_size = Vector {
+            x: constraints
+                .x
+                .map(|a| a.provided_value())
+                .unwrap_or(FALLBACK_SIZE.x),
+            y: constraints
+                .y
+                .map(|a| a.provided_value())
+                .unwrap_or(FALLBACK_SIZE.y),
+        };
+        let origin = constraints.pos;
+
+        // Preview the current output value.
+        let out_value = self
+            .output_node(ctx.node)
+            .map(|n| resolve_arg(ctx.node.workspace, n).value)
+            .map(|v| v.display())
+            .unwrap_or_else(|| "(no output)".to_owned());
+
+        let body = VerticalLayout {
+            children: vec![
+                LayoutChild::from(self.name),
+                LayoutChild::from(self.args),
+                LayoutChild::Node(Arc::new(SectionDivider)),
+                LayoutChild::from(self.open_button),
+                LayoutChild::Node(Arc::new(SectionDivider)),
+                LayoutChild::Node(Arc::new(Label::new(out_value))),
+            ],
+            spacing: V_SECTIONS_GAP,
+            fill_last: true,
+        };
+        let bordered = Bordered {
+            child: LayoutChild::Node(Arc::new(body)),
+            padding: OUTER_PADDING,
+            corner_radius: 4.0,
+            fill_color: Color::WHITE,
+            border_width: 1.0,
+            border_color: Color::gray(170),
+        };
+        ctx.draw_node(
+            &bordered,
+            DrawConstraints {
+                pos: origin,
+                x: Some(AxisConstraint::Exactly(node_size.x)),
+                y: Some(AxisConstraint::Exactly(node_size.y)),
+                wrap: WrapConstraints::NotAllowed,
+                should_clip: constraints.should_clip,
+            },
+        );
+
+        // Open the compute canvas fullscreen on the workspace root's override stack.
+        if ctx
+            .node
+            .workspace
+            .send_request(self.open_button.erase(), WasClicked)
+            .unwrap_or(false)
+        {
+            let root = ctx.node.workspace.root();
+            ctx.node.workspace.submit_action(
+                root.cast::<crate::layouts::desktops::Desktops>(),
+                "Open compute canvas",
+                crate::layouts::desktops::PushOverride {
+                    node: self.compute_canvas.erase(),
+                },
+            );
+        }
+
+        DrawResult::Complete {
+            region: Some(ScreenRegion::from_min_size(origin, node_size)),
+        }
+    }
+
+    fn tick(&self, ctx: NodeContext) {
+        // Push resolved arg values into the canvas's param pins.
+        let ws = ctx.workspace;
+        let bindings = ws.send_request(self.args, ArgBindings).unwrap_or_default();
+        let current = ws
+            .send_request(self.compute_canvas, ParamEntries)
+            .unwrap_or_default();
+
+        let desired: Vec<(String, String)> = bindings
+            .iter()
+            .enumerate()
+            .map(|(i, (name, target))| {
+                let keep = || current.get(i).map(|(_, v)| v.clone()).unwrap_or_default();
+                let value = match target {
+                    Some(t) => {
+                        let resolved = resolve_arg(ws, *t);
+                        // Hold the last value while the source is recomputing.
+                        if resolved.pending {
+                            keep()
+                        } else {
+                            resolved.value.display()
+                        }
+                    }
+                    None => keep(),
+                };
+                (name.clone(), value)
+            })
+            .collect();
+
+        if desired != current {
+            ws.submit_action(
+                self.compute_canvas,
+                "Sync params",
+                SyncParams { entries: desired },
+            );
+        }
+    }
+
+    fn on_delete(&self, ctx: NodeContext) {
+        ctx.workspace.delete_node(self.name.erase());
+        ctx.workspace.delete_node(self.args.erase());
+        ctx.workspace.delete_node(self.open_button.erase());
+        ctx.workspace.delete_node(self.compute_canvas.erase());
+    }
+}
+
+defhandlers! { CanvasLambda {
+    extern_requests: [
+        // A canvas lambda represents whatever its output pin is wired to.
+        ValueDelegate => (this, _q, ctx): Option<NodeUid> {
+            ctx.workspace.send_request(this.compute_canvas, OutputConnected).flatten()
         },
     ],
 }}
