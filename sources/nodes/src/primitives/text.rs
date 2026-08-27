@@ -443,7 +443,13 @@ impl Node for LabelEditable {
 
 defhandlers! { LabelEditable {
     actions: [
-        SetText { value: String } => (this, s) { this.value = s.value },
+        // Update the live edit buffer too, so a programmatic `SetText` is
+        // reflected in the interactive display (not just the committed `value`,
+        // which the editing buffer would otherwise shadow).
+        SetText { value: String } => (this, s) {
+            this.buf.set(s.value.clone());
+            this.value = s.value;
+        },
         SetInteractive { on: bool } => (this, s) { this.interactive = s.on },
     ],
     requests: [
@@ -483,7 +489,7 @@ impl CodeEditor {
             rows: 6,
             numlines: true,
             fill: false,
-            theme: "Gruvbox".to_owned(),
+            theme: "Github Light".to_owned(),
             language,
         }
     }

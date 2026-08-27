@@ -5,7 +5,7 @@ use std::{
 };
 
 use dyn_clone::clone_box;
-use egui::{Id, LayerId, Order, Rect, Ui, UiBuilder};
+use egui::{Align, Id, Layout, Order, Rect, Ui, UiBuilder};
 use serde::{Deserialize, Serialize};
 use utils::match_dyn;
 
@@ -189,12 +189,16 @@ impl Workspace {
             should_clip: true,
         };
 
-        ui.scope_builder(
-            UiBuilder::new().layer_id(LayerId::new(
-                Order::Foreground,
-                Id::new("root_node_painter"),
-            )),
-            |ui| {
+        // Using an `Area` allows egui to recognise the pointer as being over this area for scroll behaviour.
+        egui::Area::new(Id::new("root_node_painter"))
+            .order(Order::Foreground)
+            .fixed_pos(draw_area.min)
+            .movable(false)
+            .constrain(false)
+            .show(ui.ctx(), |ui| {
+                ui.set_clip_rect(draw_area);
+                // Claim the whole draw area so the layer's hit-test rect covers it.
+                ui.allocate_rect(draw_area, egui::Sense::hover());
                 let mut ctx = DrawContext {
                     node: NodeContext {
                         id: root_node,
@@ -204,8 +208,7 @@ impl Workspace {
                     ui,
                 };
                 ctx.draw_workspace_node(root_node, constraints);
-            },
-        );
+            });
     }
 
     /// Delete a node from the workspace; its [`Node::on_delete`] handler will run.
@@ -501,6 +504,29 @@ impl<'ctx> DrawContext<'ctx> {
 
     pub fn draw_node(&mut self, node: &dyn Node, constraints: DrawConstraints) -> DrawResult {
         self.draw_node_with(node, NodeUid::nil(), constraints)
+    }
+
+    /// Host raw egui widgets in a `Ui` bounded and clipped to `region`, returning the region they actually occupied.
+    pub fn host_widgets(
+        &mut self,
+        region: ScreenRegion,
+        add: impl FnOnce(&mut Ui),
+    ) -> ScreenRegion {
+        let rect: Rect = region.into();
+        self.ui
+            .scope_builder(
+                UiBuilder::new()
+                    .max_rect(rect)
+                    .layout(Layout::top_down(Align::Min)),
+                |ui| {
+                    // Intersect with the inherited clip, so an unbounded `region` paints only within the real viewport.
+                    let clip = rect.intersect(ui.clip_rect());
+                    ui.set_clip_rect(clip);
+                    add(ui);
+                    ScreenRegion::from(ui.min_rect())
+                },
+            )
+            .inner
     }
 
     pub fn draw_workspace_node<T: ?Sized>(

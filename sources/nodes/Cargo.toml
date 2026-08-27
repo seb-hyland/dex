@@ -4,11 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+arrow.workspace = true
+csv-nose.workspace = true
 dex-core.path = "../core/"
 dex-dynamic.workspace = true
 egui.workspace = true
 egui_code_editor = { path = "../../vendored/egui_code_editor/" }
 egui_extras.workspace = true
+memmap2.workspace = true
 pyo3.workspace = true
 serde.workspace = true
 steel-core.workspace = true
@@ -20,3 +23,4 @@ utils.workspace = true
 
 [dev-dependencies]
 eframe = "0.35.0"
+serde_json.workspace = true

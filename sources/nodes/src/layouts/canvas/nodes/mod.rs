@@ -122,101 +122,58 @@ impl Node for CanvasNode {
         let mut handle_hovered = false;
         if near {
             let (w, h) = (display.size.x, display.size.y);
-            let edge_w = (w - 2.0 * GRAB_RADIUS).max(0.0);
-            let edge_h = (h - 2.0 * GRAB_RADIUS).max(0.0);
+            let r = GRAB_RADIUS;
+            let d = 2.0 * GRAB_RADIUS;
+            let edge_w = (w - d).max(0.0);
+            let edge_h = (h - d).max(0.0);
             // (key, local top-left, sensor size, size multiplier)
             let grips = [
                 (
                     "tl",
-                    Vector { x: 0.0, y: 0.0 },
-                    Vector {
-                        x: GRAB_RADIUS,
-                        y: GRAB_RADIUS,
-                    },
+                    Vector { x: -r, y: -r },
+                    Vector { x: d, y: d },
                     Vector { x: -1.0, y: -1.0 },
                 ),
                 (
                     "tr",
-                    Vector {
-                        x: w - GRAB_RADIUS,
-                        y: 0.0,
-                    },
-                    Vector {
-                        x: GRAB_RADIUS,
-                        y: GRAB_RADIUS,
-                    },
+                    Vector { x: w - r, y: -r },
+                    Vector { x: d, y: d },
                     Vector { x: 1.0, y: -1.0 },
                 ),
                 (
                     "bl",
-                    Vector {
-                        x: 0.0,
-                        y: h - GRAB_RADIUS,
-                    },
-                    Vector {
-                        x: GRAB_RADIUS,
-                        y: GRAB_RADIUS,
-                    },
+                    Vector { x: -r, y: h - r },
+                    Vector { x: d, y: d },
                     Vector { x: -1.0, y: 1.0 },
                 ),
                 (
                     "br",
-                    Vector {
-                        x: w - GRAB_RADIUS,
-                        y: h - GRAB_RADIUS,
-                    },
-                    Vector {
-                        x: GRAB_RADIUS,
-                        y: GRAB_RADIUS,
-                    },
+                    Vector { x: w - r, y: h - r },
+                    Vector { x: d, y: d },
                     Vector { x: 1.0, y: 1.0 },
                 ),
                 (
                     "top",
-                    Vector {
-                        x: GRAB_RADIUS,
-                        y: 0.0,
-                    },
-                    Vector {
-                        x: edge_w,
-                        y: GRAB_RADIUS,
-                    },
+                    Vector { x: r, y: -r },
+                    Vector { x: edge_w, y: d },
                     Vector { x: 0.0, y: -1.0 },
                 ),
                 (
                     "bottom",
-                    Vector {
-                        x: GRAB_RADIUS,
-                        y: h - GRAB_RADIUS,
-                    },
-                    Vector {
-                        x: edge_w,
-                        y: GRAB_RADIUS,
-                    },
+                    Vector { x: r, y: h - r },
+                    Vector { x: edge_w, y: d },
                     Vector { x: 0.0, y: 1.0 },
                 ),
                 (
                     "left",
-                    Vector {
-                        x: 0.0,
-                        y: GRAB_RADIUS,
-                    },
-                    Vector {
-                        x: GRAB_RADIUS,
-                        y: edge_h,
-                    },
+                    Vector { x: -r, y: r },
+                    Vector { x: d, y: edge_h },
                     Vector { x: -1.0, y: 0.0 },
                 ),
                 (
                     "right",
-                    Vector {
-                        x: w - GRAB_RADIUS,
-                        y: GRAB_RADIUS,
-                    },
-                    Vector {
-                        x: GRAB_RADIUS,
-                        y: edge_h,
-                    },
+                    Vector { x: w - r, y: r },
+                    Vector { x: d, y: edge_h },
                     Vector { x: 1.0, y: 0.0 },
                 ),
             ];

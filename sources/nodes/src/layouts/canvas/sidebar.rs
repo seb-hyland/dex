@@ -14,6 +14,7 @@ use crate::{
         desktops::Desktops,
     },
     primitives::{
+        file_browser::FileBrowser,
         interaction::WasClicked,
         text::{Label, LabelEditable},
         typst::TypstEditor,
@@ -31,8 +32,15 @@ pub struct CanvasSidebar {
 impl CanvasSidebar {
     /// Labels for the option buttons, in order. The button at index `i` inserts
     /// the node produced by [`CanvasSidebar::dispatch`] for that index.
-    pub const OPTIONS: [&'static str; 6] =
-        ["Text", "Rect", "Circle", "Typst", "Lambda", "Canvas Lambda"];
+    pub const OPTIONS: [&'static str; 7] = [
+        "Text",
+        "Rect",
+        "Circle",
+        "Typst",
+        "Lambda",
+        "Canvas Lambda",
+        "File",
+    ];
 
     /// Build the sidebar and its option buttons into `ws`.
     pub fn build(ws: WorkspaceActionHandle, desktops: NodeUid<Desktops>) -> NodeUid<CanvasSidebar> {
@@ -66,6 +74,10 @@ impl CanvasSidebar {
             5 => (
                 Arc::new(CanvasLambda::new(ws)),
                 Vector { x: 280.0, y: 220.0 },
+            ),
+            6 => (
+                Arc::new(FileBrowser::new(ws)),
+                Vector { x: 320.0, y: 240.0 },
             ),
             _ => return None,
         };

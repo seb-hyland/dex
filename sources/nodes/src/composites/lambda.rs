@@ -196,15 +196,15 @@ impl Node for ConnectionPort {
             .ctx()
             .layer_painter(LayerId::new(Order::Background, Id::new("lambda_wires")));
 
-        // Poll the drag sensor
+        // Poll the drag sensor.
         ctx.draw_workspace_node(
             self.drag_sensor,
             DrawConstraints {
                 pos: ctx.constraints.pos,
-                x: Some(AxisConstraint::Exactly(outer_radius)),
-                y: Some(AxisConstraint::Exactly(outer_radius)),
+                x: Some(AxisConstraint::Exactly(outer_radius * 2.0)),
+                y: Some(AxisConstraint::Exactly(outer_radius * 2.0)),
                 wrap: WrapConstraints::NotAllowed,
-                should_clip: true,
+                should_clip: false,
             },
         );
         let cur_drag_pos: Option<ScreenPos> = ctx

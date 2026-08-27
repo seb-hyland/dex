@@ -57,33 +57,43 @@ impl Node for ScrollLayout {
 
         ctx.ui
             .scope_builder(egui::UiBuilder::new().max_rect(viewport), |ui| {
-                egui::ScrollArea::new([horizontal, vertical]).show(ui, |inner| {
-                    let content_origin: ScreenPos = inner.cursor().min.into();
-                    let child_constraints = DrawConstraints {
-                        pos: content_origin,
-                        // Unbounded on scrolled axes so the child reports its full extent.
-                        x: if horizontal {
-                            None
-                        } else {
-                            Some(AxisConstraint::Exactly(avail_w))
-                        },
-                        y: if vertical {
-                            None
-                        } else {
-                            Some(AxisConstraint::Exactly(avail_h))
-                        },
-                        wrap: WrapConstraints::NotAllowed,
-                        // The inner ui already clips to the viewport.
-                        should_clip: false,
-                    };
-                    let mut sub = DrawContext::for_ui(node, child_constraints, inner);
-                    let res = self.child.draw(&mut sub, child_constraints);
-                    // Tell egui how big the content is so the scrollbar is correct.
-                    if let Some(region) = res.region() {
-                        let size = region.size();
-                        inner.allocate_space(egui::vec2(size.x, size.y));
-                    }
-                });
+                egui::ScrollArea::new([horizontal, vertical])
+                    // auto-shrink true unless dimension matches `AxisConstraint::Exactly`
+                    .auto_shrink([
+                        !ctx.constraints
+                            .x
+                            .is_some_and(|c| matches!(c, AxisConstraint::Exactly(_))),
+                        !ctx.constraints
+                            .y
+                            .is_some_and(|c| matches!(c, AxisConstraint::Exactly(_))),
+                    ])
+                    .show(ui, |inner| {
+                        let content_origin: ScreenPos = inner.cursor().min.into();
+                        let child_constraints = DrawConstraints {
+                            pos: content_origin,
+                            // Unbounded on scrolled axes so the child reports its full extent.
+                            x: if horizontal {
+                                None
+                            } else {
+                                Some(AxisConstraint::Exactly(avail_w))
+                            },
+                            y: if vertical {
+                                None
+                            } else {
+                                Some(AxisConstraint::Exactly(avail_h))
+                            },
+                            wrap: WrapConstraints::NotAllowed,
+                            // The inner ui already clips to the viewport.
+                            should_clip: false,
+                        };
+                        let mut sub = DrawContext::for_ui(node, child_constraints, inner);
+                        let res = self.child.draw(&mut sub, child_constraints);
+                        // Tell egui how big the content is so the scrollbar is correct.
+                        if let Some(region) = res.region() {
+                            let size = region.size();
+                            inner.allocate_space(egui::vec2(size.x, size.y));
+                        }
+                    });
             });
 
         DrawResult::Complete {

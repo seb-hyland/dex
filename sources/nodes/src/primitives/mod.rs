@@ -1,7 +1,9 @@
 pub mod dynamic;
+pub mod file_browser;
 pub mod image;
 pub mod interaction;
 pub mod nothing;
 pub mod shapes;
+pub mod table;
 pub mod text;
 pub mod typst;

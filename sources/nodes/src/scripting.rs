@@ -3,12 +3,18 @@ use std::ffi::{CString, NulError};
 use dex_core::messages::TypedRequestBody;
 use dex_core::prelude::*;
 
-use crate::composites::lambda::ComputeParam;
-use crate::layouts::error::ErrorLayout;
-use crate::layouts::pending::PendingLayout;
-use crate::primitives::dynamic::DynamicNode;
-use crate::primitives::nothing::Nothing;
-use crate::primitives::text::{Label, LabelEditable};
+use arrow::array::RecordBatch;
+
+use crate::{
+    composites::lambda::ComputeParam,
+    layouts::{error::ErrorLayout, pending::PendingLayout},
+    primitives::{
+        dynamic::DynamicNode,
+        nothing::Nothing,
+        table::Table,
+        text::{Label, LabelEditable},
+    },
+};
 
 /// Initialise the Python interpreter.
 pub fn init_python() {
@@ -39,6 +45,7 @@ pub enum ScriptValue {
     Float(f64),
     Bool(bool),
     Node(NodeUid),
+    Table(RecordBatch),
 }
 
 impl ScriptValue {
@@ -51,9 +58,17 @@ impl ScriptValue {
             ScriptValue::Bool(b) => b.to_string(),
             ScriptValue::Node(_) => "⟨node⟩".to_owned(),
             ScriptValue::Nothing => "⟨nothing⟩".to_owned(),
+            ScriptValue::Table(rb) => {
+                format!("⟨table {}×{}⟩", rb.num_rows(), rb.num_columns())
+            }
         }
     }
 }
+
+#[derive(Clone)]
+struct SteelTable(#[allow(dead_code)] RecordBatch);
+
+impl steel::rvals::Custom for SteelTable {}
 
 /// "My value is really this other node's value."
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -93,15 +108,14 @@ pub fn resolve_arg(ws: &Workspace, start: NodeUid) -> ResolvedArg {
     // any other node to a reference the script can use as a node.
     let value = ws
         .get_node(cur)
-        .and_then(|n| {
-            let value = node_to_value(&*n).unwrap_or_else(|| {
+        .map(|n| {
+            node_to_value(&*n).unwrap_or_else(|| {
                 if n.as_ref().as_any_ref().is::<Nothing>() {
                     ScriptValue::Nothing
                 } else {
                     ScriptValue::Node(cur)
                 }
-            });
-            Some(value)
+            })
         })
         .unwrap_or(ScriptValue::Nothing);
     ResolvedArg {
@@ -123,6 +137,9 @@ pub fn node_to_value(node: &dyn Node) -> Option<ScriptValue> {
     }
     if let Some(p) = any.downcast_ref::<ComputeParam>() {
         return Some(ScriptValue::Str(p.value.clone()));
+    }
+    if let Some(t) = any.downcast_ref::<Table>() {
+        return Some(ScriptValue::Table(t.batch().clone()));
     }
     None
 }
@@ -358,6 +375,11 @@ fn run_python(
                     let handle = Bound::new(py, NodeHandle(*uid)).map_err(map_err)?;
                     globals.set_item(name, handle)
                 }
+                ScriptValue::Table(rb) => {
+                    use arrow::pyarrow::ToPyArrow;
+                    let obj = rb.to_pyarrow(py).map_err(map_err)?;
+                    globals.set_item(name, obj)
+                }
                 ScriptValue::Nothing => globals.set_item(name, ()),
             }
             .map_err(map_err)?;
@@ -397,6 +419,10 @@ fn run_steel(
             ScriptValue::Float(f) => engine.register_external_value(name, *f),
             ScriptValue::Bool(b) => engine.register_external_value(name, *b),
             ScriptValue::Node(uid) => engine.register_external_value(name, NodeHandle(*uid)),
+            // Steel has no record-batch type; pass it as an opaque value scripts can
+            // hold and forward but not deconstruct (record batches are a Python-side
+            // feature).
+            ScriptValue::Table(rb) => engine.register_external_value(name, SteelTable(rb.clone())),
             ScriptValue::Nothing => engine.register_external_value(name, ()),
         }
         .map_err(to_err)?;

@@ -15,6 +15,9 @@ pub struct Button {
     pub corner_radius: f32,
     pub fill_color: Color,
     pub border: Stroke,
+    /// Stretch the button to the full width its parent offers.
+    pub fill_width: bool,
+
     interaction: NodeUid<InteractionBox>,
 }
 
@@ -38,6 +41,7 @@ impl Button {
             corner_radius: 0.0,
             fill_color: Color::TRANSPARENT,
             border: Stroke::new(1.0, Color::GRAY),
+            fill_width: false,
             interaction,
         };
         configure(&mut button);
@@ -79,17 +83,23 @@ impl Node for Button {
             .map(|r| r.size())
             .unwrap_or(Vector { x: 0.0, y: 0.0 });
 
-        let button_size = Vector {
+        let mut button_size = Vector {
             x: label_size.x + 2.0 * padding,
             y: label_size.y + 2.0 * padding,
         };
+
+        if self.fill_width
+            && let Some(w) = avail_w
+        {
+            button_size.x = w;
+        }
 
         let border = Rect {
             size: button_size,
             corner_radius: self.corner_radius,
             fill_color: self.fill_color.into(),
             border: self.border.into(),
-            stroke_kind: egui::StrokeKind::Middle,
+            stroke_kind: egui::StrokeKind::Inside,
         };
         border.paint(ctx.ui.painter(), origin);
 
