@@ -10,6 +10,7 @@ pub struct ScrollLayout {
     pub child: LayoutChild,
     pub horizontal: bool,
     pub vertical: bool,
+    pub id_salt: u64,
 }
 
 #[utils::dynamic_methods]
@@ -19,6 +20,7 @@ impl ScrollLayout {
             child,
             horizontal: false,
             vertical: true,
+            id_salt: 0,
         }
     }
 
@@ -27,6 +29,7 @@ impl ScrollLayout {
             child,
             horizontal: true,
             vertical: false,
+            id_salt: 0,
         }
     }
 
@@ -35,7 +38,15 @@ impl ScrollLayout {
             child,
             horizontal: true,
             vertical: true,
+            id_salt: 0,
         }
+    }
+}
+
+impl ScrollLayout {
+    pub fn with_id_salt(mut self, salt: impl std::hash::Hash + std::fmt::Debug) -> Self {
+        self.id_salt = egui::Id::new(salt).value();
+        self
     }
 }
 
@@ -54,10 +65,16 @@ impl Node for ScrollLayout {
         let node = ctx.node;
         let horizontal = self.horizontal;
         let vertical = self.vertical;
+        let scroll_id = if self.id_salt != 0 {
+            egui::Id::new(self.id_salt)
+        } else {
+            egui::Id::new(node.id)
+        };
 
         ctx.ui
             .scope_builder(egui::UiBuilder::new().max_rect(viewport), |ui| {
                 egui::ScrollArea::new([horizontal, vertical])
+                    .id_salt(scroll_id)
                     // auto-shrink true unless dimension matches `AxisConstraint::Exactly`
                     .auto_shrink([
                         !ctx.constraints

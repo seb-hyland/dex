@@ -262,7 +262,8 @@ impl Node for Table {
             striped: self.striped,
             owner: ctx.node.id,
         };
-        let scroll = ScrollLayout::horizontal(LayoutChild::Node(Arc::new(widget)));
+        let scroll = ScrollLayout::horizontal(LayoutChild::Node(Arc::new(widget)))
+            .with_id_salt(ctx.node.id);
         let bordered = Bordered {
             child: LayoutChild::Node(Arc::new(scroll)),
             padding: 6.0,

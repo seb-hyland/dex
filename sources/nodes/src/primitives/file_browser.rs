@@ -218,7 +218,8 @@ impl Node for FileBrowser {
             spacing: ROW_GAP,
             fill_last: false,
         };
-        let list = ScrollLayout::vertical(LayoutChild::Node(Arc::new(list_column)));
+        let list = ScrollLayout::vertical(LayoutChild::Node(Arc::new(list_column)))
+            .with_id_salt(ctx.node.id);
 
         let body = VerticalLayout {
             children: vec![
