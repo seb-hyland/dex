@@ -1,8 +1,9 @@
 use dex_core::prelude::*;
 
-use egui::{Color32, Id, LayerId, Order, Stroke};
+use egui::{Id, LayerId, Order};
 use utils::Transient;
 
+use crate::layouts::desktops::{Desktops, PythonPrelude};
 use crate::scripting::{
     ScriptLang, ScriptOutput, ScriptValue, ValueDelegate, is_valid_ident, resolve_arg, run_script,
 };
@@ -162,8 +163,8 @@ impl Node for ConnectionPort {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        let wire_color = Color32::from_rgb(70, 130, 180);
-        let port_color = Color32::from_rgb(50, 110, 160);
+        let wire_color = Color::rgb(70, 130, 180);
+        let port_color = Color::rgb(50, 110, 160);
 
         let outer_radius = 4.0;
         let port_center = ctx.constraints.pos
@@ -185,7 +186,7 @@ impl Node for ConnectionPort {
             fill_color: if self.connected.is_some() && self.drag_pos.val().is_none() {
                 port_color
             } else {
-                Color32::WHITE
+                Color::WHITE
             },
         };
         inner_circle.paint(ctx.ui.painter(), port_center);
@@ -563,10 +564,15 @@ impl Lambda {
             }),
         );
 
+        let py_prelude = ctx
+            .workspace
+            .send_request(ctx.workspace.root().cast::<Desktops>(), PythonPrelude)
+            .unwrap_or_default();
+
         let output = self.output;
         let task = ComputeTask::new(ctx.id, move || {
             let (handle, actions) = WorkspaceActionHandle::buffered();
-            match run_script(lang, &source, &handle, &args) {
+            match run_script(lang, &source, &py_prelude, &handle, &args) {
                 Ok(ScriptOutput::Nothing) => handle.insert_node_at_dyn(output, Arc::new(Nothing)),
                 Ok(ScriptOutput::Node(node)) => handle.insert_node_at_dyn(output, node),
                 Ok(ScriptOutput::Handle(uid)) => handle.commit_output(output, uid),

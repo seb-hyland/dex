@@ -1,11 +1,11 @@
 use dex_core::prelude::*;
-use egui::{Color32, LayerId, Stroke, StrokeKind};
+use egui::{Color32, LayerId};
 use utils::Transient;
 
 use crate::{
     composites::button::Button,
     layouts::{
-        canvas::{layout::Canvas, sidebar::CanvasSidebar},
+        canvas::{self, layout::Canvas, sidebar::CanvasSidebar},
         child::LayoutChild,
         horizontal::HorizontalLayout,
         horizontal_dnd::{AddChild, HorizontalDnD},
@@ -330,6 +330,12 @@ defhandlers! { Desktops {
     ],
     requests: [
         ActiveCanvas => (this, _q): Option<NodeUid<Canvas>> { this.active },
+        PythonPrelude => (this, _q, ctx): String {
+            ctx
+                .workspace
+                .send_request(this.sidebar, canvas::sidebar::PythonPrelude {})
+                .expect("Canvas sidebar should exist and understand PythonPrelude request")
+        },
     ],
 }}
 
@@ -420,14 +426,14 @@ impl Node for DesktopTabView {
 
         // Outline; the active tab gets a stronger accent.
         let border = if active {
-            Stroke::new(1.5, Color32::from_rgb(70, 130, 180))
+            Stroke::new(1.5, Color::rgb(70, 130, 180))
         } else {
-            Stroke::new(1.0, Color32::from_gray(210))
+            Stroke::new(1.0, Color::gray(210))
         };
         let outline = Rect {
             size: tab_size,
             corner_radius: 4.0,
-            fill_color: Color32::TRANSPARENT,
+            fill_color: Color::TRANSPARENT,
             border,
             stroke_kind: StrokeKind::Middle,
         };

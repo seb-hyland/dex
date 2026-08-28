@@ -16,7 +16,7 @@ use crate::{
     primitives::{
         file_browser::FileBrowser,
         interaction::WasClicked,
-        text::{Label, LabelEditable},
+        text::{CodeEditor, GetCommittedText, Label, LabelEditable},
         typst::TypstEditor,
     },
 };
@@ -26,6 +26,8 @@ use crate::{
 pub struct CanvasSidebar {
     desktops: NodeUid<Desktops>,
     buttons: Vec<NodeUid<Button>>,
+
+    python_prelude: NodeUid<CodeEditor>,
 }
 
 #[utils::dynamic_methods]
@@ -52,7 +54,12 @@ impl CanvasSidebar {
                 })
             })
             .collect();
-        ws.insert_node(Self { desktops, buttons })
+        let python_prelude = ws.insert_node(CodeEditor::new(String::new(), "python".to_owned()));
+        ws.insert_node(Self {
+            desktops,
+            buttons,
+            python_prelude,
+        })
     }
 
     /// The insert action for the option at `index`.
@@ -132,4 +139,12 @@ impl Node for CanvasSidebar {
     }
 }
 
-defhandlers! { CanvasSidebar {} }
+defhandlers! {
+    CanvasSidebar {
+        requests: [
+            PythonPrelude => (this, _q, ctx): String {
+                ctx.workspace.send_request(this.python_prelude, GetCommittedText {}).unwrap_or_default()
+            },
+        ]
+    }
+}

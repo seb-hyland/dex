@@ -1,3 +1,5 @@
+use std::ffi::CString;
+
 use dex_core::prelude::*;
 use pyo3::prelude::*;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -91,14 +93,23 @@ fn draw_error(ctx: &mut DrawContext, message: &str) -> DrawResult {
 
 // `DynamicNode::from_python` is called by the coercion in `crate::scripting`.
 
-/// `pickle.dumps(obj)` as bytes.
-fn pickle_dumps<'py>(py: Python<'py>, obj: &Bound<'py, PyAny>) -> PyResult<Vec<u8>> {
-    let pickle = py.import("pickle")?;
-    pickle.call_method1("dumps", (obj,))?.extract()
+/// Provide `cloudpickle` as a module
+fn pickler<'py>(py: Python<'py>) -> Bound<'py, PyModule> {
+    PyModule::from_code(
+        py,
+        &CString::new(include_str!("../pydeps/cloudpickle.py")).unwrap(),
+        &CString::new("cloudpickle.py").unwrap(),
+        &CString::new("cloudpickle").unwrap(),
+    )
+    .expect("cloudpickle module should construct!")
 }
 
-/// `pickle.loads(bytes)`.
+/// `dumps(obj)` as bytes, via [`pickler`].
+fn pickle_dumps<'py>(py: Python<'py>, obj: &Bound<'py, PyAny>) -> PyResult<Vec<u8>> {
+    pickler(py).call_method1("dumps", (obj,))?.extract()
+}
+
+/// `loads(bytes)`, via [`pickler`].
 fn pickle_loads<'py>(py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
-    let pickle = py.import("pickle")?;
-    pickle.call_method1("loads", (pyo3::types::PyBytes::new(py, bytes),))
+    pickler(py).call_method1("loads", (pyo3::types::PyBytes::new(py, bytes),))
 }

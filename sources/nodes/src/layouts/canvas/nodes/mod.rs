@@ -1,7 +1,7 @@
 pub mod shapes;
 
 use dex_core::prelude::*;
-use egui::{Color32, Stroke, StrokeKind};
+use egui::{Color32, Stroke};
 use utils::Transient;
 
 use crate::primitives::{
@@ -251,12 +251,14 @@ impl Node for CanvasNode {
                     ghost_fill
                 } else {
                     Color32::TRANSPARENT
-                },
+                }
+                .into(),
                 border: if is_dragging {
                     ghost_stroke
                 } else {
                     outline_stroke
-                },
+                }
+                .into(),
                 stroke_kind: StrokeKind::Middle,
             };
             bounds.paint(ctx.ui.painter(), display_tl);
@@ -308,8 +310,9 @@ impl Node for CanvasNode {
                     Color32::from_gray(224)
                 } else {
                     Color32::from_rgba_unmultiplied(0, 0, 0, 10)
-                },
-                border: Stroke::NONE,
+                }
+                .into(),
+                border: Stroke::NONE.into(),
                 stroke_kind: StrokeKind::Middle,
             };
             plate.paint(ctx.ui.painter(), handle_tl);

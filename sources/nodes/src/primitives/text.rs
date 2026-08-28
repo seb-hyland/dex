@@ -611,6 +611,9 @@ defhandlers! { CodeEditor {
                 None => this.value.clone(),
             }
         },
+        GetCommittedText => (this, _q): String {
+            this.value.clone()
+        }
     ],
 }}
 

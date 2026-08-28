@@ -227,22 +227,42 @@ impl PyDrawContext {
     fn invalidate(&self) {
         self.ctx.set(std::ptr::null_mut());
     }
+
+    /// Fold a freshly drawn region into the running total the node reports.
+    fn merge_region(&self, region: Option<ScreenRegion>) {
+        let merged = match (self.region.get(), region) {
+            (Some(a), Some(b)) => Some(a.union(b)),
+            (a, b) => a.or(b),
+        };
+        self.region.set(merged);
+    }
 }
 
 #[pyo3::pymethods]
 impl PyDrawContext {
-    /// Draw `node` (any value the return mapping accepts) into the context's
-    /// current area, accumulating the region drawn.
+    /// Draw `node` filling the context's current area, accumulating the region drawn.
     fn draw_node(&self, node: pyo3::Bound<'_, pyo3::PyAny>) {
         let arc = to_dyn_node_py(&node);
         self.with_ctx(|ctx| {
             let constraints = ctx.constraints;
             let region = ctx.draw_node(&*arc, constraints).region();
-            let merged = match (self.region.get(), region) {
-                (Some(a), Some(b)) => Some(a.union(b)),
-                (a, b) => a.or(b),
+            self.merge_region(region);
+        });
+    }
+
+    /// Draw `node` into a sub-box at node-local `(x, y)` with size `w x h`, clipped to it.
+    fn draw_node_at(&self, node: pyo3::Bound<'_, pyo3::PyAny>, x: f32, y: f32, w: f32, h: f32) {
+        let arc = to_dyn_node_py(&node);
+        self.with_ctx(|ctx| {
+            let constraints = DrawConstraints {
+                pos: ctx.constraints.pos + Vector { x, y },
+                x: Some(AxisConstraint::Exactly(w)),
+                y: Some(AxisConstraint::Exactly(h)),
+                wrap: WrapConstraints::NotAllowed,
+                should_clip: true,
             };
-            self.region.set(merged);
+            let region = ctx.draw_node(&*arc, constraints).region();
+            self.merge_region(region);
         });
     }
 
@@ -269,9 +289,7 @@ pub enum DynDraw {
     Error(String),
 }
 
-/// Call a Python object's `draw(ctx)` with a scoped handle to `ctx`. If `draw`
-/// returns a value it is mapped and drawn; otherwise whatever it drew through
-/// the handle is reported.
+/// Call a Python object's `draw(ctx)` with a scoped handle to `ctx`.
 pub fn draw_python_node(obj: &pyo3::Py<pyo3::PyAny>, ctx: &mut DrawContext) -> DynDraw {
     use pyo3::prelude::*;
     Python::attach(|py| {
@@ -328,24 +346,23 @@ impl From<NulError> for ScriptError {
     }
 }
 
-/// Run `source` in `lang` with `handle` as context and `args` seeded as globals
-/// (each `name = value`), then call its `transform` and resolve the return value
-/// into a [`ScriptOutput`]. `args` whose names are not valid identifiers are
-/// skipped by the caller.
+/// Run `source` in `lang` with `handle` as context and `args` seeded as globals.
 pub fn run_script(
     lang: ScriptLang,
     source: &str,
+    py_prelude: &str,
     handle: &WorkspaceActionHandle,
     args: &[(String, ScriptValue)],
 ) -> Result<ScriptOutput, ScriptError> {
     match lang {
-        ScriptLang::Python => run_python(source, handle, args),
+        ScriptLang::Python => run_python(source, py_prelude, handle, args),
         ScriptLang::Steel => run_steel(source, handle, args),
     }
 }
 
 fn run_python(
     source: &str,
+    prelude: &str,
     handle: &WorkspaceActionHandle,
     args: &[(String, ScriptValue)],
 ) -> Result<ScriptOutput, ScriptError> {
@@ -362,6 +379,8 @@ fn run_python(
         dex_mod.add("ws", ws).map_err(map_err)?;
 
         let globals = PyDict::new(py);
+        // Present the exec namespace as the `__main__` module.
+        globals.set_item("__name__", "__main__").map_err(map_err)?;
         globals.set_item("dex", &dex_mod).map_err(map_err)?;
 
         // Seed each argument as a global.
@@ -385,7 +404,10 @@ fn run_python(
             .map_err(map_err)?;
         }
 
-        // Run the source (defining `transform` into `globals`), then call it.
+        // Run the prelude into the shared namespace, then the source.
+        let prelude = CString::new(prelude)?;
+        py.run(prelude.as_c_str(), Some(&globals), Some(&globals))
+            .map_err(map_err)?;
         py.run(code.as_c_str(), Some(&globals), Some(&globals))
             .map_err(map_err)?;
         let Some(transform) = globals.get_item("transform").map_err(map_err)? else {

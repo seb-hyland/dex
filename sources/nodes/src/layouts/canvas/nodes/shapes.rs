@@ -1,5 +1,4 @@
 use dex_core::prelude::*;
-use egui::{Color32, Stroke, StrokeKind};
 
 use crate::primitives::shapes::{self, Line};
 
@@ -26,7 +25,7 @@ impl Node for CanvasRect {
             size,
             border: Stroke::NONE,
             corner_radius: 5.0,
-            fill_color: Color32::RED,
+            fill_color: Color::rgb(255, 0, 0),
             stroke_kind: StrokeKind::Middle,
         }
         .paint(ctx.ui.painter(), origin);
@@ -60,7 +59,7 @@ impl Node for CanvasCircle {
         let region = shapes::Circle {
             radius: size.x.min(size.y) / 2.0,
             border: Stroke::NONE,
-            fill_color: Color32::RED,
+            fill_color: Color::rgb(255, 0, 0),
         }
         .paint(ctx.ui.painter(), center);
         DrawResult::Complete {
@@ -83,7 +82,12 @@ impl Node for SectionDivider {
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {
         const DIVIDER_HEIGHT: f32 = 2.0;
-        const DIVIDER_COLOR: Color32 = Color32::DARK_GRAY;
+        const DIVIDER_COLOR: Color = Color {
+            r: 96,
+            g: 96,
+            b: 96,
+            a: 255,
+        };
 
         let Some(width) = ctx.constraints.x.map(|x_ax| x_ax.provided_value()) else {
             return DrawResult::Complete {

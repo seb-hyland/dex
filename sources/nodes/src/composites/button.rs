@@ -97,9 +97,9 @@ impl Node for Button {
         let border = Rect {
             size: button_size,
             corner_radius: self.corner_radius,
-            fill_color: self.fill_color.into(),
-            border: self.border.into(),
-            stroke_kind: egui::StrokeKind::Inside,
+            fill_color: self.fill_color,
+            border: self.border,
+            stroke_kind: StrokeKind::Inside,
         };
         border.paint(ctx.ui.painter(), origin);
 

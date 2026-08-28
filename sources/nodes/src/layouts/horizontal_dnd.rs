@@ -1,5 +1,4 @@
 use dex_core::prelude::*;
-use egui::{Color32, Stroke, StrokeKind};
 use utils::Transient;
 
 use crate::primitives::{
@@ -188,7 +187,7 @@ impl Node for HorizontalDnD {
             Rect {
                 size,
                 corner_radius: 4.0,
-                fill_color: Color32::from_rgba_unmultiplied(70, 130, 180, 28),
+                fill_color: Color::rgba(70, 130, 180, 28),
                 border: Stroke::NONE,
                 stroke_kind: StrokeKind::Middle,
             }
@@ -196,7 +195,7 @@ impl Node for HorizontalDnD {
 
             Line {
                 span: Vector { x: 0.0, y: max_h },
-                stroke: Stroke::new(2.0, Color32::from_gray(120)),
+                stroke: Stroke::new(2.0, Color::gray(120)),
             }
             .paint(
                 ctx.ui.painter(),

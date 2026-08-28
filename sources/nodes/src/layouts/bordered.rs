@@ -91,9 +91,9 @@ impl Node for Bordered {
             Rect {
                 size: box_size,
                 corner_radius: self.corner_radius,
-                fill_color: egui::Color32::TRANSPARENT,
-                border: egui::Stroke::new(self.border_width, self.border_color),
-                stroke_kind: egui::StrokeKind::Inside,
+                fill_color: Color::TRANSPARENT,
+                border: Stroke::new(self.border_width, self.border_color),
+                stroke_kind: StrokeKind::Inside,
             }
             .paint(ctx.ui.painter(), ctx.constraints.pos);
 
