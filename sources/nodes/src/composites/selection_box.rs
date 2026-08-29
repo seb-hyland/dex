@@ -56,7 +56,7 @@ impl Node for SelectionBox {
         draw_row_bg(&mut ctx, origin, width, egui::Color32::WHITE, true);
         let selected_text = self.options.get(self.selected).cloned().unwrap_or_default();
         draw_row_label(&mut ctx, origin, width, &selected_text);
-        ctx.draw_workspace_node(self.header, exact_box(origin, width));
+        ctx.draw_workspace_node(self.header.erase(), exact_box(origin, width));
         if ctx
             .node
             .workspace
@@ -79,7 +79,7 @@ impl Node for SelectionBox {
                     false,
                 );
                 draw_row_label(&mut ctx, row_origin, width, option);
-                ctx.draw_workspace_node(self.option_sensors[i], exact_box(row_origin, width));
+                ctx.draw_workspace_node(self.option_sensors[i].erase(), exact_box(row_origin, width));
                 if ctx
                     .node
                     .workspace

@@ -142,7 +142,7 @@ impl Node for CanvasSidebar {
 defhandlers! {
     CanvasSidebar {
         requests: [
-            PythonPrelude => (this, _q, ctx): String {
+            SidebarPythonPrelude => (this, _q, ctx): String {
                 ctx.workspace.send_request(this.python_prelude, GetCommittedText {}).unwrap_or_default()
             },
         ]

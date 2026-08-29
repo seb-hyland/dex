@@ -542,8 +542,17 @@ impl Node for CodeEditor {
 
         // Determine editor size and region
         const FALLBACK_WIDTH: f32 = 400.0;
+        // Frame padding plus the text edit's own vertical margin.
+        const CHROME_H: f32 = 8.0;
         let block_w = avail_w.unwrap_or(FALLBACK_WIDTH);
-        let block_h = avail_h.unwrap_or(row_h * self.rows.max(1) as f32);
+
+        // The editor is `rows` tall and lets its internal scroll area handle anything longer.
+        let natural_h = row_h * self.rows.max(1) as f32 + CHROME_H;
+        let block_h = match avail_h {
+            Some(h) if self.fill => h,
+            Some(h) => h.min(natural_h),
+            None => natural_h,
+        };
         let size = Vector {
             x: block_w,
             y: block_h,

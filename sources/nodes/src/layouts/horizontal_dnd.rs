@@ -127,7 +127,7 @@ impl Node for HorizontalDnD {
                 && let Some(&sensor) = self.sensors.get(idx)
             {
                 ctx.draw_workspace_node(
-                    sensor,
+                    sensor.erase(),
                     DrawConstraints {
                         pos: child_pos,
                         x: Some(AxisConstraint::Exactly(size.x)),

@@ -97,7 +97,7 @@ impl Node for CanvasNode {
             ScreenRegion::from_min_size(display_tl - handle_offset, HANDLE_SIZE),
         );
         ctx.draw_workspace_node(
-            self.proximity,
+            self.proximity.erase(),
             DrawConstraints {
                 pos: near_bounds.min - Vector::splat(VISIBILITY_MARGIN),
                 x: Some(AxisConstraint::Exactly(
@@ -180,7 +180,7 @@ impl Node for CanvasNode {
             for (i, (_key, local, sensor_size, size_mul)) in grips.into_iter().enumerate() {
                 let grip = self.grips[i];
                 ctx.draw_workspace_node(
-                    grip,
+                    grip.erase(),
                     DrawConstraints {
                         pos: display_tl + local,
                         x: Some(AxisConstraint::Exactly(sensor_size.x)),
@@ -196,7 +196,7 @@ impl Node for CanvasNode {
 
             // Move handle sensor (offset to the left of the node).
             ctx.draw_workspace_node(
-                self.move_sensor,
+                self.move_sensor.erase(),
                 DrawConstraints {
                     pos: display_tl - handle_offset,
                     x: Some(AxisConstraint::Exactly(HANDLE_SIZE.x)),
@@ -359,7 +359,7 @@ impl Node for CanvasNode {
 }
 
 #[derive(Copy)]
-#[utils::dynamic_type]
+#[utils::dynamic_type(new)]
 #[utils::portable]
 pub struct ConstraintsTuple {
     /// Top-left position in canvas space.

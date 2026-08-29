@@ -82,7 +82,7 @@ impl Node for Canvas {
         self.viewport.set(region);
 
         ctx.draw_workspace_node(
-            self.drag_interaction,
+            self.drag_interaction.erase(),
             DrawConstraints {
                 pos: origin,
                 x: Some(AxisConstraint::Exactly(avail_x)),
@@ -104,7 +104,7 @@ impl Node for Canvas {
         let canvas_origin = origin - self.screen_offset();
         for &child in &self.children {
             ctx.draw_workspace_node(
-                child,
+                child.erase(),
                 DrawConstraints {
                     // `CanvasNode` children will draw relative to the origin
                     pos: canvas_origin,

@@ -10,6 +10,7 @@ mod compute;
 mod constraints;
 pub mod messages;
 mod pool;
+pub mod pycontext;
 mod region;
 pub mod scripting;
 mod style;
@@ -22,6 +23,7 @@ pub mod prelude {
         constraints::*,
         messages::*,
         pool::NodeUid,
+        pycontext::{PyDrawContext, PyNodeContext, PyWorkspace},
         region::{ScreenPos, ScreenRegion, Vector},
         scripting::{NodeExtractor, NodeHandle},
         style::{Color, Font, Stroke, StrokeKind},
@@ -57,6 +59,8 @@ pub trait Node:
 
 dyn_clone::clone_trait_object!(Node);
 
+#[utils::dynamic_type]
+#[utils::portable]
 pub enum DrawResult {
     /// Drawing completed.
     /// Here is the region on screen that was occupied.
@@ -70,6 +74,7 @@ pub enum DrawResult {
     },
 }
 
+#[utils::dynamic_methods]
 impl DrawResult {
     pub fn region(&self) -> Option<ScreenRegion> {
         match self {
@@ -98,7 +103,9 @@ pub struct DrawContext<'ctx> {
     pub ui: &'ctx mut Ui,
 }
 
+#[utils::dynamic_scoped(PyDrawContext)]
 impl<'ctx> DrawContext<'ctx> {
+    #[dynamic(skip)] // generic over the message type; scripts use `send_action`
     pub fn submit_action_for_self<N, A>(&self, body: A, description: impl Into<Cow<'static, str>>)
     where
         N: Node + ?Sized,

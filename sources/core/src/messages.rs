@@ -125,6 +125,98 @@ pub trait RequestFor<N: Node + ?Sized>: TypedRequestBody {}
 impl<R: TypedRequestBody> RequestFor<dyn Node> for R {}
 
 // ======================================================================
+// The dynamic message registry
+// ======================================================================
+
+/// A message type that can be named and constructed in Python.
+pub struct DynamicRequest {
+    pub name: &'static str,
+    /// The module that defined it, shown when reporting an unrecognised value.
+    pub path: &'static str,
+    /// Whether this Python value is an instance of this request class.
+    pub matches: fn(&pyo3::Bound<'_, pyo3::PyAny>) -> bool,
+    /// Build the erased body from such an instance.
+    pub build: fn(&pyo3::Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Box<dyn RequestBody>>,
+    /// Convert this request's response type back to a Python value.
+    pub respond: fn(Box<dyn Any>, pyo3::Python<'_>) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>>,
+    /// Hand an incoming Rust request to Python, if it is this type. The other
+    /// direction: what a script-defined node receives in its `request` handler.
+    #[allow(clippy::type_complexity)]
+    pub to_python:
+        fn(&dyn RequestBody, pyo3::Python<'_>) -> Option<pyo3::PyResult<pyo3::Py<pyo3::PyAny>>>,
+    /// Box a script's return value as this request's declared response type.
+    pub response_from_python: fn(&pyo3::Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Box<dyn Any>>,
+}
+
+dex_dynamic::__rt::inventory::collect!(DynamicRequest);
+
+/// The action counterpart of [`DynamicRequest`].
+pub struct DynamicAction {
+    pub name: &'static str,
+    /// The module that defined it, shown when reporting an unrecognised value.
+    pub path: &'static str,
+    /// Whether this Python value is an instance of this action class.
+    pub matches: fn(&pyo3::Bound<'_, pyo3::PyAny>) -> bool,
+    pub build: fn(&pyo3::Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Box<dyn ActionBody>>,
+    /// Hand an incoming Rust action to Python, if it is this type.
+    #[allow(clippy::type_complexity)]
+    pub to_python:
+        fn(&dyn ActionBody, pyo3::Python<'_>) -> Option<pyo3::PyResult<pyo3::Py<pyo3::PyAny>>>,
+}
+
+dex_dynamic::__rt::inventory::collect!(DynamicAction);
+
+/// The registered request matching this Python value. Dispatch is by class identity.
+pub fn request_for(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> Option<&'static DynamicRequest> {
+    dex_dynamic::__rt::inventory::iter::<DynamicRequest>
+        .into_iter()
+        .find(|r| (r.matches)(obj))
+}
+
+/// The registered action matching this Python value. See [`request_for`].
+pub fn action_for(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> Option<&'static DynamicAction> {
+    dex_dynamic::__rt::inventory::iter::<DynamicAction>
+        .into_iter()
+        .find(|a| (a.matches)(obj))
+}
+
+/// Present an incoming Rust request to Python. Returns the registry entry alongside the Python object.
+pub fn request_to_python<'py>(
+    body: &dyn RequestBody,
+    py: pyo3::Python<'py>,
+) -> Option<(
+    &'static DynamicRequest,
+    pyo3::PyResult<pyo3::Py<pyo3::PyAny>>,
+)> {
+    dex_dynamic::__rt::inventory::iter::<DynamicRequest>
+        .into_iter()
+        .find_map(|entry| (entry.to_python)(body, py).map(|obj| (entry, obj)))
+}
+
+/// Present an incoming Rust action to Python. See [`request_to_python`].
+pub fn action_to_python(
+    body: &dyn ActionBody,
+    py: pyo3::Python<'_>,
+) -> Option<pyo3::PyResult<pyo3::Py<pyo3::PyAny>>> {
+    dex_dynamic::__rt::inventory::iter::<DynamicAction>
+        .into_iter()
+        .find_map(|entry| (entry.to_python)(body, py))
+}
+
+/// Every registered message name, for discovery from a script.
+pub fn registered_messages() -> (Vec<&'static str>, Vec<&'static str>) {
+    let requests = dex_dynamic::__rt::inventory::iter::<DynamicRequest>
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    let actions = dex_dynamic::__rt::inventory::iter::<DynamicAction>
+        .into_iter()
+        .map(|a| a.name)
+        .collect();
+    (requests, actions)
+}
+
+// ======================================================================
 // Macros
 // ======================================================================
 
@@ -178,6 +270,32 @@ macro_rules! defhandlers {
             #[typetag::serde]
             impl $crate::messages::ActionBody for $a_name {}
             impl $crate::messages::ActionFor<$node> for $a_name {}
+
+            ::dex_dynamic::__rt::inventory::submit! {
+                $crate::messages::DynamicAction {
+                    name: ::core::stringify!($a_name),
+                    path: ::core::module_path!(),
+                    matches: |__obj| {
+                        use ::pyo3::prelude::*;
+                        __obj.is_instance_of::<$a_name>()
+                    },
+                    build: |__obj| {
+                        use ::pyo3::prelude::*;
+                        ::core::result::Result::Ok(
+                            ::std::boxed::Box::new(__obj.extract::<$a_name>()?),
+                        )
+                    },
+                    to_python: |__body, __py| {
+                        use ::pyo3::prelude::*;
+                        ::utils::AsAny::as_any_ref(__body)
+                            .downcast_ref::<$a_name>()
+                            .map(|__v| {
+                                ::pyo3::Py::new(__py, ::core::clone::Clone::clone(__v))
+                                    .map(|__o| __o.into_any())
+                            })
+                    },
+                }
+            }
         )*)?
         $($(
             impl $crate::messages::ActionFor<$node> for $ea_name {}
@@ -220,6 +338,40 @@ macro_rules! defhandlers {
                 type Response = $rret;
             }
             impl $crate::messages::RequestFor<$node> for $r_name {}
+
+            ::dex_dynamic::__rt::inventory::submit! {
+                $crate::messages::DynamicRequest {
+                    name: ::core::stringify!($r_name),
+                    path: ::core::module_path!(),
+                    matches: |__obj| {
+                        use ::pyo3::prelude::*;
+                        __obj.is_instance_of::<$r_name>()
+                    },
+                    build: |__obj| {
+                        use ::pyo3::prelude::*;
+                        ::core::result::Result::Ok(
+                            ::std::boxed::Box::new(__obj.extract::<$r_name>()?),
+                        )
+                    },
+                    to_python: |__body, __py| {
+                        use ::pyo3::prelude::*;
+                        ::utils::AsAny::as_any_ref(__body)
+                            .downcast_ref::<$r_name>()
+                            .map(|__v| {
+                                ::pyo3::Py::new(__py, ::core::clone::Clone::clone(__v))
+                                    .map(|__o| __o.into_any())
+                            })
+                    },
+                    response_from_python: |__obj| {
+                        let __v = <$rret as $crate::scripting::FromDynamic>::from_dynamic(__obj)?;
+                        ::core::result::Result::Ok(::std::boxed::Box::new(__v) as ::std::boxed::Box<dyn ::std::any::Any>)
+                    },
+                    respond: |__any, __py| {
+                        use $crate::scripting::IntoDynamic;
+                        $crate::messages::downcast_resp::<$rret>(__any).into_dynamic(__py)
+                    },
+                }
+            }
         )*)?
         $($(
             impl $crate::messages::RequestFor<$node> for $er_name {}
@@ -261,11 +413,131 @@ macro_rules! defhandlers {
 
     // Define a message struct, with named fields or as a unit struct.
     (@def_struct $name:ident { $($f:ident : $ty:ty),* $(,)? }) => {
+        #[::pyo3::pyclass(from_py_object, module = "dex")]
         #[derive(Clone, ::serde::Serialize, ::serde::Deserialize)]
         pub struct $name { $(pub $f : $ty),* }
+
+        #[::pyo3::pymethods]
+        impl $name {
+            #[new]
+            fn __dyn_new(
+                $( $f: ::pyo3::Bound<'_, ::pyo3::PyAny> ),*
+            ) -> ::pyo3::PyResult<Self> {
+                ::core::result::Result::Ok($name {
+                    $( $f: <$ty as $crate::scripting::FromDynamic>::from_dynamic(&$f)? ),*
+                })
+            }
+
+            $(
+                #[getter]
+                fn $f(
+                    &self,
+                    py: ::pyo3::Python<'_>,
+                ) -> ::pyo3::PyResult<::pyo3::Py<::pyo3::PyAny>> {
+                    $crate::scripting::IntoDynamic::into_dynamic(
+                        ::core::clone::Clone::clone(&self.$f),
+                        py,
+                    )
+                }
+            )*
+
+            fn __copy__(&self) -> Self {
+                ::core::clone::Clone::clone(self)
+            }
+
+            #[pyo3(signature = (_memo=None))]
+            fn __deepcopy__(
+                &self,
+                _memo: ::core::option::Option<::pyo3::Bound<'_, ::pyo3::PyAny>>,
+            ) -> Self {
+                ::core::clone::Clone::clone(self)
+            }
+
+            fn __reduce__(
+                &self,
+                py: ::pyo3::Python<'_>,
+            ) -> ::pyo3::PyResult<(
+                ::pyo3::Py<::pyo3::PyAny>,
+                (::std::string::String, ::std::vec::Vec<u8>),
+            )> {
+                use ::pyo3::prelude::*;
+                let __rebuild = py.import("dex")?.getattr("_rebuild")?;
+                let __bytes = $crate::scripting::reduce_to_bytes(self)?;
+                ::core::result::Result::Ok((
+                    __rebuild.unbind(),
+                    (::std::string::String::from(::core::stringify!($name)), __bytes),
+                ))
+            }
+        }
+
+        $crate::defhandlers!(@register_class $name);
     };
     (@def_struct $name:ident) => {
+        #[::pyo3::pyclass(from_py_object, module = "dex")]
         #[derive(Clone, ::serde::Serialize, ::serde::Deserialize)]
         pub struct $name;
+
+        #[::pyo3::pymethods]
+        impl $name {
+            #[new]
+            fn __dyn_new() -> Self {
+                $name
+            }
+
+            fn __copy__(&self) -> Self {
+                ::core::clone::Clone::clone(self)
+            }
+
+            #[pyo3(signature = (_memo=None))]
+            fn __deepcopy__(
+                &self,
+                _memo: ::core::option::Option<::pyo3::Bound<'_, ::pyo3::PyAny>>,
+            ) -> Self {
+                ::core::clone::Clone::clone(self)
+            }
+
+            fn __reduce__(
+                &self,
+                py: ::pyo3::Python<'_>,
+            ) -> ::pyo3::PyResult<(
+                ::pyo3::Py<::pyo3::PyAny>,
+                (::std::string::String, ::std::vec::Vec<u8>),
+            )> {
+                use ::pyo3::prelude::*;
+                let __rebuild = py.import("dex")?.getattr("_rebuild")?;
+                let __bytes = $crate::scripting::reduce_to_bytes(self)?;
+                ::core::result::Result::Ok((
+                    __rebuild.unbind(),
+                    (::std::string::String::from(::core::stringify!($name)), __bytes),
+                ))
+            }
+        }
+
+        $crate::defhandlers!(@register_class $name);
+    };
+
+    // Publish a message class into the `dex` module, and teach `dex._rebuild`
+    // how to restore one from its captured bytes.
+    (@register_class $name:ident) => {
+        ::dex_dynamic::__rt::inventory::submit! {
+            $crate::scripting::DynamicRebuild {
+                name: ::core::stringify!($name),
+                from_bytes: |__data, __py| {
+                    use ::pyo3::prelude::*;
+                    let __v: $name = $crate::scripting::reduce_from_bytes(__data)?;
+                    ::core::result::Result::Ok(::pyo3::Py::new(__py, __v)?.into_any())
+                },
+            }
+        }
+
+        ::dex_dynamic::__rt::inventory::submit! {
+            ::dex_dynamic::DynamicBinding {
+                name: ::core::stringify!($name),
+                register_python: |m| {
+                    use ::dex_dynamic::__rt::pyo3::types::PyModuleMethods;
+                    m.add_class::<$name>()
+                },
+            }
+        }
     };
 }

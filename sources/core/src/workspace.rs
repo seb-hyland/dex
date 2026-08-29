@@ -15,6 +15,7 @@ use crate::{
     compute::{ComputeScheduler, ComputeSchedulerHandle, ComputeTask},
     messages::{Action, ActionGroup, Request, downcast_resp},
     pool::{NodeUid, Registry},
+    pycontext::{PyDrawContext, PyWorkspace},
 };
 
 pub struct Workspace {
@@ -33,6 +34,7 @@ pub struct Workspace {
     scheduler: ComputeSchedulerHandle,
 }
 
+#[utils::dynamic_scoped(PyWorkspace)]
 impl Workspace {
     pub fn new_with_root(root: impl Node) -> Self {
         let (registry, root_node) = Registry::new(root);
@@ -71,6 +73,7 @@ impl Workspace {
     }
 
     /// Insert a node into the registry immediately, without going through the action queue.
+    #[dynamic(skip)] // host lifecycle: not for scripts
     pub fn insert_node_now<T: Node>(&mut self, node: T) -> NodeUid<T> {
         let uid = NodeUid::new_workspace();
         self.insert_node_now_at(uid, node);
@@ -78,6 +81,7 @@ impl Workspace {
     }
 
     /// Insert a node under a caller-chosen id (minted with [`NodeUid::new_workspace`]).
+    #[dynamic(skip)] // host lifecycle: not for scripts
     pub fn insert_node_now_at<T: Node>(&mut self, uid: NodeUid<T>, node: T) {
         self.registry.push(PushWorkspaceNode {
             node: Arc::new(node),
@@ -85,6 +89,7 @@ impl Workspace {
         });
     }
 
+    #[dynamic(skip)] // host lifecycle: not for scripts
     pub fn set_root(&mut self, new_root: NodeUid) {
         self.root_node = new_root;
     }
@@ -94,6 +99,7 @@ impl Workspace {
         self.root_node
     }
 
+    #[dynamic(skip)] // generic over the message type
     pub fn submit_action<N, A>(
         &self,
         dest: NodeUid<N>,
@@ -106,6 +112,7 @@ impl Workspace {
         self.actions_handle.submit_action(dest, description, body);
     }
 
+    #[dynamic(skip)] // generic over the message type
     pub fn send_request<N, R>(&self, dest: NodeUid<N>, body: R) -> Option<R::Response>
     where
         N: Node + ?Sized,
@@ -118,7 +125,10 @@ impl Workspace {
         .map(downcast_resp)
     }
 
-    fn send_request_dyn(&self, mut q: Request) -> Option<Box<dyn Any>> {
+    /// Route an erased request to its destination, forwarding it down the
+    /// dereference chain while it goes unanswered.
+    #[dynamic(skip)] // erased plumbing; scripts use the message registry
+    pub fn send_request_dyn(&self, mut q: Request) -> Option<Box<dyn Any>> {
         loop {
             // Get the request target
             let dest = q.dest;
@@ -152,6 +162,7 @@ impl Workspace {
 
     /// Drain the pending action queue now. Used after building the initial node
     /// graph so it is live by the time this returns.
+    #[dynamic(skip)] // host lifecycle: not for scripts
     pub fn process_pending(&mut self) {
         self.process_actions();
     }
@@ -160,6 +171,7 @@ impl Workspace {
         self.actions_handle.insert_node_dyn(node)
     }
 
+    #[dynamic(skip)] // host lifecycle: not for scripts
     pub fn draw_frame(&mut self, ui: &mut Ui, draw_area: Rect) {
         self.tick_all();
         self.draw_root(ui, draw_area);
@@ -227,6 +239,7 @@ impl Workspace {
         self.registry.remove(uid);
     }
 
+    #[dynamic(skip)] // erased plumbing; scripts use the message registry
     pub fn submit_action_dyn(&self, action: Action) {
         self.actions_handle.submit_action_dyn(action);
     }
@@ -296,6 +309,7 @@ impl Workspace {
         }
     }
 
+    #[dynamic(skip)] // a compute task is not constructible from a script
     pub fn submit_task(&self, task: ComputeTask) {
         self.scheduler.submit_task(task);
     }
@@ -315,7 +329,8 @@ impl Workspace {
 }
 
 /// A cheap, `Send` handle over a [`Workspace`]'s action queue.
-#[utils::dynamic_type]
+// Wraps a live channel, so there is nothing meaningful to (de)serialize.
+#[utils::dynamic_type(no_reduce)]
 #[derive(Clone)]
 pub struct WorkspaceActionHandle {
     action_sender: mpsc::Sender<Action>,
@@ -438,6 +453,7 @@ pub(crate) struct CommitOutput {
 #[typetag::serde]
 impl ActionBody for CommitOutput {}
 
+#[utils::dynamic_scoped(PyDrawContext)]
 impl<'ctx> DrawContext<'ctx> {
     pub fn for_ui(node: NodeContext<'ctx>, constraints: DrawConstraints, ui: &'ctx mut Ui) -> Self {
         DrawContext {
@@ -447,8 +463,8 @@ impl<'ctx> DrawContext<'ctx> {
         }
     }
 
-    pub fn get_workspace_node<T: ?Sized>(&self, id: NodeUid<T>) -> Option<Arc<dyn Node>> {
-        self.node.workspace.registry.get(id.erase())
+    pub fn get_workspace_node(&self, id: NodeUid) -> Option<Arc<dyn Node>> {
+        self.node.workspace.registry.get(id)
     }
 
     fn draw_node_with(
@@ -529,13 +545,11 @@ impl<'ctx> DrawContext<'ctx> {
             .inner
     }
 
-    pub fn draw_workspace_node<T: ?Sized>(
+    pub fn draw_workspace_node(
         &mut self,
-        id: NodeUid<T>,
+        id: NodeUid,
         constraints: DrawConstraints,
     ) -> Option<DrawResult> {
-        let id = id.erase();
-
         let node = self.node.workspace.registry.get(id)?;
         Some(self.draw_node_with(&*node, id, constraints))
     }

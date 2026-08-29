@@ -5,14 +5,11 @@ use utils::Transient;
 
 use crate::layouts::desktops::{Desktops, PythonPrelude};
 use crate::scripting::{
-    ScriptLang, ScriptOutput, ScriptValue, ValueDelegate, is_valid_ident, resolve_arg, run_script,
+    ScriptOutput, ScriptValue, ValueDelegate, is_valid_ident, resolve_arg, run_script,
 };
 
 use crate::{
-    composites::{
-        button::Button,
-        selection_box::{Selected, SelectionBox},
-    },
+    composites::button::Button,
     layouts::{
         Bordered, HorizontalLayout, LayoutChild, VerticalLayout,
         canvas::{
@@ -37,9 +34,6 @@ use crate::{
 #[utils::dynamic_type]
 #[utils::portable]
 pub struct LambdaEditor {
-    active: LambdaLang,
-    lang_selector: NodeUid<SelectionBox>,
-    steel: NodeUid<CodeEditor>,
     python: NodeUid<CodeEditor>,
 }
 
@@ -47,18 +41,9 @@ pub struct LambdaEditor {
 impl LambdaEditor {
     /// Build a lambda editor into `ws`.
     pub fn build(ws: WorkspaceActionHandle) -> NodeUid<LambdaEditor> {
-        let lang_selector =
-            SelectionBox::build(ws.clone(), vec!["Python".to_owned(), "Steel".to_owned()]);
-
-        let steel = ws.insert_node(CodeEditor::new(String::new(), "steel".to_owned()));
         let python = ws.insert_node(CodeEditor::new(String::new(), "python".to_owned()));
 
-        ws.insert_node(Self {
-            active: LambdaLang::Python,
-            lang_selector,
-            steel,
-            python,
-        })
+        ws.insert_node(Self { python })
     }
 }
 
@@ -69,71 +54,24 @@ impl Node for LambdaEditor {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        const GAP: f32 = 4.0;
-
-        // Keep `active` in sync with the language selector.
-        let selected = ctx
-            .node
-            .workspace
-            .send_request(self.lang_selector, Selected)
-            .unwrap_or(0);
-        let lang = match selected {
-            0 => LambdaLang::Python,
-            1 => LambdaLang::Steel,
-            _ => unreachable!(),
-        };
-        if lang != self.active {
-            ctx.submit_action_for_self::<Self, _>(SetActive { lang }, "Set lambda language");
-        }
-        let active_editor = match self.active {
-            LambdaLang::Steel => self.steel.erase(),
-            LambdaLang::Python => self.python.erase(),
-        };
-
-        let body = VerticalLayout {
-            children: vec![
-                LayoutChild::from(self.lang_selector),
-                LayoutChild::Id(active_editor),
-            ],
-            spacing: GAP,
-            fill_last: false,
-        };
         let constraints = ctx.constraints;
-        ctx.draw_node(&body, constraints)
+        ctx.draw_workspace_node(self.python.erase(), constraints)
+            .unwrap_or(DrawResult::Complete { region: None })
     }
 
     fn on_delete(&self, ctx: NodeContext) {
-        ctx.workspace.delete_node(self.lang_selector.erase());
-        ctx.workspace.delete_node(self.steel.erase());
         ctx.workspace.delete_node(self.python.erase());
     }
 }
 
 defhandlers! { LambdaEditor {
-    actions: [
-        SetActive { lang: LambdaLang } => (this, s) { this.active = s.lang; },
-    ],
     requests: [
-        // The active editor's source and language.
-        ActiveScript => (this, _q, ctx): (String, ScriptLang) {
-            let selected = ctx.workspace.send_request(this.lang_selector, Selected).unwrap_or(0);
-            let (editor, lang) = if selected == 1 {
-                (this.steel, ScriptLang::Steel)
-            } else {
-                (this.python, ScriptLang::Python)
-            };
-            let source = ctx.workspace.send_request(editor, GetText).unwrap_or_default();
-            (source, lang)
+        // The editor's current source.
+        ActiveScript => (this, _q, ctx): String {
+            ctx.workspace.send_request(this.python, GetText).unwrap_or_default()
         },
     ],
 }}
-
-#[derive(Copy, PartialEq)]
-#[utils::portable(noop_reset)]
-pub enum LambdaLang {
-    Steel,
-    Python,
-}
 
 /// A draggable connection knob for a lambda argument.
 #[utils::dynamic_type]
@@ -199,7 +137,7 @@ impl Node for ConnectionPort {
 
         // Poll the drag sensor.
         ctx.draw_workspace_node(
-            self.drag_sensor,
+            self.drag_sensor.erase(),
             DrawConstraints {
                 pos: ctx.constraints.pos,
                 x: Some(AxisConstraint::Exactly(outer_radius * 2.0)),
@@ -526,7 +464,7 @@ impl Lambda {
         // Cancel any in-flight computation first.
         workspace.cancel_all_tasks_for(ctx.id);
 
-        let Some((source, lang)) = workspace.send_request(self.editor, ActiveScript) else {
+        let Some(source) = workspace.send_request(self.editor, ActiveScript) else {
             return;
         };
 
@@ -572,7 +510,7 @@ impl Lambda {
         let output = self.output;
         let task = ComputeTask::new(ctx.id, move || {
             let (handle, actions) = WorkspaceActionHandle::buffered();
-            match run_script(lang, &source, &py_prelude, &handle, &args) {
+            match run_script(&source, &py_prelude, &handle, &args) {
                 Ok(ScriptOutput::Nothing) => handle.insert_node_at_dyn(output, Arc::new(Nothing)),
                 Ok(ScriptOutput::Node(node)) => handle.insert_node_at_dyn(output, node),
                 Ok(ScriptOutput::Handle(uid)) => handle.commit_output(output, uid),
@@ -818,7 +756,7 @@ impl Node for ComputeCanvas {
         let mut x = origin.x + CC_GAP;
         for &param in &self.params {
             let res = ctx.draw_workspace_node(
-                param,
+                param.erase(),
                 DrawConstraints {
                     pos: ScreenPos {
                         x,
@@ -841,7 +779,7 @@ impl Node for ComputeCanvas {
         let canvas_y = origin.y + CC_PARAM_H;
         let canvas_h = (avail_h - CC_PARAM_H - CC_OUT_H).max(0.0);
         ctx.draw_workspace_node(
-            self.canvas,
+            self.canvas.erase(),
             DrawConstraints {
                 pos: ScreenPos {
                     x: origin.x,
@@ -871,7 +809,7 @@ impl Node for ComputeCanvas {
             },
         );
         ctx.draw_workspace_node(
-            self.output_port,
+            self.output_port.erase(),
             DrawConstraints {
                 pos: ScreenPos {
                     x: origin.x + CC_GAP + 90.0,

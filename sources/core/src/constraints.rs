@@ -2,7 +2,9 @@ use std::ops::{Add, Sub};
 
 use crate::{ScreenPos, Vector};
 
-#[derive(Clone, Copy)]
+#[derive(Copy)]
+#[utils::dynamic_type(new)]
+#[utils::portable]
 pub struct DrawConstraints {
     /// Top-left of the region to draw into.
     pub pos: ScreenPos,
@@ -12,6 +14,7 @@ pub struct DrawConstraints {
     pub should_clip: bool,
 }
 
+#[utils::dynamic_methods]
 impl DrawConstraints {
     pub fn fits(&self, size: Vector) -> bool {
         let x_fits = self.x.is_none_or(|x_ax| x_ax.provided_value() >= size.x);
@@ -30,12 +33,15 @@ impl DrawConstraints {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Copy)]
+#[utils::dynamic_type]
+#[utils::portable]
 pub enum AxisConstraint {
     Exactly(f32),
     AtMost(f32),
 }
 
+#[utils::dynamic_methods]
 impl AxisConstraint {
     pub fn provided_value(&self) -> f32 {
         match self {
@@ -67,7 +73,8 @@ impl Sub<f32> for AxisConstraint {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Copy)]
+#[utils::portable]
 pub enum WrapConstraints {
     CanRequest {
         at_start_of_line: bool,
@@ -76,6 +83,9 @@ pub enum WrapConstraints {
     NotAllowed,
 }
 
+// Not `#[dynamic_methods]`: `WrapConstraints` is not a pyclass (see its
+// hand-written boundary mapping below), so it carries no Python methods. A
+// script inspects the `None | (at_start_of_line, continuation)` form directly.
 impl WrapConstraints {
     pub fn can_retry_on_newline(&self) -> bool {
         match self {
@@ -86,3 +96,39 @@ impl WrapConstraints {
         }
     }
 }
+
+/**
+    A hand-written boundary mapping; `WrapConstraints` cannot be mapped automatically by pyo3.
+*/
+impl<'py> pyo3::IntoPyObject<'py> for WrapConstraints {
+    type Target = pyo3::PyAny;
+    type Output = pyo3::Bound<'py, pyo3::PyAny>;
+    type Error = pyo3::PyErr;
+
+    fn into_pyobject(self, py: pyo3::Python<'py>) -> Result<Self::Output, Self::Error> {
+        let repr = match self {
+            Self::NotAllowed => None,
+            Self::CanRequest {
+                at_start_of_line,
+                continuation,
+            } => Some((at_start_of_line, continuation)),
+        };
+        pyo3::IntoPyObjectExt::into_bound_py_any(repr, py)
+    }
+}
+
+impl<'a, 'py> pyo3::FromPyObject<'a, 'py> for WrapConstraints {
+    type Error = pyo3::PyErr;
+
+    fn extract(ob: pyo3::Borrowed<'a, 'py, pyo3::PyAny>) -> Result<Self, Self::Error> {
+        match ob.extract::<Option<(bool, Option<u64>)>>()? {
+            None => Ok(Self::NotAllowed),
+            Some((at_start_of_line, continuation)) => Ok(Self::CanRequest {
+                at_start_of_line,
+                continuation,
+            }),
+        }
+    }
+}
+
+crate::impl_dynamic_native!(WrapConstraints);

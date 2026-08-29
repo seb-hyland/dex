@@ -138,6 +138,7 @@ pub struct TypstEditor {
     render_cache: Transient<(String, Result<Image, String>)>,
 }
 
+#[utils::dynamic_methods]
 impl TypstEditor {
     pub fn new(ws: WorkspaceActionHandle) -> Self {
         let mut editor_node = CodeEditor::new("Typst editor".to_owned(), "typst".to_owned());
@@ -220,7 +221,7 @@ impl Node for TypstEditor {
             let constraints = ctx.constraints;
             let res = ctx.draw_node(&*preview, constraints);
 
-            ctx.draw_workspace_node(self.click_sensor, constraints);
+            ctx.draw_workspace_node(self.click_sensor.erase(), constraints);
             if ctx
                 .node
                 .workspace
@@ -249,7 +250,7 @@ impl Node for TypstEditor {
             );
             let preview_region = preview_res.region().unwrap_or(ScreenRegion::empty());
 
-            let editor_res = ctx.draw_workspace_node(self.editor, ctx.constraints);
+            let editor_res = ctx.draw_workspace_node(self.editor.erase(), ctx.constraints);
             let editor_region = editor_res
                 .and_then(|res| res.region())
                 .unwrap_or(ScreenRegion::empty());

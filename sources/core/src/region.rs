@@ -73,6 +73,10 @@ impl Sub<Vector> for ScreenPos {
 
 #[utils::dynamic_methods]
 impl ScreenPos {
+    pub fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+
     pub fn zero() -> Self {
         Self { x: 0.0, y: 0.0 }
     }
@@ -228,6 +232,10 @@ impl Div<f32> for Vector {
 
 #[utils::dynamic_methods]
 impl Vector {
+    pub fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+
     pub fn splat(s: f32) -> Self {
         Self { x: s, y: s }
     }

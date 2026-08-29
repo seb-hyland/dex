@@ -104,7 +104,7 @@ impl Node for Button {
         border.paint(ctx.ui.painter(), origin);
 
         ctx.draw_workspace_node(
-            self.interaction,
+            self.interaction.erase(),
             DrawConstraints {
                 pos: origin,
                 x: Some(AxisConstraint::Exactly(button_size.x)),

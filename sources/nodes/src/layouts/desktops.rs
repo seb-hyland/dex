@@ -131,7 +131,7 @@ impl Node for Desktops {
         };
 
         ctx.draw_workspace_node(
-            self.sidebar,
+            self.sidebar.erase(),
             DrawConstraints {
                 pos: origin,
                 x: Some(AxisConstraint::Exactly(sidebar_w)),
@@ -156,7 +156,7 @@ impl Node for Desktops {
         if let Some(&opened) = self.override_stack.last() {
             // An override is open; draw a close button in the tab row and the override filling the content area.
             ctx.draw_workspace_node(
-                self.close_override_button,
+                self.close_override_button.erase(),
                 DrawConstraints {
                     pos: right_origin
                         + Vector {
@@ -216,13 +216,13 @@ impl Node for Desktops {
             }
 
             if let Some(active) = self.active {
-                ctx.draw_workspace_node(active, content_constraints);
+                ctx.draw_workspace_node(active.erase(), content_constraints);
             }
         }
 
         // Draw sidebar splitter ----------------------------------------
         ctx.draw_workspace_node(
-            self.divider,
+            self.divider.erase(),
             DrawConstraints {
                 pos: ScreenPos {
                     x: divider_x,
@@ -333,8 +333,8 @@ defhandlers! { Desktops {
         PythonPrelude => (this, _q, ctx): String {
             ctx
                 .workspace
-                .send_request(this.sidebar, canvas::sidebar::PythonPrelude {})
-                .expect("Canvas sidebar should exist and understand PythonPrelude request")
+                .send_request(this.sidebar, canvas::sidebar::SidebarPythonPrelude {})
+                .expect("Canvas sidebar should exist and understand SidebarPythonPrelude request")
         },
     ],
 }}
@@ -405,7 +405,7 @@ impl Node for DesktopTabView {
 
         // The editable name, inset by the padding.
         let name_res = ctx.draw_workspace_node(
-            self.name,
+            self.name.erase(),
             DrawConstraints {
                 pos: origin + Vector { x: PAD_X, y: PAD_Y },
                 x: Some(AxisConstraint::AtMost((avail_w - 2.0 * PAD_X).max(0.0))),
@@ -442,7 +442,7 @@ impl Node for DesktopTabView {
         // Click/double-click sensor over the whole tab when not editing.
         if !editing {
             ctx.draw_workspace_node(
-                self.sensor,
+                self.sensor.erase(),
                 DrawConstraints {
                     pos: origin,
                     x: Some(AxisConstraint::Exactly(tab_size.x)),

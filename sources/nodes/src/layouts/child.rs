@@ -18,15 +18,6 @@ impl LayoutChild {
         LayoutChild::Node(crate::scripting::to_dyn_node_py(obj))
     }
 
-    /// Build a child from a Steel value.
-    pub fn from_dynamic_steel(val: &dex_dynamic::__rt::steel::rvals::SteelVal) -> Self {
-        use dex_dynamic::__rt::steel::rvals::FromSteelVal;
-        if let Ok(handle) = dex_core::NodeHandle::from_steelval(val) {
-            return LayoutChild::Id(handle.0);
-        }
-        LayoutChild::Node(crate::scripting::to_dyn_node_steel(val))
-    }
-
     /// Draw this child under `constraints`.
     pub(crate) fn draw(&self, ctx: &mut DrawContext, constraints: DrawConstraints) -> DrawResult {
         match self {
@@ -34,6 +25,25 @@ impl LayoutChild {
                 .draw_workspace_node(*uid, constraints)
                 .unwrap_or(DrawResult::Complete { region: None }),
             LayoutChild::Node(node) => ctx.draw_node(&**node, constraints),
+        }
+    }
+}
+
+/// A layout child accepts a node handle (kept live) or any value (coerced).
+impl dex_core::scripting::FromDynamic for LayoutChild {
+    fn from_dynamic(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Self> {
+        Ok(Self::from_dynamic_py(obj))
+    }
+}
+
+impl dex_core::scripting::IntoDynamic for LayoutChild {
+    fn into_dynamic(
+        self,
+        py: pyo3::Python<'_>,
+    ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
+        match self {
+            LayoutChild::Id(uid) => uid.into_dynamic(py),
+            LayoutChild::Node(node) => node.into_dynamic(py),
         }
     }
 }
