@@ -42,6 +42,20 @@ pub enum ScriptValue {
 }
 
 impl ScriptValue {
+    /// The Python type a script sees this value as, for a checkout's header.
+    pub fn python_type(&self) -> &'static str {
+        match self {
+            ScriptValue::Str(_) => "str",
+            ScriptValue::Int(_) => "int",
+            ScriptValue::Float(_) => "float",
+            ScriptValue::Bool(_) => "bool",
+            ScriptValue::Node(_) => "dex.NodeUid",
+            // A pyarrow table; nothing the dex stubs describe.
+            ScriptValue::Table(_) => "typing.Any",
+            ScriptValue::Nothing => "None",
+        }
+    }
+
     /// A plain-text rendering (for previews and string-typed sinks).
     pub fn display(&self) -> String {
         match self {

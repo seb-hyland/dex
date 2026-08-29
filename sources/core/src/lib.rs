@@ -13,6 +13,8 @@ mod pool;
 pub mod pycontext;
 mod region;
 pub mod scripting;
+pub mod stubs;
+pub mod stubs_gen;
 mod style;
 mod theme;
 mod workspace;

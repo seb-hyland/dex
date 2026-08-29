@@ -622,7 +622,7 @@ defhandlers! { CodeEditor {
         },
         GetCommittedText => (this, _q): String {
             this.value.clone()
-        }
+        },
     ],
 }}
 

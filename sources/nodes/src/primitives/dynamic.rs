@@ -259,7 +259,7 @@ fn draw_error(ctx: &mut DrawContext, message: &str) -> DrawResult {
 fn pickler<'py>(py: Python<'py>) -> Bound<'py, PyModule> {
     PyModule::from_code(
         py,
-        &CString::new(include_str!("../pydeps/cloudpickle.py")).unwrap(),
+        &CString::new(include_str!("../../../../vendored/python/cloudpickle.py")).unwrap(),
         &CString::new("cloudpickle.py").unwrap(),
         &CString::new("cloudpickle").unwrap(),
     )

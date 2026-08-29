@@ -336,6 +336,7 @@ pub struct WorkspaceActionHandle {
     action_sender: mpsc::Sender<Action>,
 }
 
+#[utils::dynamic_methods]
 impl WorkspaceActionHandle {
     /**
        A standalone handle that can be used in place of one connected to a [`Workspace`].
@@ -363,6 +364,7 @@ impl WorkspaceActionHandle {
         });
     }
 
+    #[dynamic(skip)] // erased plumbing; scripts use the message registry
     pub fn submit_action_dyn(&self, action: Action) {
         self.action_sender
             .send(action)

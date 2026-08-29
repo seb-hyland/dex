@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use std::borrow::Cow;
 
+use crate::stubs::{StubClass, StubField, StubMethod};
 use crate::{
     DrawConstraints, DrawContext, DrawResult, Node, NodeContext, NodeHandle, NodeUid, Workspace,
     messages::{Action, Request, action_for, registered_messages, request_for},
@@ -57,7 +58,6 @@ impl PyDrawContext {
     pub fn try_with<R>(&self, f: impl FnOnce(&mut DrawContext<'_>) -> R) -> PyResult<R> {
         self.inner.with(f).ok_or_else(expired_handle)
     }
-
 }
 
 #[pymethods]
@@ -65,13 +65,17 @@ impl PyDrawContext {
     /// This node's place in the world, as `DrawContext.node` is in Rust.
     #[getter]
     fn node(&self, py: Python<'_>) -> PyResult<Py<PyNodeContext>> {
-        let (ws, id) = self.try_with(|ctx| (ctx.node.workspace as *const Workspace, ctx.node.id))?;
+        let (ws, id) =
+            self.try_with(|ctx| (ctx.node.workspace as *const Workspace, ctx.node.id))?;
         // SAFETY: the workspace is live for this call, and the handle is
         // invalidated when the owning `PyDrawContext` expires.
-        Py::new(py, PyNodeContext {
-            workspace: unsafe { ScopedRef::new(&*ws) },
-            id,
-        })
+        Py::new(
+            py,
+            PyNodeContext {
+                workspace: unsafe { ScopedRef::new(&*ws) },
+                id,
+            },
+        )
     }
 
     /// The constraints this node is being drawn under.
@@ -187,12 +191,7 @@ impl PyWorkspace {
         let entry = request_for(&request).ok_or_else(|| not_a_message(&request, true))?;
         let body = (entry.build)(&request)?;
 
-        let response = self.try_with(|ws| {
-            ws.send_request_dyn(Request {
-                dest: dest.0,
-                body,
-            })
-        })?;
+        let response = self.try_with(|ws| ws.send_request_dyn(Request { dest: dest.0, body }))?;
 
         match response {
             Some(any) => (entry.respond)(any, py),
@@ -325,5 +324,101 @@ dex_dynamic::__rt::inventory::submit! {
             use pyo3::types::PyModuleMethods;
             m.add_class::<PyNodeContext>()
         },
+    }
+}
+
+// ======================================================================
+// Stub metadata for the hand-written surface
+// ======================================================================
+
+dex_dynamic::__rt::inventory::submit! {
+    StubClass {
+        name: "DrawContext",
+        doc: "A scoped handle to the context a node is being drawn with.",
+        fields: &[
+            StubField { name: "node", ty: "NodeContext" },
+            StubField { name: "constraints", ty: "DrawConstraints" },
+            StubField { name: "live", ty: "bool" },
+        ],
+        constructible: false,
+        variants: &[],
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    StubMethod {
+        owner: "DrawContext",
+        name: "draw_node",
+        doc: "Draw `node` under `constraints`, reporting what it took.",
+        params: &[
+            StubField { name: "node", ty: "LayoutChild" },
+            StubField { name: "constraints", ty: "DrawConstraints" },
+        ],
+        returns: "DrawResult",
+        is_static: false,
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    StubClass {
+        name: "NodeContext",
+        doc: "A node's place in the world: its id and its workspace.",
+        fields: &[
+            StubField { name: "id", ty: "NodeUid" },
+            StubField { name: "workspace", ty: "Workspace" },
+            StubField { name: "live", ty: "bool" },
+        ],
+        constructible: false,
+        variants: &[],
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    StubClass {
+        name: "Workspace",
+        doc: "A scoped handle to the live workspace.",
+        fields: &[StubField { name: "live", ty: "bool" }],
+        constructible: false,
+        variants: &[],
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    StubMethod {
+        owner: "Workspace",
+        name: "send_request",
+        doc: "Send `request` to `dest` and return its response.",
+        params: &[
+            StubField { name: "dest", ty: "NodeUid" },
+            StubField { name: "request", ty: "Any" },
+        ],
+        returns: "Any",
+        is_static: false,
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    StubMethod {
+        owner: "Workspace",
+        name: "submit_action",
+        doc: "Queue `action` against `dest`.",
+        params: &[
+            StubField { name: "dest", ty: "NodeUid" },
+            StubField { name: "action", ty: "Any" },
+            StubField { name: "description", ty: "Option<String>" },
+        ],
+        returns: "",
+        is_static: false,
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    StubMethod {
+        owner: "Workspace",
+        name: "message_names",
+        doc: "The names of every request and action a script may send.",
+        params: &[],
+        returns: "(Vec<String>, Vec<String>)",
+        is_static: true,
     }
 }

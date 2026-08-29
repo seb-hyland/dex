@@ -1,3 +1,4 @@
+pub mod checkout;
 pub mod dynamic;
 pub mod file_browser;
 pub mod image;

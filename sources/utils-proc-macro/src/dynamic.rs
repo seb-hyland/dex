@@ -28,6 +28,25 @@ fn take_dynamic_skip(attrs: &mut Vec<Attribute>) -> bool {
     skip
 }
 
+/// The doc comment on an item, joined into one string for the stub.
+fn doc_of(attrs: &[Attribute]) -> String {
+    let mut lines = Vec::new();
+    for attr in attrs {
+        if !attr.path().is_ident("doc") {
+            continue;
+        }
+        if let syn::Meta::NameValue(nv) = &attr.meta
+            && let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(s),
+                ..
+            }) = &nv.value
+        {
+            lines.push(s.value().trim().to_owned());
+        }
+    }
+    lines.join("\n")
+}
+
 /// The final path-segment ident of a type, e.g. `Vector` for `crate::Vector`.
 fn type_ident(ty: &Type) -> Option<syn::Ident> {
     match ty {
@@ -89,6 +108,7 @@ pub fn dynamic_type_impl(attr: TokenStream, body: TokenStream) -> TokenStream {
     // Annotate exposed (`pub`, non-skip) named fields with `#[pyo3(get, set)]`,
     // collecting them in case a constructor was asked for.
     let mut ctor_fields: Vec<(syn::Ident, Type)> = Vec::new();
+    let mut stub_fields: Vec<TS2> = Vec::new();
     if let Data::Struct(data) = &mut input.data
         && let Fields::Named(named) = &mut data.fields
     {
@@ -100,7 +120,16 @@ pub fn dynamic_type_impl(attr: TokenStream, body: TokenStream) -> TokenStream {
             }
 
             field.attrs.push(syn::parse_quote!(#[pyo3(get, set)]));
-            ctor_fields.push((field.ident.clone().unwrap(), field.ty.clone()));
+            let fname = field.ident.clone().unwrap();
+            let fname_str = fname.to_string();
+            let fty = field.ty.clone();
+            stub_fields.push(quote! {
+                ::dex_core::stubs::StubField {
+                    name: #fname_str,
+                    ty: ::core::stringify!(#fty),
+                }
+            });
+            ctor_fields.push((fname, fty));
         }
     }
 
@@ -170,12 +199,56 @@ pub fn dynamic_type_impl(attr: TokenStream, body: TokenStream) -> TokenStream {
         }
     });
 
+    // Enum variants are part of the surface: `dex.AxisConstraint.Exactly(w)`.
+    let mut stub_variants: Vec<TS2> = Vec::new();
+    if let Data::Enum(data) = &input.data {
+        for variant in &data.variants {
+            let vname = variant.ident.to_string();
+            let mut vfields: Vec<TS2> = Vec::new();
+            for (i, field) in variant.fields.iter().enumerate() {
+                // pyo3 names a tuple variant's fields `_0`, `_1`, ...
+                let fname = field
+                    .ident
+                    .as_ref()
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| format!("_{i}"));
+                let fty = &field.ty;
+                vfields.push(quote! {
+                    ::dex_core::stubs::StubField {
+                        name: #fname,
+                        ty: ::core::stringify!(#fty),
+                    }
+                });
+            }
+            stub_variants.push(quote! {
+                ::dex_core::stubs::StubVariant {
+                    name: #vname,
+                    fields: &[#(#vfields),*],
+                }
+            });
+        }
+    }
+
+    let class_doc = doc_of(&input.attrs);
+    let stub = quote! {
+        ::dex_dynamic::__rt::inventory::submit! {
+            ::dex_core::stubs::StubClass {
+                name: #script_name,
+                doc: #class_doc,
+                fields: &[#(#stub_fields),*],
+                constructible: #constructor,
+                variants: &[#(#stub_variants),*],
+            }
+        }
+    };
+
     quote! {
         #[::pyo3::pyclass(from_py_object, module = "dex", name = #script_name)]
         #input
 
         #ctor
         #reduce
+        #stub
 
         /*
             Bound types are values, so a script may hold one in a field and have
@@ -255,6 +328,12 @@ pub fn dynamic_node_impl(attr: TokenStream, body: TokenStream) -> TokenStream {
     let node_extractor = (!skip).then(|| {
         quote! {
             ::dex_dynamic::__rt::inventory::submit! {
+                ::dex_core::stubs::StubNodeImpl {
+                    name: ::core::stringify!(#self_ty),
+                }
+            }
+
+            ::dex_dynamic::__rt::inventory::submit! {
                 ::dex_core::scripting::NodeExtractor {
                     from_python: |obj| {
                         use ::dex_dynamic::__rt::pyo3::prelude::*;
@@ -294,7 +373,67 @@ enum Recv {
     therefore never names a boundary type — teaching it about a new one is an
     impl, not an edit here.
 */
-fn bind_method(self_ty: &Type, f: &mut syn::ImplItemFn) -> Option<TS2> {
+/// Record one bound signature for stub generation.
+fn stub_for(
+    owner: &str,
+    f: &syn::ImplItemFn,
+    param_names: &[String],
+    is_static: bool,
+) -> TS2 {
+    let name = f.sig.ident.to_string();
+    let doc = doc_of(&f.attrs);
+    let mut params: Vec<TS2> = Vec::new();
+    let mut idx = 0usize;
+    for arg in f.sig.inputs.iter() {
+        let FnArg::Typed(pt) = arg else { continue };
+        let ty = &pt.ty;
+        // Prefer the real Rust parameter name; fall back to a positional one.
+        let pname = param_names
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| format!("arg{idx}"));
+        idx += 1;
+        params.push(quote! {
+            ::dex_core::stubs::StubField {
+                name: #pname,
+                ty: ::core::stringify!(#ty),
+            }
+        });
+    }
+    let returns = match &f.sig.output {
+        ReturnType::Default => quote!(""),
+        ReturnType::Type(_, ty) => quote!(::core::stringify!(#ty)),
+    };
+    quote! {
+        ::dex_dynamic::__rt::inventory::submit! {
+            ::dex_core::stubs::StubMethod {
+                owner: #owner,
+                name: #name,
+                doc: #doc,
+                params: &[#(#params),*],
+                returns: #returns,
+                is_static: #is_static,
+            }
+        }
+    }
+}
+
+/// The declared names of a method's non-receiver parameters.
+fn param_names(f: &syn::ImplItemFn) -> Vec<String> {
+    f.sig
+        .inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            FnArg::Typed(pt) => Some(match &*pt.pat {
+                syn::Pat::Ident(id) => id.ident.to_string(),
+                _ => "value".to_owned(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+fn bind_method(self_ty: &Type, f: &mut syn::ImplItemFn) -> Option<(TS2, TS2)> {
     let skip = take_dynamic_skip(&mut f.attrs);
     let is_pub = matches!(f.vis, Visibility::Public(_));
     if skip || !is_pub || !f.sig.generics.params.is_empty() {
@@ -316,12 +455,16 @@ fn bind_method(self_ty: &Type, f: &mut syn::ImplItemFn) -> Option<TS2> {
     let mut conversions: Vec<TS2> = Vec::new();
     let mut call_args: Vec<TS2> = Vec::new();
 
-    for (idx, arg) in f.sig.inputs.iter().enumerate() {
+    let names = param_names(f);
+    let mut visible = 0usize;
+    for arg in f.sig.inputs.iter() {
         let FnArg::Typed(pt) = arg else { continue };
         if !is_bindable(&pt.ty) {
             return None;
         }
-        let id = format_ident!("arg{idx}");
+        // The declared name, so keyword arguments work and match the stub.
+        let id = format_ident!("{}", names[visible]);
+        visible += 1;
         let ty = &pt.ty;
         py_inputs.push(quote!(#id: ::pyo3::Bound<'_, ::pyo3::PyAny>));
         conversions.push(quote! {
@@ -358,7 +501,12 @@ fn bind_method(self_ty: &Type, f: &mut syn::ImplItemFn) -> Option<TS2> {
     }
     full_call.extend(call_args);
 
-    Some(quote! {
+    let owner = type_ident(self_ty)
+        .map(|i| i.to_string())
+        .unwrap_or_default();
+    let stub = stub_for(&owner, f, &names, matches!(recv, Recv::None));
+
+    let wrapper_fn = quote! {
         #static_attr
         #[pyo3(name = #mname_str)]
         fn #wrapper(
@@ -368,7 +516,8 @@ fn bind_method(self_ty: &Type, f: &mut syn::ImplItemFn) -> Option<TS2> {
             let __ret = #self_ty::#mname(#(#full_call),*);
             ::dex_core::scripting::IntoDynamic::into_dynamic(__ret, __py)
         }
-    })
+    };
+    Some((wrapper_fn, stub))
 }
 
 /**
@@ -392,11 +541,17 @@ pub fn dynamic_scoped_impl(attr: TokenStream, body: TokenStream) -> TokenStream 
     }
 
 
+    let handle_name = handle.to_string();
+    // The class is declared by hand; the stub takes the script-facing name.
+    let script_name = handle_name.strip_prefix("Py").unwrap_or(&handle_name).to_owned();
+
     let mut py_methods = TS2::new();
+    let mut stubs = TS2::new();
     for item in input.items.iter_mut() {
         let ImplItem::Fn(f) = item else { continue };
-        if let Some(bound) = bind_scoped_method(f) {
-            py_methods.extend(bound);
+        if let Some((wrapper, stub)) = bind_scoped_method(&script_name, f) {
+            py_methods.extend(wrapper);
+            stubs.extend(stub);
         }
     }
 
@@ -407,12 +562,14 @@ pub fn dynamic_scoped_impl(attr: TokenStream, body: TokenStream) -> TokenStream 
         impl #handle {
             #py_methods
         }
+
+        #stubs
     }
     .into()
 }
 
 /// Build the wrapper for one method reached through a scoped handle.
-fn bind_scoped_method(f: &mut syn::ImplItemFn) -> Option<TS2> {
+fn bind_scoped_method(owner: &str, f: &mut syn::ImplItemFn) -> Option<(TS2, TS2)> {
     let skip = take_dynamic_skip(&mut f.attrs);
     let is_pub = matches!(f.vis, Visibility::Public(_));
     if skip || !is_pub || !f.sig.generics.params.is_empty() {
@@ -428,12 +585,15 @@ fn bind_scoped_method(f: &mut syn::ImplItemFn) -> Option<TS2> {
     let mut conversions: Vec<TS2> = Vec::new();
     let mut call_args: Vec<TS2> = Vec::new();
 
-    for (idx, arg) in f.sig.inputs.iter().enumerate() {
+    let names = param_names(f);
+    let mut visible = 0usize;
+    for arg in f.sig.inputs.iter() {
         let FnArg::Typed(pt) = arg else { continue };
         if !is_bindable(&pt.ty) {
             return None;
         }
-        let id = format_ident!("arg{idx}");
+        let id = format_ident!("{}", names[visible]);
+        visible += 1;
         let ty = &pt.ty;
         py_inputs.push(quote!(#id: ::pyo3::Bound<'_, ::pyo3::PyAny>));
         conversions.push(quote! {
@@ -445,8 +605,9 @@ fn bind_scoped_method(f: &mut syn::ImplItemFn) -> Option<TS2> {
     let mname = f.sig.ident.clone();
     let mname_str = mname.to_string();
     let wrapper = format_ident!("__dyn_{mname}");
+    let stub = stub_for(owner, f, &names, false);
 
-    Some(quote! {
+    let wrapper_fn = quote! {
         #[pyo3(name = #mname_str)]
         fn #wrapper(
             &self,
@@ -457,7 +618,8 @@ fn bind_scoped_method(f: &mut syn::ImplItemFn) -> Option<TS2> {
             let __ret = self.try_with(|__target| __target.#mname(#(#call_args),*))?;
             ::dex_core::scripting::IntoDynamic::into_dynamic(__ret, __py)
         }
-    })
+    };
+    Some((wrapper_fn, stub))
 }
 
 pub fn dynamic_methods_impl(_attr: TokenStream, body: TokenStream) -> TokenStream {
@@ -474,10 +636,12 @@ pub fn dynamic_methods_impl(_attr: TokenStream, body: TokenStream) -> TokenStrea
     }
 
     let mut py_methods = TS2::new();
+    let mut stubs = TS2::new();
     for item in input.items.iter_mut() {
         let ImplItem::Fn(f) = item else { continue };
-        if let Some(bound) = bind_method(&self_ty, f) {
-            py_methods.extend(bound);
+        if let Some((wrapper, stub)) = bind_method(&self_ty, f) {
+            py_methods.extend(wrapper);
+            stubs.extend(stub);
         }
     }
 
@@ -488,6 +652,8 @@ pub fn dynamic_methods_impl(_attr: TokenStream, body: TokenStream) -> TokenStrea
         impl #self_ty {
             #py_methods
         }
+
+        #stubs
     }
     .into()
 }

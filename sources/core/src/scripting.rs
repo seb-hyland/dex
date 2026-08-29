@@ -201,6 +201,16 @@ dex_dynamic::__rt::inventory::submit! {
     }
 }
 
+dex_dynamic::__rt::inventory::submit! {
+    crate::stubs::StubClass {
+        name: "Node",
+        doc: "An opaque handle to a node value.",
+        fields: &[],
+        constructible: false,
+        variants: &[],
+    }
+}
+
 /// Any Python value can stand in for a node; one handed back by a previous
 /// call round-trips as itself rather than being re-coerced.
 impl FromDynamic for Arc<dyn Node> {

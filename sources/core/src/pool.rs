@@ -41,6 +41,11 @@ impl<T: ?Sized> NodeUid<T> {
         }
     }
 
+    /// A stable, filesystem-safe key for this id.
+    pub fn key(self) -> String {
+        self.id.to_string()
+    }
+
     pub fn erase(self) -> NodeUid {
         NodeUid {
             id: self.id,

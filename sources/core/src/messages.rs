@@ -470,7 +470,7 @@ macro_rules! defhandlers {
             }
         }
 
-        $crate::defhandlers!(@register_class $name);
+        $crate::defhandlers!(@register_class $name { $($f : $ty),* });
     };
     (@def_struct $name:ident) => {
         #[::pyo3::pyclass(from_py_object, module = "dex")]
@@ -513,11 +513,29 @@ macro_rules! defhandlers {
             }
         }
 
-        $crate::defhandlers!(@register_class $name);
+        $crate::defhandlers!(@register_class $name {});
     };
 
-    // Publish a message class into the `dex` module, and teach `dex._rebuild`
-    // how to restore one from its captured bytes.
+    // Publish a message class into the `dex` module, teach `dex._rebuild` how
+    // to restore one from its captured bytes, and describe it for stubs.
+    (@register_class $name:ident { $($f:ident : $ty:ty),* }) => {
+        ::dex_dynamic::__rt::inventory::submit! {
+            $crate::stubs::StubClass {
+                name: ::core::stringify!($name),
+                doc: "",
+                fields: &[$(
+                    $crate::stubs::StubField {
+                        name: ::core::stringify!($f),
+                        ty: ::core::stringify!($ty),
+                    }
+                ),*],
+                constructible: true,
+        variants: &[],
+            }
+        }
+
+        $crate::defhandlers!(@register_class $name);
+    };
     (@register_class $name:ident) => {
         ::dex_dynamic::__rt::inventory::submit! {
             $crate::scripting::DynamicRebuild {

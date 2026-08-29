@@ -4,6 +4,7 @@ use egui::{Id, LayerId, Order};
 use utils::Transient;
 
 use crate::layouts::desktops::{Desktops, PythonPrelude};
+use crate::primitives::checkout;
 use crate::scripting::{
     ScriptOutput, ScriptValue, ValueDelegate, is_valid_ident, resolve_arg, run_script,
 };
@@ -23,7 +24,7 @@ use crate::{
         interaction::{DragPointerPos, InteractionBox, WasClicked, WasDragReleased},
         nothing::Nothing,
         shapes::{Circle, Line},
-        text::{CodeEditor, GetText, Label, LabelEditable},
+        text::{CodeEditor, GetText, Label, LabelEditable, SetText},
     },
 };
 
@@ -35,6 +36,7 @@ use crate::{
 #[utils::portable]
 pub struct LambdaEditor {
     python: NodeUid<CodeEditor>,
+    edit_externally: NodeUid<Button>,
 }
 
 #[utils::dynamic_methods]
@@ -42,8 +44,12 @@ impl LambdaEditor {
     /// Build a lambda editor into `ws`.
     pub fn build(ws: WorkspaceActionHandle) -> NodeUid<LambdaEditor> {
         let python = ws.insert_node(CodeEditor::new(String::new(), "python".to_owned()));
+        let edit_externally = Button::build(ws.clone(), Label::new("Edit in IDE".to_owned()));
 
-        ws.insert_node(Self { python })
+        ws.insert_node(Self {
+            python,
+            edit_externally,
+        })
     }
 }
 
@@ -70,6 +76,8 @@ defhandlers! { LambdaEditor {
         ActiveScript => (this, _q, ctx): String {
             ctx.workspace.send_request(this.python, GetText).unwrap_or_default()
         },
+        // The underlying code editor, so its owner can configure it.
+        ActiveEditor => (this, _q): NodeUid { this.python.erase() },
     ],
 }}
 
@@ -436,6 +444,13 @@ pub struct Lambda {
     /// Last-seen value version of each wired upstream node, so a change re-fires this lambda.
     #[dynamic(skip)]
     seen_deps: Transient<std::collections::HashMap<NodeUid, u64>>,
+
+    /// Where the script is checked out for external editing.
+    #[dynamic(skip)]
+    checkout: Transient<checkout::Checkout>,
+
+    /// Opens the script in the user's editor.
+    edit_externally: NodeUid<Button>,
 }
 
 #[utils::dynamic_methods]
@@ -446,14 +461,17 @@ impl Lambda {
         let editor = LambdaEditor::build(ws.clone());
         let args = LambdaArgs::build(ws.clone());
         let update_button = Button::build(ws.clone(), Label::new("Update".to_owned()));
+        let edit_externally = Button::build(ws.clone(), Label::new("Edit in IDE".to_owned()));
         let output = ws.insert_node(Nothing).erase();
         Self {
             name,
             args,
             editor,
             update_button,
+            edit_externally,
             output,
             seen_deps: Transient::default(),
+            checkout: Transient::default(),
         }
     }
 
@@ -524,6 +542,61 @@ impl Lambda {
         workspace.submit_task(task);
     }
 
+    /// The wired arguments as `(name, python type)`, for a checkout's header.
+    fn script_globals(&self, ctx: NodeContext) -> Vec<(String, String)> {
+        let workspace = ctx.workspace;
+        workspace
+            .send_request(self.args, ArgBindings)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(name, _)| is_valid_ident(name))
+            .map(|(name, target)| {
+                let ty = target
+                    .map(|t| resolve_arg(workspace, t).value.python_type())
+                    .unwrap_or("None");
+                (name, ty.to_owned())
+            })
+            .collect()
+    }
+
+    /// Check the script out to a file and open it in the user's editor.
+    #[dynamic(skip)] // takes a borrowed context
+    pub fn edit_externally(&self, ctx: NodeContext) {
+        let source = ctx
+            .workspace
+            .send_request(self.editor, ActiveScript)
+            .unwrap_or_default();
+        match checkout::open(&ctx.id.key(), &source, &self.script_globals(ctx)) {
+            Ok(open) => self.checkout.set(open),
+            Err(e) => eprintln!("could not check the script out: {e}"),
+        }
+    }
+
+    /**
+        Pull in edits made to a checked-out file.
+        The file wins while it is checked out.
+    */
+    fn poll_checkout(&self, ctx: NodeContext) {
+        let Some(current) = self.checkout.val().clone() else {
+            return;
+        };
+        let Some(pulled) = checkout::poll(&current) else {
+            return;
+        };
+        self.checkout.set(pulled.checkout);
+
+        let Some(editor) = ctx.workspace.send_request(self.editor, ActiveEditor) else {
+            return;
+        };
+        ctx.workspace.submit_action(
+            editor.cast::<CodeEditor>(),
+            "Pulled external edits",
+            SetText {
+                value: pulled.source,
+            },
+        );
+    }
+
     /// Poll wired nodes; returns `true` if any dependency's version has changed since last check.
     fn poll_dependencies(&self, ctx: NodeContext) -> bool {
         let workspace = ctx.workspace;
@@ -584,6 +657,7 @@ impl Node for Lambda {
                 LayoutChild::Node(Arc::new(SectionDivider)),
                 LayoutChild::from(self.editor),
                 LayoutChild::from(self.update_button),
+                LayoutChild::from(self.edit_externally),
                 LayoutChild::Node(Arc::new(SectionDivider)),
                 LayoutChild::Id(self.output),
             ],
@@ -621,12 +695,22 @@ impl Node for Lambda {
             self.run_update(ctx.node);
         }
 
+        if ctx
+            .node
+            .workspace
+            .send_request(self.edit_externally.erase(), WasClicked)
+            .unwrap_or(false)
+        {
+            self.edit_externally(ctx.node);
+        }
+
         DrawResult::Complete {
             region: Some(ScreenRegion::from_min_size(origin, node_size)),
         }
     }
 
     fn tick(&self, ctx: NodeContext) {
+        self.poll_checkout(ctx);
         // Re-fire when a wired dependency's value changed.
         if self.poll_dependencies(ctx) {
             self.run_update(ctx);
@@ -638,6 +722,7 @@ impl Node for Lambda {
         ctx.workspace.delete_node(self.args.erase());
         ctx.workspace.delete_node(self.editor.erase());
         ctx.workspace.delete_node(self.update_button.erase());
+        ctx.workspace.delete_node(self.edit_externally.erase());
         ctx.workspace.delete_node(self.output);
     }
 }
@@ -646,6 +731,10 @@ defhandlers! { Lambda {
     extern_requests: [
         // A lambda represents its output for value resolution.
         ValueDelegate => (this, _q): Option<NodeUid> { Some(this.output) },
+        // Forwarded to the editor, so the script is reachable from the lambda.
+        ActiveScript => (this, _q, ctx): String {
+            ctx.workspace.send_request(this.editor, ActiveScript).unwrap_or_default()
+        },
     ],
 }}
 
