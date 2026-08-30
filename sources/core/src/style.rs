@@ -1,4 +1,4 @@
-use egui::{Color32, FontFamily, FontId, StrokeKind as EguiStrokeKind};
+use egui::{Color32, FontFamily, FontId, StrokeKind as EguiStrokeKind, TextFormat};
 
 /// An sRGBA colour with unmultiplied alpha.
 #[derive(Copy)]
@@ -164,14 +164,20 @@ impl From<EguiStrokeKind> for StrokeKind {
     }
 }
 
-/// A font: a size, and whether it is monospaced. Named font families are not
-/// yet exposed to scripts.
+pub const BOLD_FAMILY: &str = "Literata-Bold";
+pub const ITALIC_FAMILY: &str = "Literata-Italic";
+pub const BOLD_ITALIC_FAMILY: &str = "Literata-BoldItalic";
+
 #[derive(Copy)]
 #[utils::dynamic_type]
 #[utils::portable(noop_reset)]
 pub struct Font {
     pub size: f32,
     pub monospace: bool,
+
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
 }
 
 #[utils::dynamic_methods]
@@ -180,22 +186,64 @@ impl Font {
         Self {
             size,
             monospace: false,
+            bold: false,
+            italic: false,
+            underline: false,
         }
     }
     pub fn monospaced(size: f32) -> Self {
         Self {
             size,
             monospace: true,
+            bold: false,
+            italic: false,
+            underline: false,
         }
     }
 }
 
+impl Font {
+    fn styled_family(self) -> Option<&'static str> {
+        // Only the proportional family ships styled faces.
+        match (self.monospace, self.bold, self.italic) {
+            (true, _, _) | (false, false, false) => None,
+            (false, true, false) => Some(BOLD_FAMILY),
+            (false, false, true) => Some(ITALIC_FAMILY),
+            (false, true, true) => Some(BOLD_ITALIC_FAMILY),
+        }
+    }
+
+    pub fn font_id_in(self, ctx: &egui::Context) -> FontId {
+        let Some(name) = self.styled_family() else {
+            return self.into();
+        };
+        let family = FontFamily::Name(name.into());
+        if ctx.fonts(|fonts| fonts.families().contains(&family)) {
+            FontId::new(self.size, family)
+        } else {
+            FontId::new(self.size, FontFamily::Proportional)
+        }
+    }
+
+    pub fn text_format(self, ctx: &egui::Context, color: Color) -> TextFormat {
+        TextFormat {
+            underline: if self.underline {
+                egui::Stroke::new(1.0, color)
+            } else {
+                egui::Stroke::NONE
+            },
+            ..TextFormat::simple(self.font_id_in(ctx), color.into())
+        }
+    }
+}
+
+/// Loses [`Font::underline`], which is not a property of a face. Prefer [`Font::font_id_in`].
 impl From<Font> for FontId {
     fn from(f: Font) -> Self {
-        let family = if f.monospace {
-            FontFamily::Monospace
-        } else {
-            FontFamily::Proportional
+        let family = match f.styled_family() {
+            Some(name) => FontFamily::Name(name.into()),
+            None if f.monospace => FontFamily::Monospace,
+            None => FontFamily::Proportional,
         };
         FontId::new(f.size, family)
     }
@@ -203,9 +251,16 @@ impl From<Font> for FontId {
 
 impl From<FontId> for Font {
     fn from(f: FontId) -> Self {
+        let styled = match &f.family {
+            FontFamily::Name(name) => &**name,
+            _ => "",
+        };
         Self {
             size: f.size,
             monospace: matches!(f.family, FontFamily::Monospace),
+            bold: styled == BOLD_FAMILY || styled == BOLD_ITALIC_FAMILY,
+            italic: styled == ITALIC_FAMILY || styled == BOLD_ITALIC_FAMILY,
+            underline: false,
         }
     }
 }

@@ -6,6 +6,10 @@ use egui::{
 use egui_code_editor::{CodeEditor as CodeEditorWidget, ColorTheme, DEFAULT_THEMES, Syntax};
 use utils::Transient;
 
+use crate::layouts::vertical::VerticalLayout;
+use crate::primitives::checkbox::{Checkbox, TakeToggled};
+use crate::primitives::color_picker::{ColorPicker, TakePickedColor};
+
 #[utils::dynamic_type]
 #[utils::portable]
 pub struct Label {
@@ -48,9 +52,28 @@ impl Node for Label {
             self.draw_multiline(&mut ctx, &constraints, &remaining, start, avail_w, avail_h)
         }
     }
+
+    fn build_inspector(&self, ctx: NodeContext) -> Option<NodeUid> {
+        Some(
+            TextStyleInspector::build(
+                ctx,
+                ctx.id,
+                TextStyle::of(self.font, self.singleline, self.color),
+            )
+            .erase(),
+        )
+    }
 }
 
-defhandlers! { Label {} }
+defhandlers! { Label {
+    actions: [
+        SetBold { on: bool } => (this, s) { this.font.bold = s.on },
+        SetItalic { on: bool } => (this, s) { this.font.italic = s.on },
+        SetUnderline { on: bool } => (this, s) { this.font.underline = s.on },
+        SetSingleline { on: bool } => (this, s) { this.singleline = s.on },
+        SetTextColor { color: Color } => (this, s) { this.color = s.color },
+    ],
+}}
 
 #[utils::dynamic_methods]
 impl Label {
@@ -70,8 +93,11 @@ impl Label {
         remaining: &str,
         avail_w: Option<f32>,
     ) -> DrawResult {
-        let mut job =
-            LayoutJob::simple_singleline(remaining.to_owned(), self.font.into(), self.color.into());
+        let mut job = LayoutJob::single_section(
+            remaining.to_owned(),
+            self.font.text_format(ctx.ui.ctx(), self.color),
+        );
+        job.break_on_newline = false;
         let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job.clone()));
 
         let fits = avail_w.is_none_or(|w| galley.rect.width() <= w);
@@ -121,12 +147,11 @@ impl Label {
         let height = avail_h.unwrap_or(f32::INFINITY);
         let wrap_constraints = constraints.wrap;
 
-        let job = LayoutJob::simple(
+        let mut job = LayoutJob::single_section(
             remaining.to_owned(),
-            self.font.into(),
-            self.color.into(),
-            width,
+            self.font.text_format(ctx.ui.ctx(), self.color),
         );
+        job.wrap.max_width = width;
         let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job));
 
         let first_row_height = galley.rows[0].height();
@@ -246,8 +271,11 @@ impl LabelEditable {
 
     /// Render the committed value as static, non-interactive text.
     fn draw_static(&self, ctx: DrawContext) -> DrawResult {
-        let job =
-            LayoutJob::simple_singleline(self.value.clone(), self.font.into(), self.color.into());
+        let mut job = LayoutJob::single_section(
+            self.value.clone(),
+            self.font.text_format(ctx.ui.ctx(), self.color),
+        );
+        job.break_on_newline = false;
         let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job));
         let content_w = galley.rect.width();
         let row_h = galley.rows[0].height();
@@ -319,8 +347,9 @@ impl Node for LabelEditable {
 
         // Measure the width of the text field
         let content = self.buf.val_or_else(|| self.value.clone()).clone();
-        let measure_job =
-            LayoutJob::simple_singleline(content, self.font.into(), self.color.into());
+        let mut measure_job =
+            LayoutJob::single_section(content, self.font.text_format(ctx.ui.ctx(), self.color));
+        measure_job.break_on_newline = false;
         let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(measure_job));
         let content_w = galley.rect.width();
         let row_h = galley.rows[0].height();
@@ -382,6 +411,18 @@ impl Node for LabelEditable {
 
         let mut buf_mut = self.buf.val_mut_or_else(|| self.value.clone());
         let editor_id = egui::Id::new(ctx.node.id);
+
+        let format = self.font.text_format(ctx.ui.ctx(), self.color);
+        let multiline = !self.singleline;
+        let mut layouter = move |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
+            let mut job = LayoutJob::single_section(text.as_str().to_owned(), format.clone());
+            job.break_on_newline = multiline;
+            job.wrap.max_width = if multiline { wrap_width } else { f32::INFINITY };
+            job.halign = Align::Center;
+            // Hiding trailing whitespace feels wrong while typing.
+            job.keep_trailing_whitespace = true;
+            ui.ctx().fonts_mut(|fonts| fonts.layout_job(job))
+        };
         let editor = if self.singleline {
             TextEdit::singleline(&mut *buf_mut)
         } else {
@@ -390,8 +431,9 @@ impl Node for LabelEditable {
         .id(editor_id)
         .frame(Frame::NONE)
         .margin(Margin::ZERO)
-        .font(FontId::from(self.font))
+        .font(self.font.font_id_in(ctx.ui.ctx()))
         .text_color(self.color.into())
+        .layouter(&mut layouter)
         .horizontal_align(Align::Center)
         .vertical_align(Align::Center)
         .desired_width(block_w);
@@ -439,6 +481,17 @@ impl Node for LabelEditable {
             region: Some(ScreenRegion::from_min_size(origin, size)),
         }
     }
+
+    fn build_inspector(&self, ctx: NodeContext) -> Option<NodeUid> {
+        Some(
+            TextStyleInspector::build(
+                ctx,
+                ctx.id,
+                TextStyle::of(self.font, self.singleline, self.color),
+            )
+            .erase(),
+        )
+    }
 }
 
 defhandlers! { LabelEditable {
@@ -452,6 +505,14 @@ defhandlers! { LabelEditable {
         },
         SetInteractive { on: bool } => (this, s) { this.interactive = s.on },
     ],
+    extern_actions: [
+        // The styling an inspector offers is the plain label's.
+        SetBold => (this, s) { this.font.bold = s.on },
+        SetItalic => (this, s) { this.font.italic = s.on },
+        SetUnderline => (this, s) { this.font.underline = s.on },
+        SetSingleline => (this, s) { this.singleline = s.on },
+        SetTextColor => (this, s) { this.color = s.color },
+    ],
     requests: [
         IsInteractive => (this, _q): bool { this.interactive },
     ],
@@ -459,6 +520,120 @@ defhandlers! { LabelEditable {
         GetText => (this, _q): String { this.resolved_text() },
     ],
 }}
+
+/// A label's styling, as an inspector needs it to start from.
+#[derive(Clone, Copy)]
+pub struct TextStyle {
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub singleline: bool,
+    pub color: Color,
+}
+
+impl TextStyle {
+    fn of(font: Font, singleline: bool, color: Color) -> Self {
+        Self {
+            bold: font.bold,
+            italic: font.italic,
+            underline: font.underline,
+            singleline,
+            color,
+        }
+    }
+}
+
+/// Styling controls for a [`Label`] or a [`LabelEditable`].
+#[utils::portable]
+pub struct TextStyleInspector {
+    /// The label these controls style. Both label kinds take them.
+    #[uid_ref]
+    target: NodeUid,
+    bold: NodeUid<Checkbox>,
+    italic: NodeUid<Checkbox>,
+    underline: NodeUid<Checkbox>,
+    singleline: NodeUid<Checkbox>,
+    color: NodeUid<ColorPicker>,
+    column: NodeUid<VerticalLayout>,
+}
+
+impl TextStyleInspector {
+    fn build(ctx: NodeContext, target: NodeUid, style: TextStyle) -> NodeUid<TextStyleInspector> {
+        let ws = ctx.workspace.action_handle();
+        let tick = |label: &str, on: bool| Checkbox::build(ws.clone(), label.to_owned(), on);
+
+        let bold = tick("Bold", style.bold);
+        let italic = tick("Italic", style.italic);
+        let underline = tick("Underline", style.underline);
+        let singleline = tick("Single line", style.singleline);
+        let color = ColorPicker::build(ws.clone(), "Colour".to_owned(), style.color);
+
+        let column = VerticalLayout::build(
+            ws.clone(),
+            vec![
+                bold.erase(),
+                italic.erase(),
+                underline.erase(),
+                singleline.erase(),
+                color.erase(),
+            ],
+            3.0,
+        );
+        ws.insert_node(Self {
+            target,
+            bold,
+            italic,
+            underline,
+            singleline,
+            color,
+            column,
+        })
+    }
+}
+
+#[utils::dynamic_node(skip)]
+impl Node for TextStyleInspector {
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "Text Styling".into()
+    }
+
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
+        let constraints = ctx.constraints;
+        let drawn = ctx.draw_workspace_node(self.column.erase(), constraints);
+
+        let ws = ctx.node.workspace;
+        let target = self.target;
+        let toggled = |tick: NodeUid<Checkbox>| ws.send_request(tick, TakeToggled).flatten();
+
+        if let Some(on) = toggled(self.bold) {
+            ws.submit_action(target, "Set the label's weight", SetBold { on });
+        }
+        if let Some(on) = toggled(self.italic) {
+            ws.submit_action(target, "Set the label's slant", SetItalic { on });
+        }
+        if let Some(on) = toggled(self.underline) {
+            ws.submit_action(target, "Underlined the label", SetUnderline { on });
+        }
+        if let Some(on) = toggled(self.singleline) {
+            ws.submit_action(target, "Set the label's wrapping", SetSingleline { on });
+        }
+        if let Some(color) = ws.send_request(self.color, TakePickedColor).flatten() {
+            ws.submit_action(target, "Recoloured the label", SetTextColor { color });
+        }
+
+        drawn.unwrap_or(DrawResult::Complete { region: None })
+    }
+
+    fn on_delete(&self, ctx: NodeContext) {
+        ctx.workspace.delete_node(self.column.erase());
+        for tick in [self.bold, self.italic, self.underline, self.singleline] {
+            ctx.workspace.delete_node(tick.erase());
+        }
+        ctx.workspace.delete_node(self.color.erase());
+    }
+}
+
+defhandlers! { TextStyleInspector {} }
 
 #[utils::dynamic_type]
 #[utils::portable]

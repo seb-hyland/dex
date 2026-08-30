@@ -1,3 +1,4 @@
+use dex_core::prelude::{BOLD_FAMILY, BOLD_ITALIC_FAMILY, ITALIC_FAMILY};
 use egui::{Context, FontData, FontDefinitions, FontFamily};
 
 pub fn install_fonts(ctx: &Context) {
@@ -9,15 +10,15 @@ pub fn install_fonts(ctx: &Context) {
             include_bytes!("../../../assets/Literata/Literata-Regular.ttf"),
         ),
         (
-            "Literata-Bold",
+            BOLD_FAMILY,
             include_bytes!("../../../assets/Literata/Literata-Bold.ttf"),
         ),
         (
-            "Literata-Italic",
+            ITALIC_FAMILY,
             include_bytes!("../../../assets/Literata/Literata-Italic.ttf"),
         ),
         (
-            "Literata-BoldItalic",
+            BOLD_ITALIC_FAMILY,
             include_bytes!("../../../assets/Literata/Literata-BoldItalic.ttf"),
         ),
     ];
@@ -28,17 +29,14 @@ pub fn install_fonts(ctx: &Context) {
     }
 
     // Fallbacks after.
-    fonts
-        .families
-        .entry(FontFamily::Proportional)
-        .or_default()
-        .insert(0, "Literata".to_owned());
+    let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
+    proportional.insert(0, "Literata".to_owned());
+    let fallbacks = proportional.clone();
 
-    // Named families so callers can select a specific weight/style.
-    for name in ["Literata-Bold", "Literata-Italic", "Literata-BoldItalic"] {
-        fonts
-            .families
-            .insert(FontFamily::Name(name.into()), vec![name.to_owned()]);
+    for name in [BOLD_FAMILY, ITALIC_FAMILY, BOLD_ITALIC_FAMILY] {
+        let mut chain = vec![name.to_owned()];
+        chain.extend(fallbacks.iter().cloned());
+        fonts.families.insert(FontFamily::Name(name.into()), chain);
     }
 
     ctx.set_fonts(fonts);

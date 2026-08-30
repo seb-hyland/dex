@@ -1,5 +1,5 @@
 use dex_core::prelude::*;
-use egui::{Id, Popup, PopupCloseBehavior, PopupKind, Sense};
+use egui::{Id, Popup, PopupCloseBehavior, PopupKind, RectAlign, Sense};
 use utils::Transient;
 
 use crate::composites::button::Button;
@@ -159,12 +159,22 @@ impl Node for Inspector {
         // Opened by a click on the lens, and registered every frame.
         let inspector = self.inspector;
         let node = ctx.node;
+        // Beside the lens, on a side chosen from where the lens is.
+        let content = ctx.ui.ctx().content_rect();
+        let align = if handle_region.min.x - MENU_WIDTH >= content.left() {
+            RectAlign::LEFT_START
+        } else {
+            RectAlign::RIGHT_START
+        };
         let popup = Popup::menu(&resp)
             .kind(PopupKind::Tooltip)
             .close_behavior(PopupCloseBehavior::IgnoreClicks)
+            .align(align)
+            .align_alternatives(&[])
             .width(MENU_WIDTH);
         let was_open = popup.is_open();
         let popup_id = popup.get_id();
+
         // Last frame's rect, in case this frame's is not reported.
         let previous_rect = popup.get_popup_rect();
 

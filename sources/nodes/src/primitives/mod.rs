@@ -1,4 +1,6 @@
+pub mod checkbox;
 pub mod checkout;
+pub mod color_picker;
 pub mod dynamic;
 pub mod file_browser;
 pub mod image;

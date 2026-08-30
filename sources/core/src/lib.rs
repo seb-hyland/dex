@@ -32,7 +32,7 @@ pub mod prelude {
         refs::NodeRefs,
         region::{ScreenPos, ScreenRegion, Vector},
         scripting::{NodeExtractor, NodeHandle},
-        style::{Color, Font, Stroke, StrokeKind},
+        style::{BOLD_FAMILY, BOLD_ITALIC_FAMILY, Color, Font, ITALIC_FAMILY, Stroke, StrokeKind},
         workspace::{Workspace, WorkspaceActionHandle},
         *,
     };
