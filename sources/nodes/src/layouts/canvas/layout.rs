@@ -3,14 +3,15 @@ use egui::{Pos2, Rect};
 use utils::Transient;
 
 use crate::{
-    layouts::canvas::nodes::{CanvasNode, CanvasNodeConstraints, ConstraintsTuple, SetLayout},
-    primitives::interaction::{DragPointerPos, InteractionBox, WasDragged},
+    layouts::canvas::nodes::{CanvasEditor, CanvasItemBounds, CanvasNode, NudgeCanvasItem},
+    primitives::interaction::{DragStartPos, InteractionBox, WasDragged},
 };
 
 #[utils::dynamic_type]
 #[utils::portable]
 pub struct Canvas {
-    children: Vec<NodeUid<CanvasNode>>,
+    /// The items on this surface, in draw order.
+    children: Vec<NodeUid>,
     /// Background drag sensor (a registered child) used for panning.
     drag_interaction: NodeUid<InteractionBox>,
     screen_offset: Transient<Vector>,
@@ -34,7 +35,7 @@ impl Canvas {
         })
     }
 
-    pub fn push_child(&mut self, child: NodeUid<CanvasNode>) {
+    pub fn push_child(&mut self, child: NodeUid) {
         self.children.push(child);
     }
 
@@ -43,11 +44,11 @@ impl Canvas {
     }
 
     /// The topmost item whose on-screen region contains `pos`.
-    fn item_at(&self, ws: &Workspace, pos: ScreenPos) -> Option<NodeUid<CanvasNode>> {
+    fn item_at(&self, ws: &Workspace, pos: ScreenPos) -> Option<NodeUid> {
         self.children.iter().rev().copied().find(|&child| {
-            ws.send_request(child, CanvasNodeConstraints)
-                .is_some_and(|tuple| {
-                    Rect::from(self.map_to_screen(tuple)).contains(Pos2::from(pos))
+            ws.send_request(child, CanvasItemBounds)
+                .is_some_and(|bounds| {
+                    Rect::from(self.map_to_screen(bounds)).contains(Pos2::from(pos))
                 })
         })
     }
@@ -62,9 +63,9 @@ impl Canvas {
         origin - self.screen_offset()
     }
 
-    /// Map a canvas-space layout into its on-screen region.
-    fn map_to_screen(&self, tuple: ConstraintsTuple) -> ScreenRegion {
-        ScreenRegion::from_min_size(self.canvas_origin() + tuple.pos, tuple.size)
+    /// Map a canvas-space bounding region into its on-screen region.
+    fn map_to_screen(&self, bounds: ScreenRegion) -> ScreenRegion {
+        ScreenRegion::from_min_size(self.canvas_origin() + bounds.min.to_vector(), bounds.size())
     }
 }
 
@@ -108,7 +109,7 @@ impl Node for Canvas {
         if let Some(drag_delta) = ws.send_request(self.drag_interaction, WasDragged).flatten() {
             // Only the background pans, not the cursor over a `CanvasNode`.
             let panning = *self.panning.val_or_else(|| {
-                ws.send_request(self.drag_interaction, DragPointerPos)
+                ws.send_request(self.drag_interaction, DragStartPos)
                     .flatten()
                     .is_none_or(|start| self.item_at(ws, start).is_none())
             });
@@ -149,10 +150,32 @@ impl Node for Canvas {
     }
 }
 
+/// Turn a placed `child` (its id and its node) into a canvas item.
+fn build_canvas_item(
+    ws: &Workspace,
+    node: &dyn Node,
+    child: NodeUid,
+    pos: Vector,
+    size: Vector,
+) -> NodeUid {
+    let child_ctx = NodeContext {
+        id: child,
+        workspace: ws,
+    };
+    node.request(
+        CanvasEditor {
+            canvas_pos: pos,
+            size,
+        },
+        child_ctx,
+    )
+    .unwrap_or_else(|| CanvasNode::build(ws.action_handle(), child, pos, size).erase())
+}
+
 defhandlers! { Canvas {
     actions: [
         AddCanvasItem { child: Arc<dyn Node>, size: Vector } => (this, a, ctx) {
-            let child_id = ctx.workspace.insert_node_dyn(a.child);
+            let child_id = ctx.workspace.insert_node_dyn(a.child.clone());
             // Center new nodes in the currently visible section of the canvas.
             let visible_size = this
                 .viewport
@@ -160,9 +183,14 @@ defhandlers! { Canvas {
                 .map(|r| r.size())
                 .unwrap_or(Vector::splat(0.0));
             let canvas_pos = this.screen_offset() + visible_size / 2.0 - a.size / 2.0;
-            let node_id =
-                CanvasNode::build(ctx.workspace.action_handle(), child_id, canvas_pos, a.size);
-            this.children.push(node_id);
+            let item = build_canvas_item(
+                ctx.workspace,
+                a.child.as_ref(),
+                child_id,
+                canvas_pos,
+                a.size,
+            );
+            this.children.push(item);
         },
         /*
             Put `node` on this surface as an item.
@@ -171,25 +199,18 @@ defhandlers! { Canvas {
         */
         PlaceOnCanvas { node: NodeUid, size: Vector } => (this, a, ctx) {
             const PLACE_OFFSET: f32 = 24.0;
+            let ws = ctx.workspace;
 
-            let is_item = ctx
-                .workspace
-                .get_node(a.node)
-                .is_some_and(|n| n.as_ref().as_any_ref().is::<CanvasNode>());
+            // Anything that answers the bounds protocol is already a canvas item.
+            let is_canvas_item = ws.send_request(a.node, CanvasItemBounds).is_some();
 
-            let item = if is_item {
-                let item = a.node.cast::<CanvasNode>();
-                if let Some(layout) = ctx.workspace.send_request(item, CanvasNodeConstraints) {
-                    ctx.workspace.submit_action(
-                        item,
-                        "Offset the placed item",
-                        SetLayout {
-                            canvas_pos: layout.pos + Vector::splat(PLACE_OFFSET),
-                            size: layout.size,
-                        },
-                    );
-                }
-                item
+            let item = if is_canvas_item {
+                ws.submit_action(
+                    a.node,
+                    "Offset the placed item",
+                    NudgeCanvasItem { delta: Vector::splat(PLACE_OFFSET) },
+                );
+                a.node
             } else {
                 let visible_size = this
                     .viewport
@@ -197,41 +218,57 @@ defhandlers! { Canvas {
                     .map(|r| r.size())
                     .unwrap_or(Vector::splat(0.0));
                 let canvas_pos = this.screen_offset() + visible_size / 2.0 - a.size / 2.0;
-                CanvasNode::build(ctx.workspace.action_handle(), a.node, canvas_pos, a.size)
+                // `a.node` is already live here, so it can be fetched to dispatch.
+                match ws.get_node(a.node) {
+                    Some(node) => {
+                        build_canvas_item(ws, node.as_ref(), a.node, canvas_pos, a.size)
+                    }
+                    None => CanvasNode::build(ws.action_handle(), a.node, canvas_pos, a.size)
+                        .erase(),
+                }
             };
 
             if !this.children.contains(&item) {
                 this.children.push(item);
             }
         },
-        // Take an already-built canvas node onto this surface, as a copy or a
-        // mirror of an existing one does.
-        AdoptCanvasNode { node: NodeUid<CanvasNode> } => (this, a) {
+        // Take an already-built canvas item onto this surface.
+        AdoptCanvasNode { node: NodeUid } => (this, a) {
             if !this.children.contains(&a.node) {
                 this.children.push(a.node);
             }
         },
-        // Drop a node from the canvas; deleting it cascades to what it wraps.
-        RemoveCanvasItem { node: NodeUid<CanvasNode> } => (this, a, ctx) {
+        // Drop an item from the canvas; deleting it cascades to what it wraps.
+        RemoveCanvasItem { node: NodeUid } => (this, a, ctx) {
             if let Some(pos) = this.children.iter().position(|c| *c == a.node) {
                 this.children.remove(pos);
             }
-            ctx.workspace.delete_node(a.node.erase());
+            ctx.workspace.delete_node(a.node);
+        },
+        // Swap `old` out for a fresh item built from `child`, in place.
+        SwapCanvasItem { old: NodeUid, child: Arc<dyn Node>, pos: Vector, size: Vector } => (this, a, ctx) {
+            let child_id = ctx.workspace.insert_node_dyn(a.child.clone());
+            // Dispatch on the node we still hold; it is not yet live in the registry.
+            let item = build_canvas_item(ctx.workspace, a.child.as_ref(), child_id, a.pos, a.size);
+            match this.children.iter().position(|c| *c == a.old) {
+                Some(i) => this.children[i] = item,
+                None => this.children.push(item),
+            }
+            ctx.workspace.delete_node(a.old);
         },
     ],
     requests: [
-        // The nodes on this surface, in draw order.
-        CanvasChildren => (this, _q): Vec<NodeUid<CanvasNode>> { this.children.clone() },
-        // The top-most connectable node whose on-screen region contains `pos`.
-        // Any surface can answer with its own connectable nodes.
+        // The items on this surface, in draw order.
+        CanvasChildren => (this, _q): Vec<NodeUid> { this.children.clone() },
+        // The top-most connectable item whose on-screen region contains `pos`.
         ConnectableAt { pos: ScreenPos } => (this, s, ctx): Option<NodeUid> {
-            this.item_at(ctx.workspace, s.pos).map(|child| child.erase())
+            this.item_at(ctx.workspace, s.pos)
         },
-        // Map a connectable node's current layout into its on-screen region.
+        // Map a connectable item's current layout into its on-screen region.
         NodeScreenRect { node: NodeUid } => (this, s, ctx): Option<ScreenRegion> {
             ctx.workspace
-                .send_request(s.node.cast::<CanvasNode>(), CanvasNodeConstraints)
-                .map(|tuple| this.map_to_screen(tuple))
+                .send_request(s.node, CanvasItemBounds)
+                .map(|bounds| this.map_to_screen(bounds))
         },
     ],
 }}

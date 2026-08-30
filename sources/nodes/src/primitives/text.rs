@@ -7,8 +7,10 @@ use egui_code_editor::{CodeEditor as CodeEditorWidget, ColorTheme, DEFAULT_THEME
 use utils::Transient;
 
 use crate::layouts::vertical::VerticalLayout;
-use crate::primitives::checkbox::{Checkbox, TakeToggled};
-use crate::primitives::color_picker::{ColorPicker, TakePickedColor};
+use crate::primitives::checkbox::{Checkbox, IsChecked};
+use crate::primitives::color_picker::{
+    ColorPicker, ColorSlot, PreviewFill, drop_preview, repicked,
+};
 
 #[utils::dynamic_type]
 #[utils::portable]
@@ -18,6 +20,16 @@ pub struct Label {
 
     pub font: Font,
     pub color: Color,
+
+    /// A colour being dragged out of a picker.
+    preview_color: Transient<Color>,
+}
+
+impl Label {
+    /// The colour on show: one being picked, else the committed one.
+    pub fn shown_color(&self) -> Color {
+        self.preview_color.val().unwrap_or(self.color)
+    }
 }
 
 #[utils::dynamic_node]
@@ -73,6 +85,22 @@ defhandlers! { Label {
         SetSingleline { on: bool } => (this, s) { this.singleline = s.on },
         SetTextColor { color: Color } => (this, s) { this.color = s.color },
     ],
+    requests: [
+        // What the styling controls are polled against.
+        LabelStyle => (this, _q): TextStyle {
+            TextStyle::of(this.font, this.singleline, this.color)
+        },
+    ],
+    extern_requests: [
+        // A label has no outline, so its text colour is its fill.
+        PreviewFill => (this, q): bool {
+            match q.color {
+                Some(color) => this.preview_color.set(color),
+                None => *this.preview_color.val_mut() = None,
+            }
+            true
+        },
+    ],
 }}
 
 #[utils::dynamic_methods]
@@ -83,6 +111,7 @@ impl Label {
             singleline: true,
             font: Font::proportional(16.0),
             color: Color::BLACK,
+            preview_color: Transient::default(),
         }
     }
 
@@ -95,7 +124,7 @@ impl Label {
     ) -> DrawResult {
         let mut job = LayoutJob::single_section(
             remaining.to_owned(),
-            self.font.text_format(ctx.ui.ctx(), self.color),
+            self.font.text_format(ctx.ui.ctx(), self.shown_color()),
         );
         job.break_on_newline = false;
         let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job.clone()));
@@ -106,7 +135,7 @@ impl Label {
             let origin: Pos2 = constraints.pos.into();
             ctx.ui
                 .painter()
-                .galley(origin, galley.clone(), self.color.into());
+                .galley(origin, galley.clone(), self.shown_color().into());
             return DrawResult::Complete {
                 region: Some(galley.rect.translate(origin.to_vec2()).into()),
             };
@@ -128,7 +157,7 @@ impl Label {
         let origin: Pos2 = constraints.pos.into();
         ctx.ui
             .painter()
-            .galley(origin, galley.clone(), self.color.into());
+            .galley(origin, galley.clone(), self.shown_color().into());
         DrawResult::Complete {
             region: Some(galley.rect.translate(origin.to_vec2()).into()),
         }
@@ -149,7 +178,7 @@ impl Label {
 
         let mut job = LayoutJob::single_section(
             remaining.to_owned(),
-            self.font.text_format(ctx.ui.ctx(), self.color),
+            self.font.text_format(ctx.ui.ctx(), self.shown_color()),
         );
         job.wrap.max_width = width;
         let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job));
@@ -195,7 +224,7 @@ impl Label {
         ctx.ui.painter().with_clip_rect(clip_rect).galley(
             origin,
             galley.clone(),
-            self.color.into(),
+            self.shown_color().into(),
         );
 
         let draw_region = local_rect.translate(origin.to_vec2()).into();
@@ -237,6 +266,16 @@ pub struct LabelEditable {
 
     pub font: Font,
     pub color: Color,
+
+    /// A colour being dragged out of a picker.
+    preview_color: Transient<Color>,
+}
+
+impl LabelEditable {
+    /// The colour on show: one being picked, else the committed one.
+    pub fn shown_color(&self) -> Color {
+        self.preview_color.val().unwrap_or(self.color)
+    }
 }
 
 #[utils::dynamic_methods]
@@ -251,6 +290,7 @@ impl LabelEditable {
             auto_lock: false,
             font: Font::proportional(16.0),
             color: Color::BLACK,
+            preview_color: Transient::default(),
         }
     }
 
@@ -273,7 +313,7 @@ impl LabelEditable {
     fn draw_static(&self, ctx: DrawContext) -> DrawResult {
         let mut job = LayoutJob::single_section(
             self.value.clone(),
-            self.font.text_format(ctx.ui.ctx(), self.color),
+            self.font.text_format(ctx.ui.ctx(), self.shown_color()),
         );
         job.break_on_newline = false;
         let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job));
@@ -323,7 +363,9 @@ impl LabelEditable {
             x: origin.x + ((block_w - content_w) * 0.5).max(0.0),
             y: origin.y + (size.y - row_h) * 0.5,
         };
-        ctx.ui.painter().galley(text_pos, galley, self.color.into());
+        ctx.ui
+            .painter()
+            .galley(text_pos, galley, self.shown_color().into());
 
         DrawResult::Complete {
             region: Some(ScreenRegion::from_min_size(origin, size)),
@@ -347,8 +389,10 @@ impl Node for LabelEditable {
 
         // Measure the width of the text field
         let content = self.buf.val_or_else(|| self.value.clone()).clone();
-        let mut measure_job =
-            LayoutJob::single_section(content, self.font.text_format(ctx.ui.ctx(), self.color));
+        let mut measure_job = LayoutJob::single_section(
+            content,
+            self.font.text_format(ctx.ui.ctx(), self.shown_color()),
+        );
         measure_job.break_on_newline = false;
         let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(measure_job));
         let content_w = galley.rect.width();
@@ -412,7 +456,7 @@ impl Node for LabelEditable {
         let mut buf_mut = self.buf.val_mut_or_else(|| self.value.clone());
         let editor_id = egui::Id::new(ctx.node.id);
 
-        let format = self.font.text_format(ctx.ui.ctx(), self.color);
+        let format = self.font.text_format(ctx.ui.ctx(), self.shown_color());
         let multiline = !self.singleline;
         let mut layouter = move |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
             let mut job = LayoutJob::single_section(text.as_str().to_owned(), format.clone());
@@ -432,7 +476,7 @@ impl Node for LabelEditable {
         .frame(Frame::NONE)
         .margin(Margin::ZERO)
         .font(self.font.font_id_in(ctx.ui.ctx()))
-        .text_color(self.color.into())
+        .text_color(self.shown_color().into())
         .layouter(&mut layouter)
         .horizontal_align(Align::Center)
         .vertical_align(Align::Center)
@@ -518,11 +562,24 @@ defhandlers! { LabelEditable {
     ],
     extern_requests: [
         GetText => (this, _q): String { this.resolved_text() },
+        // The styling an inspector offers is the plain label's.
+        LabelStyle => (this, _q): TextStyle {
+            TextStyle::of(this.font, this.singleline, this.color)
+        },
+        PreviewFill => (this, q): bool {
+            match q.color {
+                Some(color) => this.preview_color.set(color),
+                None => *this.preview_color.val_mut() = None,
+            }
+            true
+        },
     ],
 }}
 
-/// A label's styling, as an inspector needs it to start from.
-#[derive(Clone, Copy)]
+/// A label's styling, as an inspector reads it to stay in step with.
+#[derive(Copy)]
+#[utils::dynamic_type]
+#[utils::portable(noop_reset)]
 pub struct TextStyle {
     pub bold: bool,
     pub italic: bool,
@@ -532,7 +589,7 @@ pub struct TextStyle {
 }
 
 impl TextStyle {
-    fn of(font: Font, singleline: bool, color: Color) -> Self {
+    pub fn of(font: Font, singleline: bool, color: Color) -> Self {
         Self {
             bold: font.bold,
             italic: font.italic,
@@ -603,28 +660,37 @@ impl Node for TextStyleInspector {
 
         let ws = ctx.node.workspace;
         let target = self.target;
-        let toggled = |tick: NodeUid<Checkbox>| ws.send_request(tick, TakeToggled).flatten();
+        // Poll each box against the style it stands for.
+        let style = ws.send_request(target, LabelStyle);
+        let changed = |tick: NodeUid<Checkbox>, actual: bool| {
+            let shown = ws.send_request(tick, IsChecked)?;
+            (shown != actual).then_some(shown)
+        };
 
-        if let Some(on) = toggled(self.bold) {
-            ws.submit_action(target, "Set the label's weight", SetBold { on });
-        }
-        if let Some(on) = toggled(self.italic) {
-            ws.submit_action(target, "Set the label's slant", SetItalic { on });
-        }
-        if let Some(on) = toggled(self.underline) {
-            ws.submit_action(target, "Underlined the label", SetUnderline { on });
-        }
-        if let Some(on) = toggled(self.singleline) {
-            ws.submit_action(target, "Set the label's wrapping", SetSingleline { on });
-        }
-        if let Some(color) = ws.send_request(self.color, TakePickedColor).flatten() {
-            ws.submit_action(target, "Recoloured the label", SetTextColor { color });
+        if let Some(style) = style {
+            if let Some(on) = changed(self.bold, style.bold) {
+                ws.submit_action(target, "Set the label's weight", SetBold { on });
+            }
+            if let Some(on) = changed(self.italic, style.italic) {
+                ws.submit_action(target, "Set the label's slant", SetItalic { on });
+            }
+            if let Some(on) = changed(self.underline, style.underline) {
+                ws.submit_action(target, "Underlined the label", SetUnderline { on });
+            }
+            if let Some(on) = changed(self.singleline, style.singleline) {
+                ws.submit_action(target, "Set the label's wrapping", SetSingleline { on });
+            }
+            if let Some(color) = repicked(ws, self.color, target, ColorSlot::Fill, style.color) {
+                ws.submit_action(target, "Recoloured the label", SetTextColor { color });
+            }
         }
 
         drawn.unwrap_or(DrawResult::Complete { region: None })
     }
 
     fn on_delete(&self, ctx: NodeContext) {
+        // Closing mid-gesture would otherwise leave a preview standing.
+        drop_preview(ctx.workspace, self.target, ColorSlot::Fill);
         ctx.workspace.delete_node(self.column.erase());
         for tick in [self.bold, self.italic, self.underline, self.singleline] {
             ctx.workspace.delete_node(tick.erase());

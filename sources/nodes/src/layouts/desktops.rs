@@ -8,7 +8,7 @@ use crate::{
         canvas::{
             self,
             layout::{AdoptCanvasNode, Canvas, CanvasChildren},
-            nodes::{CanvasNode, CanvasNodeChild, CanvasNodeConstraints},
+            nodes::{CanvasItemBounds, CanvasNode, CanvasNodeChild},
             sidebar::CanvasSidebar,
         },
         child::LayoutChild,
@@ -395,15 +395,21 @@ defhandlers! { Desktops {
                 let mirrored = Canvas::build(ws.action_handle());
                 for item in ws.send_request(source, CanvasChildren).unwrap_or_default() {
                     if let Some(child) = ws.send_request(item, CanvasNodeChild)
-                        && let Some(layout) = ws.send_request(item, CanvasNodeConstraints)
+                        && let Some(bounds) = ws.send_request(item, CanvasItemBounds)
                     {
                         let mirror = ws.insert_node_dyn(Arc::new(Mirror::new(child)));
-                        let framed =
-                            CanvasNode::build(ws.action_handle(), mirror, layout.pos, layout.size);
+                        let framed = CanvasNode::build(
+                            ws.action_handle(),
+                            mirror,
+                            bounds.min.to_vector(),
+                            bounds.size(),
+                        );
                         ws.submit_action(
                             mirrored,
                             "Mirrored canvas item",
-                            AdoptCanvasNode { node: framed },
+                            AdoptCanvasNode {
+                                node: framed.erase(),
+                            },
                         );
                     }
                 }

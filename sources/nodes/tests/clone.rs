@@ -492,11 +492,11 @@ fn canvas_node_menu_commands_act_on_the_canvas() {
         Vector::splat(100.0),
     );
     ws.process_pending();
-    ws.submit_action(canvas, "seed", AdoptCanvasNode { node });
+    ws.submit_action(canvas, "seed", AdoptCanvasNode { node: node.erase() });
     ws.process_pending();
     assert_eq!(
         ws.send_request(canvas, CanvasChildren).unwrap_or_default(),
-        vec![node],
+        vec![node.erase()],
         "the canvas starts with the one node"
     );
 
@@ -531,7 +531,13 @@ fn canvas_node_menu_commands_act_on_the_canvas() {
         Vector::splat(100.0),
     );
     ws.process_pending();
-    ws.submit_action(canvas, "mirror", AdoptCanvasNode { node: mirror_node });
+    ws.submit_action(
+        canvas,
+        "mirror",
+        AdoptCanvasNode {
+            node: mirror_node.erase(),
+        },
+    );
     ws.process_pending();
     assert_eq!(
         ws.send_request(mirror.cast::<Mirror>(), MirrorTarget),
@@ -540,11 +546,17 @@ fn canvas_node_menu_commands_act_on_the_canvas() {
     );
 
     // Delete: the node goes, and so does what it owned.
-    ws.submit_action(canvas, "delete", RemoveCanvasItem { node: copy });
+    ws.submit_action(
+        canvas,
+        "delete",
+        RemoveCanvasItem {
+            node: copy.erase(),
+        },
+    );
     ws.process_pending();
     let remaining = ws.send_request(canvas, CanvasChildren).unwrap_or_default();
     assert!(
-        !remaining.contains(&copy),
+        !remaining.contains(&copy.erase()),
         "the deleted node left the canvas"
     );
     assert!(
@@ -586,7 +598,7 @@ fn placing_a_nested_node_wraps_it_as_a_canvas_item() {
     let children = ws.send_request(canvas, CanvasChildren).unwrap_or_default();
     assert_eq!(children.len(), 1, "the mirror was placed as one item");
 
-    let item: NodeUid<CanvasNode> = children[0];
+    let item = children[0].cast::<CanvasNode>();
     let wrapped = ws
         .send_request(item, CanvasNodeChild)
         .expect("the item wraps something");

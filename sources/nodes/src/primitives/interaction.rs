@@ -20,8 +20,13 @@ struct LastFrameInteractions {
     contains_pointer: bool,
     clicked: bool,
     double_clicked: bool,
+    secondary_clicked: bool,
     dragged: Option<Vector>,
     drag_pos: Option<ScreenPos>,
+    /// Where the press that began the current drag landed.
+    press_origin: Option<ScreenPos>,
+    /// Pointer position while hovering (and during a click).
+    hover_pos: Option<ScreenPos>,
     drag_stopped: bool,
 }
 
@@ -86,18 +91,27 @@ impl Node for InteractionBox {
         let resp = ctx
             .ui
             .interact(region.into(), egui::Id::new(ctx.node.id), self.to_sense());
+        // Where the pointer went down.
+        let ui_press_origin = ctx.ui.input(|i| i.pointer.press_origin());
 
         self.cache.set(LastFrameInteractions {
             hovered: resp.hovered(),
             contains_pointer: resp.contains_pointer(),
             clicked: resp.clicked(),
             double_clicked: resp.double_clicked(),
+            secondary_clicked: resp.secondary_clicked(),
             dragged: resp.dragged().then_some(resp.drag_delta().into()),
             drag_pos: resp
                 .dragged()
                 .then(|| resp.interact_pointer_pos())
                 .flatten()
                 .map(ScreenPos::from),
+            press_origin: resp
+                .dragged()
+                .then_some(ui_press_origin)
+                .flatten()
+                .map(ScreenPos::from),
+            hover_pos: resp.hover_pos().map(ScreenPos::from),
             drag_stopped: resp.drag_stopped(),
         });
 
@@ -118,11 +132,16 @@ defhandlers! { InteractionBox {
                 .is_some_and(|i| ::std::mem::take(&mut i.clicked))
         },
         WasDoubleClicked => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.double_clicked) },
+        WasRightClicked => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.secondary_clicked) },
         WasHovered => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.hovered) },
+        // Pointer position over the sensor this frame (hovering or clicking).
+        PointerPos => (this, _q): Option<ScreenPos> { this.cache.val().as_ref().and_then(|i| i.hover_pos) },
         ContainsPointer => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.contains_pointer) },
         WasDragged => (this, _q): Option<Vector> { this.cache.val().as_ref().and_then(|i| i.dragged) },
         // Live pointer position while a drag is in progress (for rubber-band feedback).
         DragPointerPos => (this, _q): Option<ScreenPos> { this.cache.val().as_ref().and_then(|i| i.drag_pos) },
+        // Where the drag in progress started.
+        DragStartPos => (this, _q): Option<ScreenPos> { this.cache.val().as_ref().and_then(|i| i.press_origin) },
         WasDragReleased => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.drag_stopped) },
     ],
 }}

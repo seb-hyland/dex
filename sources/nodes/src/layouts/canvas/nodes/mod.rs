@@ -1,3 +1,4 @@
+pub mod editors;
 pub mod shapes;
 
 use dex_core::prelude::*;
@@ -6,6 +7,7 @@ use utils::Transient;
 
 use crate::composites::button::Button;
 use crate::layouts::canvas::layout::RemoveCanvasItem;
+
 use crate::layouts::inspector::PlacementCommands;
 use crate::layouts::vertical::VerticalLayout;
 use crate::primitives::{
@@ -14,6 +16,11 @@ use crate::primitives::{
     text::Label,
 };
 use crate::scripting::ValueDelegate;
+
+dex_core::defrequest! {
+    /// Asks a node for its own on-canvas editor, wrapping itself at `canvas_pos` with a suggested `size`.
+    CanvasEditor { canvas_pos: Vector, size: Vector } : NodeUid
+}
 
 #[utils::dynamic_type]
 #[utils::portable]
@@ -132,7 +139,9 @@ impl Node for CanvasNodeInspector {
             ws.submit_action(
                 root,
                 "Deleted canvas node",
-                RemoveCanvasItem { node: target },
+                RemoveCanvasItem {
+                    node: target.erase(),
+                },
             );
         }
 
@@ -505,11 +514,19 @@ defhandlers! { CanvasNode {
             this.committed.pos = s.canvas_pos;
             this.committed.size = s.size;
         },
+        NudgeCanvasItem { delta: Vector } => (this, s) {
+            this.committed.pos = this.committed.pos + s.delta;
+        },
     ],
     requests: [
         // The node's current rendered layout (position + size) in canvas space.
         CanvasNodeConstraints => (this, _q): ConstraintsTuple {
             (*this.pending.val()).unwrap_or(this.committed)
+        },
+        // Canvas-item protocol: the item's bounding region in canvas space.
+        CanvasItemBounds => (this, _q): ScreenRegion {
+            let layout = (*this.pending.val()).unwrap_or(this.committed);
+            ScreenRegion::from_min_size(layout.pos.to_screen_pos(), layout.size)
         },
         // The workspace node this canvas node wraps.
         CanvasNodeChild => (this, _q): NodeUid { this.child },

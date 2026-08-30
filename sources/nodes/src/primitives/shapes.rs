@@ -1,5 +1,10 @@
 use dex_core::prelude::*;
 use egui::Painter;
+use utils::Transient;
+
+use crate::layouts::canvas::nodes::CanvasEditor;
+use crate::layouts::canvas::nodes::editors::{CircleEditor, PathEditor};
+use crate::primitives::color_picker::{PreviewFill, PreviewStroke};
 
 /// A filled, optionally bordered rectangle.
 #[utils::dynamic_type]
@@ -133,7 +138,27 @@ impl Node for Circle {
     }
 }
 
-defhandlers! { Circle {} }
+defhandlers! { Circle {
+    actions: [
+        // Set the circle's radius, so an on-canvas editor can resize it.
+        SetRadius { radius: f32 } => (this, a) {
+            this.radius = a.radius.max(0.0);
+        },
+    ],
+    requests: [
+        // The current radius, for an editor to read before resizing.
+        GetRadius => (this, _q): f32 { this.radius },
+    ],
+    extern_requests: [
+        // Shared with `Path`, so a converted circle keeps its own colours.
+        GetFill => (this, _q): Color { this.fill_color },
+        GetStroke => (this, _q): Stroke { this.border },
+        // A circle is edited by its centre and radius, not a bounding box.
+        CanvasEditor => (_this, q, ctx): NodeUid {
+            CircleEditor::build(ctx.workspace.action_handle(), ctx.id, q.canvas_pos, q.size).erase()
+        },
+    ],
+} }
 
 /// One vertex of a [`Path`], with optional cubic-Bézier control handles.
 #[utils::dynamic_type]
@@ -176,10 +201,19 @@ impl Anchor {
 #[utils::portable]
 pub struct Path {
     pub anchors: Vec<Anchor>,
+    /// Whether the last point joins back to the first.
     pub closed: bool,
-    /// Interior fill. Ignored while the path is open (`closed` is false).
+    /// Whether the interior is filled.
+    pub filled: bool,
     pub fill: Color,
     pub stroke: Stroke,
+    /// Arrowheads at the first / last point (drawn only on an open path).
+    pub start_arrow: bool,
+    pub end_arrow: bool,
+
+    /// Colours being dragged out of a picker.
+    preview_fill: Transient<Color>,
+    preview_stroke: Transient<Color>,
 }
 
 #[utils::dynamic_methods]
@@ -197,28 +231,99 @@ impl Path {
                 Anchor::corner(span),
             ],
             closed: false,
+            filled: false,
             fill: Color::TRANSPARENT,
             stroke,
+            start_arrow: false,
+            end_arrow: false,
+            preview_fill: Transient::default(),
+            preview_stroke: Transient::default(),
         }
     }
 
     /// A closed, filled polygon through `points` (straight corners).
     pub fn polygon(points: Vec<Vector>, fill: Color, stroke: Stroke) -> Self {
-        Self {
-            anchors: points.into_iter().map(Anchor::corner).collect(),
-            closed: true,
+        Self::closed_through(
+            points.into_iter().map(Anchor::corner).collect(),
             fill,
             stroke,
+        )
+    }
+
+    /// A closed, filled polygon through `anchors`.
+    pub fn closed_through(anchors: Vec<Anchor>, fill: Color, stroke: Stroke) -> Self {
+        Self {
+            anchors,
+            closed: true,
+            filled: true,
+            fill,
+            stroke,
+            start_arrow: false,
+            end_arrow: false,
+            preview_fill: Transient::default(),
+            preview_stroke: Transient::default(),
+        }
+    }
+
+    /// A closed path tracing the circle of `radius` around `center`.
+    pub fn circle(center: Vector, radius: f32, fill: Color, stroke: Stroke) -> Self {
+        // 4/3 · tan(π/8), the circle-to-Bézier constant.
+        const KAPPA: f32 = 0.552_284_8;
+        let k = radius * KAPPA;
+        let at = |dx: f32, dy: f32| Vector {
+            x: center.x + dx,
+            y: center.y + dy,
+        };
+        // Clockwise from the east point, each handle along the tangent there.
+        Self::closed_through(
+            vec![
+                Anchor::smooth(at(radius, 0.0), Vector { x: 0.0, y: k }),
+                Anchor::smooth(at(0.0, radius), Vector { x: -k, y: 0.0 }),
+                Anchor::smooth(at(-radius, 0.0), Vector { x: 0.0, y: -k }),
+                Anchor::smooth(at(0.0, -radius), Vector { x: k, y: 0.0 }),
+            ],
+            fill,
+            stroke,
+        )
+    }
+
+    #[dynamic(skip)]
+    pub fn default_fill() -> Color {
+        Color::rgb(150, 190, 230)
+    }
+
+    /// An unfilled outline through `anchors`.
+    pub fn unfilled(anchors: Vec<Anchor>, closed: bool, stroke: Stroke) -> Self {
+        Self {
+            anchors,
+            closed,
+            filled: false,
+            fill: Color::TRANSPARENT,
+            stroke,
+            start_arrow: false,
+            end_arrow: false,
+            preview_fill: Transient::default(),
+            preview_stroke: Transient::default(),
         }
     }
 
     /// An open polyline through `points` (straight corners, no fill).
     pub fn polyline(points: Vec<Vector>, stroke: Stroke) -> Self {
+        Self::open_through(points.into_iter().map(Anchor::corner).collect(), stroke)
+    }
+
+    /// An open, unfilled path through `anchors`, keeping their handles.
+    pub fn open_through(anchors: Vec<Anchor>, stroke: Stroke) -> Self {
         Self {
-            anchors: points.into_iter().map(Anchor::corner).collect(),
+            anchors,
             closed: false,
+            filled: false,
             fill: Color::TRANSPARENT,
             stroke,
+            start_arrow: false,
+            end_arrow: false,
+            preview_fill: Transient::default(),
+            preview_stroke: Transient::default(),
         }
     }
 
@@ -260,6 +365,24 @@ impl Path {
     }
 
     #[dynamic(skip)]
+    /// The interior colour on show: one being picked, else the committed one.
+    pub fn shown_fill(&self) -> Color {
+        self.preview_fill.val().unwrap_or(self.fill)
+    }
+
+    #[dynamic(skip)]
+    /// The outline on show, its colour possibly still being picked.
+    pub fn shown_stroke(&self) -> Stroke {
+        match *self.preview_stroke.val() {
+            Some(color) => Stroke {
+                color,
+                ..self.stroke
+            },
+            None => self.stroke,
+        }
+    }
+
+    #[dynamic(skip)]
     /// Paint the path with its anchor origin at `origin`.
     pub fn paint(&self, painter: &Painter, origin: ScreenPos) -> ScreenRegion {
         let points = self.outline(origin);
@@ -267,19 +390,112 @@ impl Path {
             return ScreenRegion::from_min_size(origin, Vector { x: 0.0, y: 0.0 });
         }
         let region = egui::Rect::from_points(&points);
-        let stroke: egui::Stroke = self.stroke.into();
-        if self.closed {
-            // Fill via ear clipping so concave shapes render correctly.
-            let fill: egui::Color32 = self.fill.into();
+        let shown_stroke = self.shown_stroke();
+        let stroke: egui::Stroke = shown_stroke.into();
+
+        // Fill the interior when asked, closed or not, using ear clipping.
+        if self.filled {
+            let fill: egui::Color32 = self.shown_fill().into();
             if fill.a() > 0 {
                 painter.add(egui::Shape::mesh(fill_mesh(&points, fill)));
             }
-            painter.add(egui::epaint::PathShape::closed_line(points, stroke));
+        }
+        // epaint needs two points to stroke anything, and asserts on fewer.
+        if points.len() < 2 {
+            return region.into();
+        }
+        if self.closed {
+            painter.add(egui::epaint::PathShape::closed_line(points.clone(), stroke));
         } else {
-            painter.add(egui::epaint::PathShape::line(points, stroke));
+            // Stop the stroke short of any head.
+            let head = arrowhead_size(shown_stroke.width);
+            let mut line = points.clone();
+            if self.end_arrow {
+                line = retracted(&line, head * HEAD_OVERLAP);
+            }
+            if self.start_arrow {
+                line.reverse();
+                line = retracted(&line, head * HEAD_OVERLAP);
+                line.reverse();
+            }
+            if line.len() >= 2 {
+                painter.add(egui::epaint::PathShape::line(line, stroke));
+            }
+        }
+
+        // Arrowheads on the open ends, tipped at the outline's real endpoints.
+        if !self.closed && points.len() >= 2 {
+            let color: egui::Color32 = shown_stroke.color.into();
+            let size = arrowhead_size(shown_stroke.width);
+            if self.end_arrow {
+                paint_arrowhead(
+                    painter,
+                    points[points.len() - 2],
+                    points[points.len() - 1],
+                    color,
+                    size,
+                );
+            }
+            if self.start_arrow {
+                paint_arrowhead(painter, points[1], points[0], color, size);
+            }
         }
         region.into()
     }
+}
+
+/// How long an arrowhead is, for a line of `stroke_width`.
+fn arrowhead_size(stroke_width: f32) -> f32 {
+    8.0 + stroke_width * 1.5
+}
+
+/// How far into a head the line is allowed to run, as a fraction of the head's length.
+const HEAD_OVERLAP: f32 = 0.6;
+
+/// `points` with `dist` of length taken off its far end.
+fn retracted(points: &[egui::Pos2], dist: f32) -> Vec<egui::Pos2> {
+    let mut out = points.to_vec();
+    let mut left = dist;
+    while out.len() >= 2 {
+        let n = out.len();
+        let (a, b) = (out[n - 2], out[n - 1]);
+        let seg = (b - a).length();
+        if seg >= left {
+            if seg > 1e-6 {
+                out[n - 1] = a + (b - a) * ((seg - left) / seg);
+            }
+            break;
+        }
+        left -= seg;
+        out.pop();
+    }
+    out
+}
+
+/// Paint a filled triangular arrowhead at `tip`, pointing away from `from`.
+fn paint_arrowhead(
+    painter: &Painter,
+    from: egui::Pos2,
+    tip: egui::Pos2,
+    color: egui::Color32,
+    size: f32,
+) {
+    let dir = tip - from;
+    let len = dir.length();
+    if len < 1e-3 {
+        return;
+    }
+    let dir = dir / len;
+    let perp = egui::vec2(-dir.y, dir.x);
+    let base = tip - dir * size;
+    let half = size * 0.5;
+    let p1 = base + perp * half;
+    let p2 = base - perp * half;
+    painter.add(egui::Shape::convex_polygon(
+        vec![tip, p1, p2],
+        color,
+        egui::Stroke::NONE,
+    ));
 }
 
 /// Triangulate a simple polygon into a filled mesh via ear clipping.
@@ -386,4 +602,172 @@ impl Node for Path {
     }
 }
 
-defhandlers! { Path {} }
+defhandlers! { Path {
+    actions: [
+        // Replace the whole anchor list.
+        SetAnchors { anchors: Vec<Anchor> } => (this, a) {
+            this.anchors = a.anchors;
+        },
+        // Whether the last point joins the first.
+        SetPathClosed { closed: bool } => (this, a) {
+            this.closed = a.closed;
+        },
+        // Whether the interior is filled (independent of `closed`).
+        SetPathFilled { filled: bool } => (this, a) {
+            this.filled = a.filled;
+        },
+        SetPathFill { color: Color } => (this, a) {
+            this.fill = a.color;
+        },
+        SetPathStrokeColor { color: Color } => (this, a) {
+            this.stroke.color = a.color;
+        },
+        SetPathArrows { start: bool, end: bool } => (this, a) {
+            this.start_arrow = a.start;
+            this.end_arrow = a.end;
+        },
+    ],
+    requests: [
+        // The current anchors, for an editor to read before mutating them.
+        GetAnchors => (this, _q): Vec<Anchor> { this.anchors.clone() },
+        IsPathClosed => (this, _q): bool { this.closed },
+        IsPathFilled => (this, _q): bool { this.filled },
+        GetFill => (this, _q): Color { this.fill },
+        GetStroke => (this, _q): Stroke { this.stroke },
+        HasStartArrow => (this, _q): bool { this.start_arrow },
+        HasEndArrow => (this, _q): bool { this.end_arrow },
+    ],
+    extern_requests: [
+        PreviewFill => (this, q): bool {
+            match q.color {
+                Some(color) => this.preview_fill.set(color),
+                None => *this.preview_fill.val_mut() = None,
+            }
+            true
+        },
+        PreviewStroke => (this, q): bool {
+            match q.color {
+                Some(color) => this.preview_stroke.set(color),
+                None => *this.preview_stroke.val_mut() = None,
+            }
+            true
+        },
+        // A path is edited by dragging its anchors, not a bounding box.
+        CanvasEditor => (this, q, ctx): NodeUid {
+            // A two-point open path is a line; anything else edits as a polygon.
+            let is_line = !this.closed && this.anchors.len() == 2;
+            // An open path is something still being drawn, so its points start live.
+            // A closed one is a finished shape, moved as a whole until its inspector says otherwise.
+            PathEditor::build(
+                ctx.workspace.action_handle(),
+                ctx.id,
+                q.canvas_pos,
+                is_line,
+                !this.closed,
+            )
+            .erase()
+        },
+    ],
+} }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A cubic Bézier at `t`, to check the traced outline against the circle it
+    /// is meant to reproduce.
+    fn bezier(p0: Vector, c1: Vector, c2: Vector, p3: Vector, t: f32) -> Vector {
+        let u = 1.0 - t;
+        let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+        Vector {
+            x: a * p0.x + b * c1.x + c * c2.x + d * p3.x,
+            y: a * p0.y + b * c1.y + c * c2.y + d * p3.y,
+        }
+    }
+
+    /// Every point of a converted circle must sit on the circle it came from,
+    /// or the shape jumps the moment it is converted.
+    #[test]
+    fn a_traced_circle_stays_on_the_circle() {
+        let (center, radius) = (Vector { x: 50.0, y: 50.0 }, 40.0);
+        let path = Path::circle(center, radius, Color::WHITE, Stroke::NONE);
+        assert_eq!(path.anchors.len(), 4, "one anchor per quarter arc");
+        assert!(path.closed && path.filled);
+
+        for i in 0..4 {
+            let a = &path.anchors[i];
+            let b = &path.anchors[(i + 1) % 4];
+            let c1 = a.pos + a.out_handle.expect("smooth");
+            let c2 = b.pos + b.in_handle.expect("smooth");
+            for step in 0..=8 {
+                let t = step as f32 / 8.0;
+                let p = bezier(a.pos, c1, c2, b.pos, t);
+                let d = ((p.x - center.x).powi(2) + (p.y - center.y).powi(2)).sqrt();
+                assert!(
+                    (d - radius).abs() < radius * 1e-3,
+                    "arc {i} at t={t} is {d} from the centre, not {radius}"
+                );
+            }
+        }
+    }
+
+    /// Where the line stops, the head must already be at least as wide as the
+    /// line — otherwise the line's shoulders show past the point, which is what
+    /// left a stub of line poking out of the tip.
+    #[test]
+    fn the_line_stops_where_the_head_is_wider_than_it() {
+        for width in [0.5, 1.0, 2.0, 2.5, 4.0, 8.0, 16.0] {
+            let head = arrowhead_size(width);
+            let stops_at = head * HEAD_OVERLAP;
+            // The head is a triangle from `head / 2` wide at its base to a
+            // point, so at `d` from the tip it is `d / 2` to either side.
+            let head_half_width = stops_at / 2.0;
+            assert!(
+                head_half_width >= width / 2.0,
+                "at width {width} the line stops where the head is only \
+                 {head_half_width} wide, against the line's {}",
+                width / 2.0
+            );
+            assert!(stops_at < head, "and it still stops inside the head");
+        }
+    }
+
+    #[test]
+    fn retracting_takes_the_asked_for_length_off_the_end() {
+        let line = vec![egui::pos2(0.0, 0.0), egui::pos2(100.0, 0.0)];
+        let out = retracted(&line, 30.0);
+        assert_eq!(out.len(), 2);
+        assert!((out[1].x - 70.0).abs() < 1e-3 && out[1].y.abs() < 1e-3);
+    }
+
+    /// A flattened curve is a great many short segments, so the walk has to
+    /// cross as many of them as the distance takes.
+    #[test]
+    fn retracting_walks_back_through_short_segments() {
+        let line: Vec<egui::Pos2> = (0..=20).map(|i| egui::pos2(i as f32 * 5.0, 0.0)).collect();
+        let out = retracted(&line, 32.0);
+        assert!((out.last().unwrap().x - 68.0).abs() < 1e-3, "100 - 32");
+        assert!(out.len() < line.len(), "it dropped the points it passed");
+        assert!(out.len() >= 2, "and kept a drawable line");
+    }
+
+    /// Trimming more than there is leaves a point, not a panic or a wrap-around.
+    #[test]
+    fn retracting_past_the_whole_line_leaves_one_point() {
+        let line = vec![egui::pos2(0.0, 0.0), egui::pos2(10.0, 0.0)];
+        let out = retracted(&line, 40.0);
+        assert_eq!(out.len(), 1);
+        assert!((out[0].x).abs() < 1e-3);
+    }
+
+    /// The handles mirror each other at every anchor, so the outline is smooth
+    /// across the joins rather than kinked at the cardinal points.
+    #[test]
+    fn a_traced_circle_is_smooth_at_its_anchors() {
+        let path = Path::circle(Vector { x: 0.0, y: 0.0 }, 30.0, Color::WHITE, Stroke::NONE);
+        for a in &path.anchors {
+            let (i, o) = (a.in_handle.expect("smooth"), a.out_handle.expect("smooth"));
+            assert!((i.x + o.x).abs() < 1e-4 && (i.y + o.y).abs() < 1e-4);
+        }
+    }
+}

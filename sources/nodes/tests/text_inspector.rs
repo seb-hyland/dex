@@ -278,3 +278,66 @@ fn the_boxes_start_from_the_label_they_describe() {
         "the italic box opened ticked, so one click clears it"
     );
 }
+
+/// A pick previews on the label as it is dragged and commits when the pointer
+/// lets go: the label follows the pointer, but takes the colour for real in one
+/// step at the end rather than once per frame.
+#[test]
+fn a_pick_previews_on_the_label_and_commits_on_release() {
+    dex_nodes::scripting::init_python();
+    let ctx = egui::Context::default();
+    let row_h = tick_row_height(&ctx);
+
+    let mut ws = Workspace::new_empty();
+    let label = ws.insert_node_now(Label::new("Hello".to_owned()));
+    ws.process_pending();
+    inspecting(&mut ws, label.erase());
+    frame(&mut ws, &ctx, vec![]);
+
+    // Open the picker, then press in the saturation/value square and hold.
+    let picker_top = 4.0 * (row_h + ROW_GAP);
+    click_at(
+        &mut ws,
+        &ctx,
+        egui::pos2(PICKER_W - 18.0, picker_top + row_h * 0.5),
+    );
+
+    let square_top = picker_top + row_h + PICKER_GAP;
+    let square_h = PICKER_W * SQUARE_ASPECT;
+    let at = egui::pos2(PICKER_W * 0.8, square_top + square_h * 0.2);
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(at)]);
+    frame(&mut ws, &ctx, vec![button(at, true)]);
+    let held = egui::pos2(PICKER_W * 0.6, square_top + square_h * 0.5);
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(held)]);
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(held)]);
+
+    let previewed = rgba(label_of(&ws, label).shown_color());
+    assert_ne!(
+        previewed,
+        rgba(Color::BLACK),
+        "the label draws the colour being dragged out"
+    );
+    assert_eq!(
+        rgba(label_of(&ws, label).color),
+        rgba(Color::BLACK),
+        "but has not taken it for real, so the drag is not yet an undo step"
+    );
+
+    // Let go, and watch every frame after: the colour on show must never fall
+    // back to black while the commit is in flight.
+    frame(&mut ws, &ctx, vec![button(held, false)]);
+    for _ in 0..3 {
+        assert_eq!(
+            rgba(label_of(&ws, label).shown_color()),
+            previewed,
+            "the colour on show does not flash back as the pick commits"
+        );
+        frame(&mut ws, &ctx, vec![]);
+    }
+
+    assert_eq!(
+        rgba(label_of(&ws, label).color),
+        previewed,
+        "letting go commits exactly what was on show"
+    );
+}

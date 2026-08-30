@@ -103,12 +103,7 @@ fn blob() -> Path {
             )
         })
         .collect();
-    Path {
-        anchors,
-        closed: true,
-        fill: Color::rgb(180, 120, 230),
-        stroke: Stroke::new(2.0, Color::rgb(90, 50, 130)),
-    }
+    Path::closed_through(anchors, Color::rgb(180, 120, 230), Stroke::new(2.0, Color::rgb(90, 50, 130)))
 }
 
 /// A heart, from four cubic segments with independent in/out handles.
@@ -119,12 +114,7 @@ fn heart() -> Path {
         anchor(60.0, 28.0, Some((-5.0, -18.0)), Some((5.0, -18.0))),
         anchor(100.0, 20.0, Some((-15.0, -15.0)), Some((20.0, 20.0))),
     ];
-    Path {
-        anchors,
-        closed: true,
-        fill: Color::rgb(230, 70, 100),
-        stroke: Stroke::new(2.0, Color::rgb(150, 30, 60)),
-    }
+    Path::closed_through(anchors, Color::rgb(230, 70, 100), Stroke::new(2.0, Color::rgb(150, 30, 60)))
 }
 
 /// A rounded rectangle built purely from a `Path`: straight edges joined by
@@ -142,12 +132,7 @@ fn rounded_rect() -> Path {
         anchor(0.0, h - r, Some((0.0, k)), None),
         anchor(0.0, r, None, Some((0.0, -k))),
     ];
-    Path {
-        anchors,
-        closed: true,
-        fill: Color::rgb(90, 170, 210),
-        stroke: Stroke::new(2.0, Color::rgb(40, 90, 120)),
-    }
+    Path::closed_through(anchors, Color::rgb(90, 170, 210), Stroke::new(2.0, Color::rgb(40, 90, 120)))
 }
 
 struct Gallery {

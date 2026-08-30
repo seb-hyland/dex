@@ -13,11 +13,7 @@ const MIN_SIDE: f32 = 10.0;
 
 /**
     A labelled tick box that owns its own state.
-
-    Poll it with [`TakeToggled`], which reports the state the user just chose.
-    Reading [`IsChecked`] straight after a click would still see the old value —
-    the field only catches up once the queued action lands. The box consumes its
-    own clicks to toggle, so a click is not left behind to be polled again.
+    Read it with [`IsChecked`].
 */
 #[utils::dynamic_type]
 #[utils::portable]
@@ -59,6 +55,11 @@ impl Checkbox {
         };
         configure(&mut tick);
         ws.insert_node(tick)
+    }
+
+    /// What the box is showing: a click the user has just made, until the action carrying it lands and `checked` catches up.
+    fn shown(&self) -> bool {
+        self.toggled.val().unwrap_or(self.checked)
     }
 }
 
@@ -123,7 +124,7 @@ impl Node for Checkbox {
             .send_request(self.interaction, WasHovered)
             .unwrap_or(false);
         // The choice the user just made outranks the value still in flight.
-        let checked = self.toggled.val().unwrap_or(self.checked);
+        let checked = self.shown();
 
         let box_tl = origin
             + Vector {
@@ -187,11 +188,14 @@ impl Node for Checkbox {
 
 defhandlers! { Checkbox {
     actions: [
-        SetChecked { on: bool } => (this, s) { this.checked = s.on },
+        // Landing the click clears the value that was standing in for it.
+        SetChecked { on: bool } => (this, s) {
+            this.checked = s.on;
+            *this.toggled.val_mut() = None;
+        },
     ],
     requests: [
-        // The state the user just chose, consumed so it is acted on once.
-        TakeToggled => (this, _q): Option<bool> { this.toggled.val_mut().take() },
-        IsChecked => (this, _q): bool { this.checked },
+        // What the box is showing, click included. Polled, never consumed.
+        IsChecked => (this, _q): bool { this.shown() },
     ],
 }}

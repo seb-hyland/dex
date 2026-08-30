@@ -220,6 +220,51 @@ pub fn registered_messages() -> (Vec<&'static str>, Vec<&'static str>) {
 // Macros
 // ======================================================================
 
+/// Declare a request type on its own, answered by no node in particular.
+#[macro_export]
+macro_rules! defrequest {
+    ($(#[$meta:meta])* $name:ident $({ $($f:ident : $ty:ty),* $(,)? })? : $ret:ty) => {
+        $crate::defhandlers!(@def_struct $(#[$meta])* $name $({ $($f : $ty),* })?);
+        impl $crate::messages::TypedRequestBody for $name {
+            type Response = $ret;
+        }
+
+        ::dex_dynamic::__rt::inventory::submit! {
+            $crate::messages::DynamicRequest {
+                name: ::core::stringify!($name),
+                path: ::core::module_path!(),
+                matches: |__obj| {
+                    use ::pyo3::prelude::*;
+                    __obj.is_instance_of::<$name>()
+                },
+                build: |__obj| {
+                    use ::pyo3::prelude::*;
+                    ::core::result::Result::Ok(
+                        ::std::boxed::Box::new(__obj.extract::<$name>()?),
+                    )
+                },
+                to_python: |__body, __py| {
+                    use ::pyo3::prelude::*;
+                    ::utils::AsAny::as_any_ref(__body)
+                        .downcast_ref::<$name>()
+                        .map(|__v| {
+                            ::pyo3::Py::new(__py, ::core::clone::Clone::clone(__v))
+                                .map(|__o| __o.into_any())
+                        })
+                },
+                response_from_python: |__obj| {
+                    let __v = <$ret as $crate::scripting::FromDynamic>::from_dynamic(__obj)?;
+                    ::core::result::Result::Ok(::std::boxed::Box::new(__v) as ::std::boxed::Box<dyn ::std::any::Any>)
+                },
+                respond: |__any, __py| {
+                    use $crate::scripting::IntoDynamic;
+                    $crate::messages::downcast_resp::<$ret>(__any).into_dynamic(__py)
+                },
+            }
+        }
+    };
+}
+
 /**
     Declare a node's action and request handlers.
 
@@ -333,45 +378,8 @@ macro_rules! defhandlers {
 
         // New request types ----------------------------------------
         $($(
-            $crate::defhandlers!(@def_struct $r_name $({ $($rf : $rty),* })?);
-            impl $crate::messages::TypedRequestBody for $r_name {
-                type Response = $rret;
-            }
+            $crate::defrequest!($r_name $({ $($rf : $rty),* })? : $rret);
             impl $crate::messages::RequestFor<$node> for $r_name {}
-
-            ::dex_dynamic::__rt::inventory::submit! {
-                $crate::messages::DynamicRequest {
-                    name: ::core::stringify!($r_name),
-                    path: ::core::module_path!(),
-                    matches: |__obj| {
-                        use ::pyo3::prelude::*;
-                        __obj.is_instance_of::<$r_name>()
-                    },
-                    build: |__obj| {
-                        use ::pyo3::prelude::*;
-                        ::core::result::Result::Ok(
-                            ::std::boxed::Box::new(__obj.extract::<$r_name>()?),
-                        )
-                    },
-                    to_python: |__body, __py| {
-                        use ::pyo3::prelude::*;
-                        ::utils::AsAny::as_any_ref(__body)
-                            .downcast_ref::<$r_name>()
-                            .map(|__v| {
-                                ::pyo3::Py::new(__py, ::core::clone::Clone::clone(__v))
-                                    .map(|__o| __o.into_any())
-                            })
-                    },
-                    response_from_python: |__obj| {
-                        let __v = <$rret as $crate::scripting::FromDynamic>::from_dynamic(__obj)?;
-                        ::core::result::Result::Ok(::std::boxed::Box::new(__v) as ::std::boxed::Box<dyn ::std::any::Any>)
-                    },
-                    respond: |__any, __py| {
-                        use $crate::scripting::IntoDynamic;
-                        $crate::messages::downcast_resp::<$rret>(__any).into_dynamic(__py)
-                    },
-                }
-            }
         )*)?
         $($(
             impl $crate::messages::RequestFor<$node> for $er_name {}
@@ -412,7 +420,8 @@ macro_rules! defhandlers {
     };
 
     // Define a message struct, with named fields or as a unit struct.
-    (@def_struct $name:ident { $($f:ident : $ty:ty),* $(,)? }) => {
+    (@def_struct $(#[$meta:meta])* $name:ident { $($f:ident : $ty:ty),* $(,)? }) => {
+        $(#[$meta])*
         #[::pyo3::pyclass(from_py_object, module = "dex")]
         #[derive(Clone, ::serde::Serialize, ::serde::Deserialize)]
         pub struct $name { $(pub $f : $ty),* }
@@ -472,7 +481,8 @@ macro_rules! defhandlers {
 
         $crate::defhandlers!(@register_class $name { $($f : $ty),* });
     };
-    (@def_struct $name:ident) => {
+    (@def_struct $(#[$meta:meta])* $name:ident) => {
+        $(#[$meta])*
         #[::pyo3::pyclass(from_py_object, module = "dex")]
         #[derive(Clone, ::serde::Serialize, ::serde::Deserialize)]
         pub struct $name;

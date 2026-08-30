@@ -32,10 +32,8 @@ pub struct ColorPicker {
     pub font: Font,
     pub text_color: Color,
 
-    /// The colour under the pointer, until the gesture choosing it ends.
+    /// The colour under the pointer, until it is committed.
     live: Transient<Color>,
-    /// A committed colour nobody has picked up yet.
-    picked: Transient<Color>,
     /// Hue and saturation do not survive a round trip through black or grey,
     /// so the coordinates that produced the current colour are kept.
     coords: Transient<CoordCache>,
@@ -59,7 +57,6 @@ impl ColorPicker {
             font: Font::proportional(13.0),
             text_color: Color::BLACK,
             live: Transient::default(),
-            picked: Transient::default(),
             coords: Transient::default(),
         }
     }
@@ -246,10 +243,13 @@ impl Node for ColorPicker {
             self.move_to(coords);
         }
         if settled {
-            // One action for the whole gesture, so undo steps back over it once.
-            let color = self.live.val_mut().take().unwrap_or(self.color);
-            self.picked.set(color);
-            ctx.submit_action_for_self::<Self, _>(SetPickedColor { color }, "Picked a colour");
+            // `live` is left standing until that action lands, so the colour on show never flickers.
+            ctx.submit_action_for_self::<Self, _>(
+                SetPickedColor {
+                    color: self.shown(),
+                },
+                "Picked a colour",
+            );
         }
 
         DrawResult::Complete {
@@ -266,15 +266,83 @@ impl Node for ColorPicker {
 
 defhandlers! { ColorPicker {
     actions: [
-        SetPickedColor { color: Color } => (this, s) { this.color = s.color },
+        SetPickedColor { color: Color } => (this, s) {
+            this.color = s.color;
+            *this.live.val_mut() = None;
+        },
         SetExpanded { on: bool } => (this, s) { this.expanded = s.on },
     ],
     requests: [
-        // A colour the user settled on, consumed so it is applied once.
-        TakePickedColor => (this, _q): Option<Color> { this.picked.val_mut().take() },
-        PickedColor => (this, _q): Color { this.color },
+        // The colour on show.
+        PickedColor => (this, _q): Color { this.shown() },
+        // Whether a gesture is still choosing, so a caller can hold off until the user lets go.
+        IsPicking => (this, _q): bool { this.live.val().is_some() },
     ],
 }}
+
+dex_core::defrequest! {
+    /// Show `color` in place of the node's own fill, or drop the preview with `None`.
+    PreviewFill { color: Option<Color> } : bool
+}
+
+dex_core::defrequest! {
+    /// The outline counterpart of [`PreviewFill`].
+    PreviewStroke { color: Option<Color> } : bool
+}
+
+/// Which of a node's two colours a picker stands for.
+#[derive(Clone, Copy)]
+pub enum ColorSlot {
+    /// The interior, or a label's glyphs.
+    Fill,
+    /// The outline.
+    Stroke,
+}
+
+impl ColorSlot {
+    /// Show `color` on `target`, or drop the preview with `None`.
+    fn preview(self, ws: &Workspace, target: NodeUid, color: Option<Color>) {
+        match self {
+            Self::Fill => {
+                ws.send_request(target, PreviewFill { color });
+            }
+            Self::Stroke => {
+                ws.send_request(target, PreviewStroke { color });
+            }
+        }
+    }
+}
+
+fn channels(c: Color) -> [u8; 4] {
+    [c.r, c.g, c.b, c.a]
+}
+
+/// Drive a picker over the value it stands for, and hand back the colour to commit once the user lets go.
+pub fn repicked(
+    ws: &Workspace,
+    picker: NodeUid<ColorPicker>,
+    target: NodeUid,
+    slot: ColorSlot,
+    actual: Color,
+) -> Option<Color> {
+    let shown = ws.send_request(picker, PickedColor)?;
+    if ws.send_request(picker, IsPicking).unwrap_or(false) {
+        slot.preview(ws, target, Some(shown));
+        return None;
+    }
+    if channels(shown) == channels(actual) {
+        // The commit has landed; the target shows this colour for real now.
+        slot.preview(ws, target, None);
+        return None;
+    }
+    Some(shown)
+}
+
+/// Drop any preview a picker left on `target`, for an inspector going away
+/// mid-gesture — nothing else would be left to clear it.
+pub fn drop_preview(ws: &Workspace, target: NodeUid, slot: ColorSlot) {
+    slot.preview(ws, target, None);
+}
 
 /// Which gradient a bar shows.
 #[derive(Clone, Copy)]

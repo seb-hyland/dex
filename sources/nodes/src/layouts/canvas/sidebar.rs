@@ -9,13 +9,14 @@ use crate::{
         HorizontalLayout, LayoutChild,
         canvas::{
             layout::AddCanvasItem,
-            nodes::shapes::{CanvasCircle, CanvasRect},
+            nodes::shapes::CanvasRect,
         },
         desktops::Desktops,
     },
     primitives::{
         file_browser::FileBrowser,
         interaction::WasClicked,
+        shapes::{Circle, Path},
         text::{CodeEditor, GetCommittedText, Label, LabelEditable},
         typst::TypstEditor,
     },
@@ -36,7 +37,7 @@ pub struct CanvasSidebar {
 impl CanvasSidebar {
     /// Labels for the option buttons, in order. The button at index `i` inserts
     /// the node produced by [`CanvasSidebar::dispatch`] for that index.
-    pub const OPTIONS: [&'static str; 7] = [
+    pub const OPTIONS: [&'static str; 9] = [
         "Text",
         "Rect",
         "Circle",
@@ -44,6 +45,8 @@ impl CanvasSidebar {
         "Lambda",
         "Canvas Lambda",
         "File",
+        "Polygon",
+        "Line",
     ];
 
     /// Build the sidebar and its option buttons into `ws`.
@@ -74,7 +77,10 @@ impl CanvasSidebar {
                 DEFAULT,
             ),
             1 => (Arc::new(CanvasRect), DEFAULT),
-            2 => (Arc::new(CanvasCircle), DEFAULT),
+            2 => (
+                Arc::new(Circle::new(40.0, Color::rgb(120, 170, 220))),
+                Vector { x: 80.0, y: 80.0 },
+            ),
             3 => (
                 Arc::new(TypstEditor::new(ws)),
                 Vector { x: 280.0, y: 220.0 },
@@ -87,6 +93,26 @@ impl CanvasSidebar {
             6 => (
                 Arc::new(FileBrowser::new(ws)),
                 Vector { x: 320.0, y: 240.0 },
+            ),
+            7 => (
+                Arc::new(Path::polygon(
+                    vec![
+                        Vector::new(0.0, 0.0),
+                        Vector::new(90.0, 0.0),
+                        Vector::new(90.0, 90.0),
+                        Vector::new(0.0, 90.0),
+                    ],
+                    Path::default_fill(),
+                    Stroke::new(2.0, Color::rgb(60, 90, 130)),
+                )),
+                Vector { x: 90.0, y: 90.0 },
+            ),
+            8 => (
+                Arc::new(Path::polyline(
+                    vec![Vector::new(0.0, 0.0), Vector::new(140.0, 60.0)],
+                    Stroke::new(2.5, Color::rgb(80, 80, 90)),
+                )),
+                Vector { x: 140.0, y: 60.0 },
             ),
             _ => return None,
         };
