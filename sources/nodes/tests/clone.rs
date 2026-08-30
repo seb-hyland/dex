@@ -72,7 +72,10 @@ fn a_copy_reaches_the_whole_owned_subtree() {
 
     // A canvas node owns its child plus ten sensors, and all of them are copied.
     let copied_child = ws
-        .send_request(copy.cast::<CanvasNode>(), dex_nodes::layouts::canvas::nodes::CanvasNodeChild)
+        .send_request(
+            copy.cast::<CanvasNode>(),
+            dex_nodes::layouts::canvas::nodes::CanvasNodeChild,
+        )
         .expect("the copy answers for its child");
     assert_ne!(copied_child, label.erase(), "the child was copied too");
     assert_eq!(
@@ -269,8 +272,17 @@ fn a_copy_of_a_script_node_gets_its_own_python_state() {
             .unwrap()
             .extract()
             .unwrap();
-        let copied_hits: Vec<i64> = copied_obj.bind(py).getattr("hits").unwrap().extract().unwrap();
-        assert_eq!(original_hits, Vec::<i64>::new(), "the original is untouched");
+        let copied_hits: Vec<i64> = copied_obj
+            .bind(py)
+            .getattr("hits")
+            .unwrap()
+            .extract()
+            .unwrap();
+        assert_eq!(
+            original_hits,
+            Vec::<i64>::new(),
+            "the original is untouched"
+        );
         assert_eq!(copied_hits, vec![1], "the copy carries its own mutation");
     });
 }
@@ -339,7 +351,10 @@ fn a_script_node_declares_what_it_owns_and_its_handles_follow_the_copy() {
                     .get_item(0)
                     .unwrap(),
             };
-            value.extract::<dex_core::scripting::NodeHandle>().unwrap().0
+            value
+                .extract::<dex_core::scripting::NodeHandle>()
+                .unwrap()
+                .0
         })
     };
 
@@ -377,9 +392,7 @@ fn a_script_node_declares_what_it_owns_and_its_handles_follow_the_copy() {
 /// active slot to a neighbour.
 #[test]
 fn closing_a_tab_removes_its_canvas_and_reactivates_a_neighbour() {
-    use dex_nodes::layouts::desktops::{
-        ActiveCanvas, AddCanvas, CloseCanvas, Desktops, Tabs,
-    };
+    use dex_nodes::layouts::desktops::{ActiveCanvas, AddCanvas, CloseCanvas, Desktops, Tabs};
 
     let mut ws = Desktops::new_workspace();
     let root = ws.root().cast::<Desktops>();
@@ -440,7 +453,10 @@ fn closing_the_last_tab_opens_an_empty_desktop() {
 
     let remaining = ws.send_request(root, Tabs).unwrap_or_default();
     assert_eq!(remaining.len(), 1, "a replacement desktop takes its place");
-    assert_ne!(remaining[0], tabs[0], "and it is a new tab, not the closed one");
+    assert_ne!(
+        remaining[0], tabs[0],
+        "and it is a new tab, not the closed one"
+    );
 
     let active = ws
         .send_request(root, ActiveCanvas)
@@ -453,5 +469,131 @@ fn closing_the_last_tab_opens_an_empty_desktop() {
     assert!(
         ws.get_node(active.erase()).is_some(),
         "the replacement canvas is live"
+    );
+}
+
+/// The canvas-node menu commands: delete drops the node, copy duplicates it
+/// onto the same surface, and mirror adds a live view of the same child.
+#[test]
+fn canvas_node_menu_commands_act_on_the_canvas() {
+    use dex_nodes::layouts::canvas::layout::{
+        AdoptCanvasNode, Canvas, CanvasChildren, PlaceOnCanvas, RemoveCanvasItem,
+    };
+    use dex_nodes::layouts::canvas::nodes::{CanvasNode, CanvasNodeChild};
+    use dex_nodes::layouts::mirror::{Mirror, MirrorTarget};
+
+    let mut ws = workspace();
+    let canvas = Canvas::build(ws.action_handle());
+    let child = ws.insert_node(Label::new("body".to_owned()));
+    let node = CanvasNode::build(
+        ws.action_handle(),
+        child.erase(),
+        Vector::splat(0.0),
+        Vector::splat(100.0),
+    );
+    ws.process_pending();
+    ws.submit_action(canvas, "seed", AdoptCanvasNode { node });
+    ws.process_pending();
+    assert_eq!(
+        ws.send_request(canvas, CanvasChildren).unwrap_or_default(),
+        vec![node],
+        "the canvas starts with the one node"
+    );
+
+    // Copy: a second node, wrapping its own copy of the child.
+    let copy = ws.deep_clone(node.erase()).cast::<CanvasNode>();
+    ws.submit_action(
+        canvas,
+        "copy",
+        PlaceOnCanvas {
+            node: copy.erase(),
+            size: Vector::splat(100.0),
+        },
+    );
+    ws.process_pending();
+    let children = ws.send_request(canvas, CanvasChildren).unwrap_or_default();
+    assert_eq!(children.len(), 2, "the copy joined the canvas");
+    let copied_child = ws
+        .send_request(copy, CanvasNodeChild)
+        .expect("the copy wraps a child");
+    assert_ne!(
+        copied_child,
+        child.erase(),
+        "a copy owns its child, so it got its own"
+    );
+
+    // Mirror: a node wrapping a Mirror that points at the original child.
+    let mirror = ws.insert_node_dyn(Arc::new(Mirror::new(child.erase())));
+    let mirror_node = CanvasNode::build(
+        ws.action_handle(),
+        mirror,
+        Vector::splat(24.0),
+        Vector::splat(100.0),
+    );
+    ws.process_pending();
+    ws.submit_action(canvas, "mirror", AdoptCanvasNode { node: mirror_node });
+    ws.process_pending();
+    assert_eq!(
+        ws.send_request(mirror.cast::<Mirror>(), MirrorTarget),
+        Some(child.erase()),
+        "the mirror points back at the original child, not a copy"
+    );
+
+    // Delete: the node goes, and so does what it owned.
+    ws.submit_action(canvas, "delete", RemoveCanvasItem { node: copy });
+    ws.process_pending();
+    let remaining = ws.send_request(canvas, CanvasChildren).unwrap_or_default();
+    assert!(
+        !remaining.contains(&copy),
+        "the deleted node left the canvas"
+    );
+    assert!(
+        ws.get_node(copy.erase()).is_none(),
+        "and is gone from the registry"
+    );
+    assert!(
+        ws.get_node(copied_child).is_none(),
+        "along with the child it owned"
+    );
+}
+
+/// A node that is not itself a canvas item — a lambda's output, say — can still
+/// be copied or mirrored onto the canvas: it gets wrapped in a fresh item.
+#[test]
+fn placing_a_nested_node_wraps_it_as_a_canvas_item() {
+    use dex_nodes::layouts::canvas::layout::{Canvas, CanvasChildren, PlaceOnCanvas};
+    use dex_nodes::layouts::canvas::nodes::{CanvasNode, CanvasNodeChild};
+    use dex_nodes::layouts::mirror::{Mirror, MirrorTarget};
+
+    let mut ws = workspace();
+    let canvas = Canvas::build(ws.action_handle());
+    // A plain node, as a lambda output would be — no canvas layout of its own.
+    let nested = ws.insert_node(Label::new("output".to_owned()));
+    ws.process_pending();
+
+    // Mirror it onto the canvas.
+    let mirror = ws.insert_node_dyn(Arc::new(Mirror::new(nested.erase())));
+    ws.submit_action(
+        canvas,
+        "mirror",
+        PlaceOnCanvas {
+            node: mirror,
+            size: Vector::splat(120.0),
+        },
+    );
+    ws.process_pending();
+
+    let children = ws.send_request(canvas, CanvasChildren).unwrap_or_default();
+    assert_eq!(children.len(), 1, "the mirror was placed as one item");
+
+    let item: NodeUid<CanvasNode> = children[0];
+    let wrapped = ws
+        .send_request(item, CanvasNodeChild)
+        .expect("the item wraps something");
+    assert_eq!(wrapped, mirror, "it wraps the mirror, not the node itself");
+    assert_eq!(
+        ws.send_request(mirror.cast::<Mirror>(), MirrorTarget),
+        Some(nested.erase()),
+        "and the mirror still points at the original"
     );
 }

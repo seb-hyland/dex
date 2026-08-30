@@ -145,6 +145,14 @@ impl ScreenRegion {
         Rect::from(*self).size().into()
     }
 
+    /// Whether `point` falls inside this region.
+    pub fn contains(self, point: ScreenPos) -> bool {
+        point.x >= self.min.x
+            && point.x <= self.max.x
+            && point.y >= self.min.y
+            && point.y <= self.max.y
+    }
+
     pub fn union(self, other: ScreenRegion) -> Self {
         Self::from(Rect::from(self).union(other.into()))
     }

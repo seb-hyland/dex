@@ -4,9 +4,13 @@ use dex_core::prelude::*;
 use egui::{Color32, Stroke};
 use utils::Transient;
 
+use crate::composites::button::Button;
+use crate::layouts::canvas::layout::RemoveCanvasItem;
+use crate::layouts::vertical::VerticalLayout;
 use crate::primitives::{
-    interaction::{ContainsPointer, InteractionBox, WasDragged, WasHovered},
+    interaction::{ContainsPointer, InteractionBox, TakeClicked, WasDragged, WasHovered},
     shapes::Rect,
+    text::Label,
 };
 use crate::scripting::ValueDelegate;
 
@@ -21,7 +25,7 @@ pub struct CanvasNode {
 
     /// Hover sensor covering the node + margin.
     proximity: NodeUid<InteractionBox>,
-    /// Drag/hover sensor for the move handle.
+    /// Drag/hover sensor for this item's move handle.
     move_sensor: NodeUid<InteractionBox>,
     /// The eight resize grips: tl, tr, bl, br, top, bottom, left, right.
     grips: [NodeUid<InteractionBox>; 8],
@@ -37,6 +41,7 @@ impl CanvasNode {
         size: Vector,
     ) -> NodeUid<CanvasNode> {
         let sensor = |kind| ws.insert_node(kind);
+
         ws.insert_node(Self {
             child,
             committed: ConstraintsTuple {
@@ -51,6 +56,98 @@ impl CanvasNode {
     }
 }
 
+/// What a canvas item adds to the inspector.
+#[utils::portable]
+pub struct CanvasNodeInspector {
+    #[uid_ref]
+    target: NodeUid<CanvasNode>,
+    column: NodeUid<VerticalLayout>,
+    delete_button: NodeUid<Button>,
+}
+
+impl CanvasNodeInspector {
+    fn build(
+        ctx: NodeContext,
+        target: NodeUid<CanvasNode>,
+        child: NodeUid,
+    ) -> NodeUid<CanvasNodeInspector> {
+        let command = |label: &str| {
+            Button::build_with(
+                ctx.workspace.action_handle(),
+                Label::new(label.to_owned()),
+                |b| {
+                    b.padding = 4.0;
+                    b.corner_radius = 3.0;
+                    b.border = dex_core::Stroke::NONE;
+                    b.fill_width = true;
+                },
+            )
+        };
+        let delete_button = command("Delete");
+        let child_ctx = NodeContext {
+            id: child,
+            workspace: ctx.workspace,
+        };
+        let target_inspector = ctx
+            .workspace
+            .get_node(child)
+            .filter(|_| child != target.erase())
+            .and_then(|child_node| child_node.build_inspector(child_ctx));
+        let column = VerticalLayout::build(
+            ctx.workspace.action_handle(),
+            [Some(delete_button.erase()), target_inspector]
+                .into_iter()
+                .flatten()
+                .collect(),
+            2.0,
+        );
+        ctx.workspace.insert_node(Self {
+            target,
+            column,
+            delete_button,
+        })
+    }
+}
+
+#[utils::dynamic_node(skip)]
+impl Node for CanvasNodeInspector {
+    fn type_name(&self) -> String {
+        "Canvas Item Menu".into()
+    }
+
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
+        let constraints = ctx.constraints;
+        let drawn = ctx.draw_workspace_node(self.column.erase(), constraints);
+
+        let ws = ctx.node.workspace;
+        // Taken, so a command fires once: these rows stop being drawn the
+        // moment the menu closes, and a plain read would repeat the last click.
+        let taken = |button: NodeUid<Button>| {
+            ws.send_request(button.erase(), TakeClicked)
+                .unwrap_or(false)
+        };
+        let root = ws.root();
+        let target = self.target;
+
+        if taken(self.delete_button) {
+            ws.submit_action(
+                root,
+                "Deleted canvas node",
+                RemoveCanvasItem { node: target },
+            );
+        }
+
+        drawn.unwrap_or(DrawResult::Complete { region: None })
+    }
+
+    fn on_delete(&self, ctx: NodeContext) {
+        ctx.workspace.delete_node(self.column.erase());
+        ctx.workspace.delete_node(self.delete_button.erase());
+    }
+}
+
+defhandlers! { CanvasNodeInspector {} }
+
 #[utils::dynamic_node]
 impl Node for CanvasNode {
     fn type_name(&self) -> String {
@@ -62,7 +159,8 @@ impl Node for CanvasNode {
         const GRIP_RADIUS: f32 = 4.0;
         const MIN_SIZE: f32 = 24.0;
         const HANDLE_SIZE: Vector = Vector { x: 12.0, y: 18.0 };
-        const HANDLE_OFFSET: f32 = 22.0;
+        // Beyond the inspector's lens, which sits at 22.
+        const HANDLE_OFFSET: f32 = 42.0;
         const VISIBILITY_MARGIN: f32 = 16.0;
 
         // Muted palette, matching the discreet canvas affordances.
@@ -194,7 +292,7 @@ impl Node for CanvasNode {
                 }
             }
 
-            // Move handle sensor (offset to the left of the node).
+            // Move handle, in the margin beyond the inspector's lens.
             ctx.draw_workspace_node(
                 self.move_sensor.erase(),
                 DrawConstraints {
@@ -301,38 +399,37 @@ impl Node for CanvasNode {
                 );
             }
 
-            // Move handle plate + dot grid, following the preview top-left.
+            // Move handle.
             let handle_tl = display_tl - handle_offset;
-            let plate = Rect {
+            Rect {
                 size: HANDLE_SIZE,
                 corner_radius: 3.0,
                 fill_color: if handle_hovered {
                     Color32::from_gray(224)
                 } else {
-                    Color32::from_rgba_unmultiplied(0, 0, 0, 10)
+                    Color32::from_rgba_unmultiplied(0, 0, 0, 12)
                 }
                 .into(),
                 border: Stroke::NONE.into(),
                 stroke_kind: StrokeKind::Middle,
-            };
-            plate.paint(ctx.ui.painter(), handle_tl);
+            }
+            .paint(ctx.ui.painter(), handle_tl);
+
             let dot_color = if handle_hovered {
-                Color32::from_gray(110)
+                Color32::from_gray(100)
             } else {
                 Color32::from_gray(150)
             };
-            let cols = [HANDLE_SIZE.x * 0.34, HANDLE_SIZE.x * 0.66];
-            let rows = [
-                HANDLE_SIZE.y * 0.26,
-                HANDLE_SIZE.y * 0.5,
-                HANDLE_SIZE.y * 0.74,
-            ];
-            for cx in cols {
-                for cy in rows {
-                    let center = handle_tl + Vector { x: cx, y: cy };
+            for cx in [HANDLE_SIZE.x * 0.34, HANDLE_SIZE.x * 0.66] {
+                for cy in [
+                    HANDLE_SIZE.y * 0.26,
+                    HANDLE_SIZE.y * 0.5,
+                    HANDLE_SIZE.y * 0.74,
+                ] {
+                    let centre = handle_tl + Vector { x: cx, y: cy };
                     ctx.ui
                         .painter()
-                        .circle_filled(center.into(), 1.4, dot_color);
+                        .circle_filled(centre.into(), 1.4, dot_color);
                 }
             }
         }
@@ -340,6 +437,10 @@ impl Node for CanvasNode {
         DrawResult::Complete {
             region: Some(ScreenRegion::from_min_size(display_tl, display.size)),
         }
+    }
+
+    fn build_inspector(&self, ctx: NodeContext) -> Option<NodeUid> {
+        Some(CanvasNodeInspector::build(ctx, ctx.id.cast(), self.child).erase())
     }
 
     fn deref_target(&self) -> Option<NodeUid> {

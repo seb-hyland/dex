@@ -5,6 +5,8 @@ use utils::Reset;
 #[derive(Clone, Serialize, Deserialize)]
 pub enum LayoutChild {
     Id(NodeUid),
+    /// Like [`LayoutChild::Id`], but content the user can point at.
+    Inspectable(NodeUid),
     Node(Arc<dyn Node>),
 }
 
@@ -24,6 +26,9 @@ impl LayoutChild {
             LayoutChild::Id(uid) => ctx
                 .draw_workspace_node(*uid, constraints)
                 .unwrap_or(DrawResult::Complete { region: None }),
+            LayoutChild::Inspectable(uid) => ctx
+                .draw_inspectable_node(*uid, constraints)
+                .unwrap_or(DrawResult::Complete { region: None }),
             LayoutChild::Node(node) => ctx.draw_node(&**node, constraints),
         }
     }
@@ -39,7 +44,7 @@ impl dex_core::scripting::FromDynamic for LayoutChild {
 impl dex_core::scripting::IntoDynamic for LayoutChild {
     fn into_dynamic(self, py: pyo3::Python<'_>) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
         match self {
-            LayoutChild::Id(uid) => uid.into_dynamic(py),
+            LayoutChild::Id(uid) | LayoutChild::Inspectable(uid) => uid.into_dynamic(py),
             LayoutChild::Node(node) => node.into_dynamic(py),
         }
     }
@@ -48,7 +53,7 @@ impl dex_core::scripting::IntoDynamic for LayoutChild {
 impl Reset for LayoutChild {
     fn reset(&self) {
         match self {
-            LayoutChild::Id(uid) => uid.reset(),
+            LayoutChild::Id(uid) | LayoutChild::Inspectable(uid) => uid.reset(),
             LayoutChild::Node(node) => node.reset(),
         }
     }
@@ -57,14 +62,14 @@ impl Reset for LayoutChild {
 impl dex_core::refs::NodeRefs for LayoutChild {
     fn owned_refs(&self, f: &mut dyn FnMut(NodeUid)) {
         match self {
-            LayoutChild::Id(uid) => f(*uid),
+            LayoutChild::Id(uid) | LayoutChild::Inspectable(uid) => f(*uid),
             LayoutChild::Node(node) => node.owned_refs(f),
         }
     }
 
     fn remap_refs(&mut self, map: &std::collections::HashMap<NodeUid, NodeUid>) {
         match self {
-            LayoutChild::Id(uid) => {
+            LayoutChild::Id(uid) | LayoutChild::Inspectable(uid) => {
                 if let Some(replacement) = map.get(uid) {
                     *uid = *replacement;
                 }

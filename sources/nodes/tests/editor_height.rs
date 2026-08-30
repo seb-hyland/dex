@@ -29,7 +29,10 @@ fn drawn_height(node: CodeEditor, offered: AxisConstraint) -> f32 {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let mut ui = ui.new_child(egui::UiBuilder::new());
                 let mut draw_ctx = DrawContext::for_ui(
-                    NodeContext { id: uid, workspace: &ws },
+                    NodeContext {
+                        id: uid,
+                        workspace: &ws,
+                    },
                     DrawConstraints {
                         pos: ScreenPos { x: 0.0, y: 0.0 },
                         x: Some(AxisConstraint::Exactly(600.0)),
@@ -65,7 +68,10 @@ fn an_editor_takes_its_row_count_not_the_whole_column() {
 
     // Content far longer than six rows does not make it grow: the internal
     // scroll area absorbs the overflow.
-    let mut long = CodeEditor::new((0..200).map(|i| format!("line {i}\n")).collect(), "python".to_owned());
+    let mut long = CodeEditor::new(
+        (0..200).map(|i| format!("line {i}\n")).collect(),
+        "python".to_owned(),
+    );
     long.rows = 6;
     let with_long_content = drawn_height(long, AxisConstraint::AtMost(1800.0));
     // A few px of difference is chrome (a horizontal scrollbar for the longer
@@ -89,7 +95,10 @@ fn an_editor_takes_its_row_count_not_the_whole_column() {
     filling.rows = 6;
     filling.fill = true;
     let filled = drawn_height(filling, AxisConstraint::Exactly(1800.0));
-    assert!(filled > 1000.0, "fill should claim the column, took {filled}");
+    assert!(
+        filled > 1000.0,
+        "fill should claim the column, took {filled}"
+    );
 }
 
 /// The reported symptom, in the shape a lambda builds: an editor stacked in a
@@ -137,7 +146,10 @@ fn an_editor_in_a_column_does_not_swallow_it() {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let mut ui = ui.new_child(egui::UiBuilder::new());
                 let mut draw_ctx = DrawContext::for_ui(
-                    NodeContext { id: NodeUid::nil(), workspace: &ws },
+                    NodeContext {
+                        id: NodeUid::nil(),
+                        workspace: &ws,
+                    },
                     DrawConstraints {
                         pos: ScreenPos { x: 0.0, y: 0.0 },
                         x: Some(AxisConstraint::Exactly(600.0)),

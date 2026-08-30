@@ -388,12 +388,7 @@ enum Recv {
     impl, not an edit here.
 */
 /// Record one bound signature for stub generation.
-fn stub_for(
-    owner: &str,
-    f: &syn::ImplItemFn,
-    param_names: &[String],
-    is_static: bool,
-) -> TS2 {
+fn stub_for(owner: &str, f: &syn::ImplItemFn, param_names: &[String], is_static: bool) -> TS2 {
     let name = f.sig.ident.to_string();
     let doc = doc_of(&f.attrs);
     let mut params: Vec<TS2> = Vec::new();
@@ -554,10 +549,12 @@ pub fn dynamic_scoped_impl(attr: TokenStream, body: TokenStream) -> TokenStream 
         return quote!(#input).into();
     }
 
-
     let handle_name = handle.to_string();
     // The class is declared by hand; the stub takes the script-facing name.
-    let script_name = handle_name.strip_prefix("Py").unwrap_or(&handle_name).to_owned();
+    let script_name = handle_name
+        .strip_prefix("Py")
+        .unwrap_or(&handle_name)
+        .to_owned();
 
     let mut py_methods = TS2::new();
     let mut stubs = TS2::new();

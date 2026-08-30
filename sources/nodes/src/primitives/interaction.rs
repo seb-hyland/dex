@@ -10,6 +10,7 @@ pub struct InteractionBox {
     pub senses_hover: bool,
     pub senses_clicks: bool,
     pub senses_drags: bool,
+
     cache: Transient<LastFrameInteractions>,
 }
 
@@ -85,6 +86,7 @@ impl Node for InteractionBox {
         let resp = ctx
             .ui
             .interact(region.into(), egui::Id::new(ctx.node.id), self.to_sense());
+
         self.cache.set(LastFrameInteractions {
             hovered: resp.hovered(),
             contains_pointer: resp.contains_pointer(),
@@ -108,6 +110,13 @@ impl Node for InteractionBox {
 defhandlers! { InteractionBox {
     requests: [
         WasClicked => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.clicked) },
+        // A click, consumed.
+        TakeClicked => (this, _q): bool {
+            this.cache
+                .val_mut()
+                .as_mut()
+                .is_some_and(|i| ::std::mem::take(&mut i.clicked))
+        },
         WasDoubleClicked => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.double_clicked) },
         WasHovered => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.hovered) },
         ContainsPointer => (this, _q): bool { this.cache.val().as_ref().is_some_and(|i| i.contains_pointer) },

@@ -46,7 +46,10 @@ fn contexts_expose_their_rust_apis() {
         let node_ctx = bound_names(py, "NodeContext");
         println!("NodeContext -> {node_ctx:?}");
         for expected in ["id", "workspace"] {
-            assert!(node_ctx.contains(&expected.to_string()), "missing {expected}");
+            assert!(
+                node_ctx.contains(&expected.to_string()),
+                "missing {expected}"
+            );
         }
         // egui-facing methods must not leak into scripts.
         for banned in ["host_widgets", "for_ui"] {
@@ -65,8 +68,19 @@ fn contexts_expose_their_rust_apis() {
         // The pieces that make that possible must be bound.
         let constraints = bound_names(py, "DrawConstraints");
         println!("DrawConstraints -> {constraints:?}");
-        for expected in ["pos", "x", "y", "wrap", "should_clip", "fits", "shrunk_by_per_side"] {
-            assert!(constraints.contains(&expected.to_string()), "missing {expected}");
+        for expected in [
+            "pos",
+            "x",
+            "y",
+            "wrap",
+            "should_clip",
+            "fits",
+            "shrunk_by_per_side",
+        ] {
+            assert!(
+                constraints.contains(&expected.to_string()),
+                "missing {expected}"
+            );
         }
         let axis = bound_names(py, "AxisConstraint");
         assert!(axis.contains(&"provided_value".to_string()));
@@ -77,7 +91,12 @@ fn contexts_expose_their_rust_apis() {
             assert!(ws.contains(&expected.to_string()), "missing {expected}");
         }
         // Host lifecycle must stay out of reach.
-        for banned in ["draw_frame", "set_root", "process_pending", "insert_node_now"] {
+        for banned in [
+            "draw_frame",
+            "set_root",
+            "process_pending",
+            "insert_node_now",
+        ] {
             assert!(!ws.contains(&banned.to_string()), "leaked {banned}");
         }
     });
@@ -94,7 +113,10 @@ fn every_message_is_reachable_by_name() {
 
     // A sample spanning several defining modules.
     for expected in ["Selected", "GetText", "ArgBindings", "ConnectedTarget"] {
-        assert!(requests.contains(&expected), "request {expected} unregistered");
+        assert!(
+            requests.contains(&expected),
+            "request {expected} unregistered"
+        );
     }
     assert!(!actions.is_empty(), "no actions registered");
 
@@ -145,7 +167,11 @@ fn a_script_can_query_the_workspace_by_name() {
                 .unwrap();
 
             let text: String = py
-                .eval(c"ws.send_request(node, dex.GetText())", Some(&globals), None)
+                .eval(
+                    c"ws.send_request(node, dex.GetText())",
+                    Some(&globals),
+                    None,
+                )
                 .expect("request dispatches")
                 .extract()
                 .expect("response is a string");

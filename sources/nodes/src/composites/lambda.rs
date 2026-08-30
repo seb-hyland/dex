@@ -661,7 +661,7 @@ impl Node for Lambda {
                 LayoutChild::from(self.update_button),
                 LayoutChild::from(self.edit_externally),
                 LayoutChild::Node(Arc::new(SectionDivider)),
-                LayoutChild::Id(self.output),
+                LayoutChild::Inspectable(self.output),
             ],
             spacing: V_SECTIONS_GAP,
             // The output claims the remaining height

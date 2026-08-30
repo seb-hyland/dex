@@ -60,11 +60,17 @@ fn an_edit_is_pulled_back_without_the_header() {
     let out = checkout::write("pull-test", "def transform():\n    pass\n", &[]).expect("written");
 
     // Nothing changed yet.
-    assert!(checkout::poll(&out).is_none(), "polled a change with no edit");
+    assert!(
+        checkout::poll(&out).is_none(),
+        "polled a change with no edit"
+    );
 
     std::fs::write(
         out.main_file(),
-        format!("import dex  {}\n\ndef transform():\n    return 'edited'\n", checkout::MARKER),
+        format!(
+            "import dex  {}\n\ndef transform():\n    return 'edited'\n",
+            checkout::MARKER
+        ),
     )
     .unwrap();
 
@@ -112,7 +118,8 @@ fn a_checkout_typechecks_and_completes() {
         .count()
         .saturating_sub(1);
     assert_eq!(
-        errors, 0,
+        errors,
+        0,
         "a fresh checkout does not typecheck:\n{}",
         &stdout[..stdout.len().min(1500)]
     );
@@ -122,7 +129,10 @@ fn a_checkout_typechecks_and_completes() {
     if driver.is_file() {
         std::fs::write(
             out.main_file(),
-            format!("import dex  {}\n\ndef transform():\n    dex.\n", checkout::MARKER),
+            format!(
+                "import dex  {}\n\ndef transform():\n    dex.\n",
+                checkout::MARKER
+            ),
         )
         .unwrap();
         let run = std::process::Command::new("python3")
@@ -141,7 +151,10 @@ fn a_checkout_typechecks_and_completes() {
             count > 50,
             "`dex.` offered {count} completions; the stubs are not being seen:\n{stdout}"
         );
-        assert!(stdout.contains("AddChild"), "message classes missing:\n{stdout}");
+        assert!(
+            stdout.contains("AddChild"),
+            "message classes missing:\n{stdout}"
+        );
     }
 
     let _ = std::fs::remove_dir_all(&out.dir);
@@ -184,7 +197,10 @@ fn a_lambda_checks_its_script_out_and_pulls_edits_back() {
     let main = dir.join("main.py");
     std::fs::write(
         &main,
-        format!("import dex  {}\n\ndef transform():\n    return 'from the ide'\n", checkout::MARKER),
+        format!(
+            "import dex  {}\n\ndef transform():\n    return 'from the ide'\n",
+            checkout::MARKER
+        ),
     )
     .unwrap();
 
@@ -205,7 +221,10 @@ fn a_lambda_checks_its_script_out_and_pulls_edits_back() {
         script.contains("from the ide"),
         "the lambda did not pull the edit: {script:?}"
     );
-    assert!(!script.contains(checkout::MARKER), "header leaked: {script:?}");
+    assert!(
+        !script.contains(checkout::MARKER),
+        "header leaked: {script:?}"
+    );
     let _ = ws.send_request(lambda, GetText);
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -244,8 +263,8 @@ fn every_injected_global_type_resolves() {
     // `Table` needs arrow to construct; its declared type is what matters.
     globals.push(("table".to_owned(), "typing.Any".to_owned()));
 
-    let out = checkout::write("global-types", "def transform():\n    pass\n", &globals)
-        .expect("written");
+    let out =
+        checkout::write("global-types", "def transform():\n    pass\n", &globals).expect("written");
 
     let run = std::process::Command::new(&checker)
         .arg("--outputjson")
@@ -261,7 +280,8 @@ fn every_injected_global_type_resolves() {
 
     let header = std::fs::read_to_string(out.main_file()).unwrap();
     assert_eq!(
-        errors, 0,
+        errors,
+        0,
         "an injected global does not resolve.\nheader:\n{}\n\n{}",
         header.lines().take(10).collect::<Vec<_>>().join("\n"),
         &stdout[..stdout.len().min(1200)]
@@ -280,8 +300,8 @@ fn the_example_typechecks_against_the_stubs() {
         return;
     };
 
-    let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/tiled_layout.py");
+    let example =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/tiled_layout.py");
     let source = std::fs::read_to_string(&example).expect("example exists");
 
     let out = checkout::write("example-check", &source, &[]).expect("written");
@@ -297,7 +317,8 @@ fn the_example_typechecks_against_the_stubs() {
         .count()
         .saturating_sub(1);
     assert_eq!(
-        errors, 0,
+        errors,
+        0,
         "examples/tiled_layout.py does not typecheck against the stubs:\n{}",
         &stdout[..stdout.len().min(1500)]
     );

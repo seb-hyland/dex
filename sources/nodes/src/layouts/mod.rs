@@ -5,6 +5,7 @@ pub mod desktops;
 pub mod error;
 pub mod horizontal;
 pub mod horizontal_dnd;
+pub mod inspector;
 pub mod mirror;
 pub mod pending;
 pub mod scroll;

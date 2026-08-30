@@ -39,8 +39,7 @@ fn captured_bytes_survive_a_struct_changing() {
     assert_eq!(added.name, "hello");
     assert_eq!(added.added, 0, "a new field takes its default");
 
-    let reordered: AfterReordering =
-        reduce_from_bytes(&bytes).expect("tolerates reordered fields");
+    let reordered: AfterReordering = reduce_from_bytes(&bytes).expect("tolerates reordered fields");
     assert_eq!(reordered.a, 7);
     assert_eq!(reordered.name, "hello");
 }

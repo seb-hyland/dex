@@ -88,8 +88,10 @@ impl Node for Button {
             y: label_size.y + 2.0 * padding,
         };
 
+        // An unbounded offer is not a width to fill.
         if self.fill_width
             && let Some(w) = avail_w
+            && w.is_finite()
         {
             button_size.x = w;
         }

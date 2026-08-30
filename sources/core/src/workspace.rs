@@ -12,8 +12,9 @@ use utils::match_dyn;
 
 use crate::{
     ActionBody, ActionFor, AxisConstraint, DrawConstraints, DrawContext, DrawResult, Node,
-    NodeContext, RequestFor, ScreenRegion, Vector, WrapConstraints,
+    NodeContext, RequestFor, ScreenPos, ScreenRegion, Vector, WrapConstraints,
     compute::{ComputeScheduler, ComputeSchedulerHandle, ComputeTask},
+    inspect::{InspectProbe, InspectTarget},
     messages::{Action, ActionGroup, Request, downcast_resp},
     pool::{NodeUid, Registry},
     pycontext::{PyDrawContext, PyWorkspace},
@@ -34,6 +35,9 @@ pub struct Workspace {
 
     /// A background scheduler for compute-intensive tasks
     scheduler: ComputeSchedulerHandle,
+
+    /// This frame's record of what the pointer is over. Rebuilt from scratch every frame.
+    probe: InspectProbe,
 }
 
 #[utils::dynamic_scoped(PyWorkspace)]
@@ -50,6 +54,7 @@ impl Workspace {
             },
             actions: action_recv,
             scheduler: ComputeScheduler::spawn(action_tx),
+            probe: InspectProbe::default(),
         }
     }
 
@@ -66,6 +71,7 @@ impl Workspace {
             },
             actions: action_recv,
             scheduler: ComputeScheduler::spawn(action_tx),
+            probe: InspectProbe::default(),
         }
     }
 
@@ -180,6 +186,8 @@ impl Workspace {
 
     #[dynamic(skip)] // host lifecycle: not for scripts
     pub fn draw_frame(&mut self, ui: &mut Ui, draw_area: Rect) {
+        self.probe
+            .begin_frame(ui.ctx().pointer_latest_pos().map(ScreenPos::from));
         self.tick_all();
         self.draw_root(ui, draw_area);
         self.process_actions();
@@ -227,6 +235,7 @@ impl Workspace {
                     },
                     constraints,
                     ui,
+                    depth: 0,
                 };
                 ctx.draw_workspace_node(root_node, constraints);
             });
@@ -378,6 +387,12 @@ impl Workspace {
     /// The node currently held at `uid`, if any.
     pub fn get_node(&self, uid: NodeUid) -> Option<Arc<dyn Node>> {
         self.registry.get(uid)
+    }
+
+    /// This frame's addressable node under the pointer, if any.
+    #[dynamic(skip)] // borrows a per-frame record
+    pub fn inspect_target(&self) -> Option<InspectTarget> {
+        self.probe.target()
     }
 
     pub fn node_version(&self, uid: NodeUid) -> u64 {
@@ -544,6 +559,7 @@ impl<'ctx> DrawContext<'ctx> {
             node,
             constraints,
             ui,
+            depth: 0,
         }
     }
 
@@ -583,6 +599,7 @@ impl<'ctx> DrawContext<'ctx> {
                 node: NodeContext { id, workspace },
                 ui: &mut child_ui,
                 constraints,
+                depth: self.depth + 1,
             };
 
             #[allow(deprecated)] // Private call
@@ -594,6 +611,7 @@ impl<'ctx> DrawContext<'ctx> {
                     workspace,
                 },
                 constraints,
+                depth: self.depth + 1,
                 ..self.reborrow()
             };
 
@@ -604,6 +622,24 @@ impl<'ctx> DrawContext<'ctx> {
 
     pub fn draw_node(&mut self, node: &dyn Node, constraints: DrawConstraints) -> DrawResult {
         self.draw_node_with(node, NodeUid::nil(), constraints)
+    }
+
+    /// Draw a workspace node and offer it to the halo as an addressable element.
+    pub fn draw_inspectable_node(
+        &mut self,
+        id: NodeUid,
+        constraints: DrawConstraints,
+    ) -> Option<DrawResult> {
+        // Copied out so the probe is reachable across the `&mut self` draw.
+        let workspace = self.node.workspace;
+        let depth = self.depth;
+
+        workspace.probe.enter(id);
+        let result = self.draw_workspace_node(id, constraints);
+        workspace
+            .probe
+            .leave(id, depth, result.as_ref().and_then(|r| r.region()));
+        result
     }
 
     /// Host raw egui widgets in a `Ui` bounded and clipped to `region`, returning the region they actually occupied.

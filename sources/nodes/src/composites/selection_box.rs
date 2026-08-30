@@ -79,7 +79,10 @@ impl Node for SelectionBox {
                     false,
                 );
                 draw_row_label(&mut ctx, row_origin, width, option);
-                ctx.draw_workspace_node(self.option_sensors[i].erase(), exact_box(row_origin, width));
+                ctx.draw_workspace_node(
+                    self.option_sensors[i].erase(),
+                    exact_box(row_origin, width),
+                );
                 if ctx
                     .node
                     .workspace

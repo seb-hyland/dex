@@ -12,7 +12,7 @@ pub struct Mirror {
     target: NodeUid,
 
     /// The copy actually drawn.
-    copy: Transient<NodeUid>,
+    copy: Option<NodeUid>,
 
     seen_version: Transient<u64>,
 }
@@ -23,7 +23,7 @@ impl Mirror {
     pub fn new(target: NodeUid) -> Mirror {
         Mirror {
             target,
-            copy: Transient::default(),
+            copy: None,
             seen_version: Transient::default(),
         }
     }
@@ -42,7 +42,7 @@ impl Node for Mirror {
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
         let constraints = ctx.constraints;
-        let Some(copy) = *self.copy.val() else {
+        let Some(copy) = self.copy else {
             // No copy yet: the first tick has not run.
             let mut placeholder = Label::new("Nothing to mirror".to_owned());
             placeholder.color = Color::gray(140);
@@ -56,7 +56,7 @@ impl Node for Mirror {
         let version = ctx.workspace.node_version(self.target);
         let seen_version = *self.seen_version.val_or_else(|| 0);
 
-        if seen_version == 0 || version != seen_version || self.copy.val().is_none() {
+        if seen_version == 0 || version != seen_version || self.copy.is_none() {
             ctx.workspace.submit_action(
                 ctx.id.cast::<Mirror>(),
                 "Refreshed mirror",
@@ -66,7 +66,7 @@ impl Node for Mirror {
     }
 
     fn on_delete(&self, ctx: NodeContext) {
-        if let Some(copy) = *self.copy.val() {
+        if let Some(copy) = self.copy {
             ctx.workspace.delete_node(copy);
         }
     }
@@ -76,10 +76,10 @@ defhandlers! { Mirror {
     actions: [
         Resync { version: u64 } => (this, a, ctx) {
             let ws = ctx.workspace.action_handle();
-            if let Some(previous) = this.copy.val_mut().take() {
+            if let Some(previous) = this.copy.take() {
                 ws.delete_node(previous);
             }
-            this.copy.set(ws.deep_clone(this.target));
+            this.copy = Some(ws.deep_clone(this.target));
             this.seen_version.set(a.version);
         },
     ],

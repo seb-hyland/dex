@@ -3,7 +3,7 @@ use egui::{Pos2, Rect};
 use utils::Transient;
 
 use crate::{
-    layouts::canvas::nodes::{CanvasNode, CanvasNodeConstraints, ConstraintsTuple},
+    layouts::canvas::nodes::{CanvasNode, CanvasNodeConstraints, ConstraintsTuple, SetLayout},
     primitives::interaction::{InteractionBox, WasDragged},
 };
 
@@ -103,7 +103,8 @@ impl Node for Canvas {
 
         let canvas_origin = origin - self.screen_offset();
         for &child in &self.children {
-            ctx.draw_workspace_node(
+            // Canvas items are content the user points at, so they get an inspector.
+            ctx.draw_inspectable_node(
                 child.erase(),
                 DrawConstraints {
                     // `CanvasNode` children will draw relative to the origin
@@ -144,8 +145,64 @@ defhandlers! { Canvas {
                 CanvasNode::build(ctx.workspace.action_handle(), child_id, canvas_pos, a.size);
             this.children.push(node_id);
         },
+        /*
+            Put `node` on this surface as an item.
+
+            One that is already an item joins as it is, nudged so it does not land exactly on what it came from.
+        */
+        PlaceOnCanvas { node: NodeUid, size: Vector } => (this, a, ctx) {
+            const PLACE_OFFSET: f32 = 24.0;
+
+            let is_item = ctx
+                .workspace
+                .get_node(a.node)
+                .is_some_and(|n| n.as_ref().as_any_ref().is::<CanvasNode>());
+
+            let item = if is_item {
+                let item = a.node.cast::<CanvasNode>();
+                if let Some(layout) = ctx.workspace.send_request(item, CanvasNodeConstraints) {
+                    ctx.workspace.submit_action(
+                        item,
+                        "Offset the placed item",
+                        SetLayout {
+                            canvas_pos: layout.pos + Vector::splat(PLACE_OFFSET),
+                            size: layout.size,
+                        },
+                    );
+                }
+                item
+            } else {
+                let visible_size = this
+                    .viewport
+                    .val()
+                    .map(|r| r.size())
+                    .unwrap_or(Vector::splat(0.0));
+                let canvas_pos = this.screen_offset() + visible_size / 2.0 - a.size / 2.0;
+                CanvasNode::build(ctx.workspace.action_handle(), a.node, canvas_pos, a.size)
+            };
+
+            if !this.children.contains(&item) {
+                this.children.push(item);
+            }
+        },
+        // Take an already-built canvas node onto this surface, as a copy or a
+        // mirror of an existing one does.
+        AdoptCanvasNode { node: NodeUid<CanvasNode> } => (this, a) {
+            if !this.children.contains(&a.node) {
+                this.children.push(a.node);
+            }
+        },
+        // Drop a node from the canvas; deleting it cascades to what it wraps.
+        RemoveCanvasItem { node: NodeUid<CanvasNode> } => (this, a, ctx) {
+            if let Some(pos) = this.children.iter().position(|c| *c == a.node) {
+                this.children.remove(pos);
+            }
+            ctx.workspace.delete_node(a.node.erase());
+        },
     ],
     requests: [
+        // The nodes on this surface, in draw order.
+        CanvasChildren => (this, _q): Vec<NodeUid<CanvasNode>> { this.children.clone() },
         // The top-most connectable node whose on-screen region contains `pos`.
         // Any surface can answer with its own connectable nodes.
         ConnectableAt { pos: ScreenPos } => (this, s, ctx): Option<NodeUid> {

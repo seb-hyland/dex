@@ -9,6 +9,7 @@ use crate::{
         child::LayoutChild,
         horizontal::HorizontalLayout,
         horizontal_dnd::{AddChild, Children, HorizontalDnD, RemoveChild},
+        inspector::Inspector,
     },
     primitives::{
         interaction::{InteractionBox, WasClicked, WasDoubleClicked, WasDragged, WasHovered},
@@ -44,6 +45,9 @@ pub struct Desktops {
     #[uid_ref]
     override_stack: Vec<NodeUid>,
     close_override_button: NodeUid<Button>,
+
+    /// The single inspector, drawn last so its handle sits over everything.
+    inspector: NodeUid<Inspector>,
 }
 
 #[utils::dynamic_methods]
@@ -70,6 +74,7 @@ impl Desktops {
         let add_button = Button::build(ws.clone(), Label::new("+".to_owned()));
         let divider = ws.insert_node(InteractionBox::sensing(true, false, true));
         let close_override_button = Button::build(ws.clone(), Label::new("← Close".to_owned()));
+        let inspector = ws.insert_node(Inspector::new());
 
         ws.insert_node_at(
             id,
@@ -80,6 +85,7 @@ impl Desktops {
                 add_button,
                 divider,
                 close_override_button,
+                inspector,
                 sidebar_width: 200.0,
                 pending_sidebar_width: Transient::default(),
                 override_stack: Vec::new(),
@@ -289,6 +295,18 @@ impl Node for Desktops {
                 "Resized sidebar",
             );
         }
+
+        // Last, and unclipped.
+        ctx.draw_workspace_node(
+            self.inspector.erase(),
+            DrawConstraints {
+                pos: origin,
+                x: Some(AxisConstraint::Exactly(avail_w)),
+                y: Some(AxisConstraint::Exactly(avail_h)),
+                wrap: WrapConstraints::NotAllowed,
+                should_clip: false,
+            },
+        );
 
         DrawResult::Complete {
             region: Some(ScreenRegion::from_min_size(

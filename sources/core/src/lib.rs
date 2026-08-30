@@ -8,6 +8,7 @@ extern crate self as dex_core;
 
 mod compute;
 mod constraints;
+pub mod inspect;
 pub mod messages;
 mod pool;
 pub mod pycontext;
@@ -24,10 +25,11 @@ pub mod prelude {
     pub use crate::{
         compute::ComputeTask,
         constraints::*,
+        inspect::{InspectProbe, InspectTarget},
         messages::*,
         pool::NodeUid,
-        refs::NodeRefs,
         pycontext::{PyDrawContext, PyNodeContext, PyWorkspace},
+        refs::NodeRefs,
         region::{ScreenPos, ScreenRegion, Vector},
         scripting::{NodeExtractor, NodeHandle},
         style::{Color, Font, Stroke, StrokeKind},
@@ -52,6 +54,11 @@ pub trait Node:
     fn draw(&self, ctx: DrawContext) -> DrawResult;
 
     fn deref_target(&self) -> Option<NodeUid> {
+        None
+    }
+
+    /// Build this node's inspector into the workspace, returning its root.
+    fn build_inspector(&self, _ctx: NodeContext) -> Option<NodeUid> {
         None
     }
 
@@ -105,6 +112,9 @@ pub struct DrawContext<'ctx> {
 
     /// A surface to draw on.
     pub ui: &'ctx mut Ui,
+
+    /// How deep in the draw tree this node sits.
+    pub depth: u32,
 }
 
 #[utils::dynamic_scoped(PyDrawContext)]
@@ -128,6 +138,7 @@ impl<'ctx> DrawContext<'ctx> {
         DrawContext {
             node: self.node,
             constraints: self.constraints,
+            depth: self.depth,
             ui: &mut *self.ui,
         }
     }
