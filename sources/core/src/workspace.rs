@@ -593,7 +593,9 @@ impl<'ctx> DrawContext<'ctx> {
             // Draw within a new child UI that is clipped
 
             let mut child_ui = self.ui.new_child(UiBuilder::new());
-            child_ui.set_clip_rect(clip_region.into());
+            // Intersect rather than replace: a child's clip narrows what its ancestors already allowed.
+            let clip = Rect::from(clip_region).intersect(self.ui.clip_rect());
+            child_ui.set_clip_rect(clip);
 
             let temp_ctx = DrawContext {
                 node: NodeContext { id, workspace },
@@ -636,9 +638,14 @@ impl<'ctx> DrawContext<'ctx> {
 
         workspace.probe.enter(id);
         let result = self.draw_workspace_node(id, constraints);
-        workspace
-            .probe
-            .leave(id, depth, result.as_ref().and_then(|r| r.region()));
+
+        // Clipped to what is actually on screen, so a node scrolled out of view inside a scroll area is not considered.
+        let clip = ScreenRegion::from(self.ui.clip_rect());
+        let visible = result
+            .as_ref()
+            .and_then(|r| r.region())
+            .and_then(|region| region.intersect(clip));
+        workspace.probe.leave(id, depth, visible);
         result
     }
 

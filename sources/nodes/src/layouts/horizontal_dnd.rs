@@ -155,7 +155,7 @@ impl Node for HorizontalDnD {
             }
 
             let Some(region) = ctx
-                .draw_workspace_node(
+                .draw_inspectable_node(
                     self.children[idx],
                     DrawConstraints {
                         pos: child_pos,

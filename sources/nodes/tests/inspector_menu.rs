@@ -38,6 +38,12 @@ fn opening_the_inspector_on_a_canvas_item_terminates() {
     let mut ws = Desktops::new_workspace();
     let root = ws.root();
 
+    // A frame first: an item is centred from the canvas viewport, which is not
+    // known until the canvas has drawn once. Added before that it lands over the
+    // tab bar, where it is now correctly clipped away and so unreachable.
+    let ctx = egui::Context::default();
+    frame(&mut ws, &ctx, vec![]);
+
     ws.submit_action_dyn(Action {
         dest: root,
         description: "add item".into(),
@@ -47,10 +53,6 @@ fn opening_the_inspector_on_a_canvas_item_terminates() {
         }),
     });
     ws.process_pending();
-
-    let ctx = egui::Context::default();
-    // A frame first: the item is centred from the canvas viewport, which is not
-    // known until the canvas has drawn once.
     frame(&mut ws, &ctx, vec![]);
 
     let canvas = ws
@@ -66,18 +68,137 @@ fn opening_the_inspector_on_a_canvas_item_terminates() {
         .flatten()
         .expect("the item is on screen");
 
-    // The lens sits in the margin to the left of the item.
-    let lens = egui::pos2(rect.min.x - 15.0, rect.min.y + 11.0);
-    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(lens)]);
+    // Hover the item, then take the lens position from the region the inspector
+    // itself uses, rather than recomputing it from the canvas mapping.
+    let centre = egui::pos2(
+        (rect.min.x + rect.max.x) * 0.5,
+        (rect.min.y + rect.max.y) * 0.5,
+    );
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(centre)]);
+    let found = ws.inspect_target().expect("the item is under the pointer");
     assert_eq!(
-        ws.inspect_target().map(|t| t.node),
-        Some(item.erase()),
+        found.node,
+        item.erase(),
         "the lens targets the item it sits beside"
     );
+    let lens = egui::pos2(found.region.min.x - 15.0, found.region.min.y + 11.0);
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(lens)]);
 
-    // Clicking it builds the menu. Before the fix this never returned.
+    /*
+        Clicking the lens must not hang. Before the fix it recursed while the
+        `OpenInspector` action was being applied, so it never reached a draw.
+
+        Whether the menu actually opens is not asserted: a synthetic click does
+        not register on the lens in this harness, and the open/close path lives
+        in egui's popup state rather than in the workspace.
+    */
     frame(&mut ws, &ctx, vec![click(lens, true), click(lens, false)]);
     for _ in 0..3 {
         frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(lens)]);
     }
+}
+
+/// A desktop tab's inspector: clone and mirror the whole surface, and reorder.
+#[test]
+fn a_tab_can_be_cloned_mirrored_and_reordered() {
+    use dex_nodes::layouts::canvas::nodes::CanvasNodeChild;
+    use dex_nodes::layouts::desktops::{CloneCanvas, MirrorCanvas, MoveTab, Tabs};
+    use dex_nodes::layouts::mirror::{Mirror, MirrorTarget};
+
+    dex_nodes::scripting::init_python();
+    let mut ws = Desktops::new_workspace();
+    let root = ws.root();
+    let desktops = root.cast::<Desktops>();
+    let ctx = egui::Context::default();
+    frame(&mut ws, &ctx, vec![]);
+
+    // One item on the starting desktop.
+    ws.submit_action_dyn(Action {
+        dest: root,
+        description: "add item".into(),
+        body: Box::new(AddCanvasItem {
+            child: Arc::new(Label::new("body".to_owned())),
+            size: Vector { x: 120.0, y: 80.0 },
+        }),
+    });
+    ws.process_pending();
+
+    let first_tab = ws.send_request(desktops, Tabs).unwrap_or_default()[0];
+    let first_canvas = ws
+        .send_request(desktops, ActiveCanvas)
+        .expect("a canvas is active");
+    let source_item = ws
+        .send_request(first_canvas, CanvasChildren)
+        .unwrap_or_default()[0];
+    let source_child = ws
+        .send_request(source_item, CanvasNodeChild)
+        .expect("the item wraps a label");
+
+    // Clone: a second desktop whose item is a copy, sharing nothing.
+    ws.submit_action(desktops, "clone", CloneCanvas { tab: first_tab });
+    ws.process_pending();
+    let cloned_canvas = ws
+        .send_request(desktops, ActiveCanvas)
+        .expect("the clone is active");
+    assert_ne!(cloned_canvas, first_canvas, "a new canvas");
+    let cloned_item = ws
+        .send_request(cloned_canvas, CanvasChildren)
+        .unwrap_or_default()[0];
+    assert_ne!(cloned_item, source_item, "with its own item");
+    assert_ne!(
+        ws.send_request(cloned_item, CanvasNodeChild),
+        Some(source_child),
+        "wrapping its own copy of the content"
+    );
+
+    // Mirror: a third desktop whose items follow the source's.
+    ws.submit_action(desktops, "mirror", MirrorCanvas { tab: first_tab });
+    ws.process_pending();
+    let mirrored_canvas = ws
+        .send_request(desktops, ActiveCanvas)
+        .expect("the mirror is active");
+    let mirrored_item = ws
+        .send_request(mirrored_canvas, CanvasChildren)
+        .unwrap_or_default()[0];
+    let mirrored_child = ws
+        .send_request(mirrored_item, CanvasNodeChild)
+        .expect("the mirrored item wraps something");
+    assert_eq!(
+        ws.send_request(mirrored_child.cast::<Mirror>(), MirrorTarget),
+        Some(source_child),
+        "the item is framed afresh but mirrors the original's content"
+    );
+
+    // Three tabs now; move the first to the back and check the order.
+    let tabs = ws.send_request(desktops, Tabs).unwrap_or_default();
+    assert_eq!(tabs.len(), 3);
+    assert_eq!(tabs[0], first_tab);
+    ws.submit_action(
+        desktops,
+        "to back",
+        MoveTab {
+            tab: first_tab,
+            to: 2,
+        },
+    );
+    ws.process_pending();
+    let reordered = ws.send_request(desktops, Tabs).unwrap_or_default();
+    assert_eq!(reordered[2], first_tab, "it moved to the back");
+    assert_eq!(reordered.len(), 3, "and nothing was lost");
+
+    // ...and back to the front.
+    ws.submit_action(
+        desktops,
+        "to front",
+        MoveTab {
+            tab: first_tab,
+            to: 0,
+        },
+    );
+    ws.process_pending();
+    assert_eq!(
+        ws.send_request(desktops, Tabs).unwrap_or_default()[0],
+        first_tab,
+        "and back to the front"
+    );
 }

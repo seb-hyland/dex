@@ -4,7 +4,7 @@ use utils::Transient;
 
 use crate::{
     layouts::canvas::nodes::{CanvasNode, CanvasNodeConstraints, ConstraintsTuple, SetLayout},
-    primitives::interaction::{InteractionBox, WasDragged},
+    primitives::interaction::{DragPointerPos, InteractionBox, WasDragged},
 };
 
 #[utils::dynamic_type]
@@ -16,6 +16,8 @@ pub struct Canvas {
     screen_offset: Transient<Vector>,
     /// The canvas's on-screen region as of the last frame it was drawn.
     viewport: Transient<ScreenRegion>,
+    /// Whether the drag in progress is panning this surface. Decided when the drag begins.
+    panning: Transient<bool>,
 }
 
 #[utils::dynamic_methods]
@@ -28,6 +30,7 @@ impl Canvas {
             drag_interaction,
             screen_offset: Transient::default(),
             viewport: Transient::default(),
+            panning: Transient::default(),
         })
     }
 
@@ -37,6 +40,16 @@ impl Canvas {
 
     fn screen_offset(&self) -> Vector {
         self.screen_offset.val().unwrap_or(Vector::splat(0.0))
+    }
+
+    /// The topmost item whose on-screen region contains `pos`.
+    fn item_at(&self, ws: &Workspace, pos: ScreenPos) -> Option<NodeUid<CanvasNode>> {
+        self.children.iter().rev().copied().find(|&child| {
+            ws.send_request(child, CanvasNodeConstraints)
+                .is_some_and(|tuple| {
+                    Rect::from(self.map_to_screen(tuple)).contains(Pos2::from(pos))
+                })
+        })
     }
 
     /// Screen position corresponding to canvas-space origin `(0, 0)`.
@@ -91,14 +104,20 @@ impl Node for Canvas {
                 should_clip: true,
             },
         );
-        if let Some(drag_delta) = ctx
-            .node
-            .workspace
-            .send_request(self.drag_interaction, WasDragged)
-            .flatten()
-        {
-            // Update the offset
-            self.screen_offset.set(self.screen_offset() - drag_delta);
+        let ws = ctx.node.workspace;
+        if let Some(drag_delta) = ws.send_request(self.drag_interaction, WasDragged).flatten() {
+            // Only the background pans, not the cursor over a `CanvasNode`.
+            let panning = *self.panning.val_or_else(|| {
+                ws.send_request(self.drag_interaction, DragPointerPos)
+                    .flatten()
+                    .is_none_or(|start| self.item_at(ws, start).is_none())
+            });
+            if panning {
+                self.screen_offset.set(self.screen_offset() - drag_delta);
+            }
+        } else {
+            // The drag is over; the next one decides afresh.
+            *self.panning.val_mut() = None;
         }
 
         let canvas_origin = origin - self.screen_offset();
@@ -206,14 +225,7 @@ defhandlers! { Canvas {
         // The top-most connectable node whose on-screen region contains `pos`.
         // Any surface can answer with its own connectable nodes.
         ConnectableAt { pos: ScreenPos } => (this, s, ctx): Option<NodeUid> {
-            this.children.iter().rev().copied().find(|&child| {
-                ctx.workspace
-                    .send_request(child, CanvasNodeConstraints)
-                    .is_some_and(|tuple| {
-                        Rect::from(this.map_to_screen(tuple)).contains(Pos2::from(s.pos))
-                    })
-            })
-            .map(|child| child.erase())
+            this.item_at(ctx.workspace, s.pos).map(|child| child.erase())
         },
         // Map a connectable node's current layout into its on-screen region.
         NodeScreenRect { node: NodeUid } => (this, s, ctx): Option<ScreenRegion> {

@@ -5,16 +5,25 @@ use utils::Transient;
 use crate::{
     composites::button::Button,
     layouts::{
-        canvas::{self, layout::Canvas, sidebar::CanvasSidebar},
+        canvas::{
+            self,
+            layout::{AdoptCanvasNode, Canvas, CanvasChildren},
+            nodes::{CanvasNode, CanvasNodeChild, CanvasNodeConstraints},
+            sidebar::CanvasSidebar,
+        },
         child::LayoutChild,
         horizontal::HorizontalLayout,
-        horizontal_dnd::{AddChild, Children, HorizontalDnD, RemoveChild},
+        horizontal_dnd::{AddChild, Children, HorizontalDnD, RemoveChild, Reorder},
         inspector::Inspector,
+        mirror::Mirror,
+        vertical::VerticalLayout,
     },
     primitives::{
-        interaction::{InteractionBox, WasClicked, WasDoubleClicked, WasDragged, WasHovered},
+        interaction::{
+            InteractionBox, TakeClicked, WasClicked, WasDoubleClicked, WasDragged, WasHovered,
+        },
         shapes::Rect,
-        text::{IsInteractive, Label, LabelEditable, SetInteractive},
+        text::{GetText, IsInteractive, Label, LabelEditable, SetInteractive},
     },
 };
 
@@ -104,12 +113,16 @@ const TAB_SPACING: f32 = 6.0;
 impl Desktops {
     /// Build a fresh canvas and its tab into the workspace, returning the canvas.
     fn open_canvas(&self, ctx: NodeContext, name: String) -> NodeUid<Canvas> {
-        let handle = ctx.workspace.action_handle();
-        let canvas = Canvas::build(handle.clone());
-        let tab = DesktopTabView::build(handle, canvas, ctx.id.cast(), name);
+        let canvas = Canvas::build(ctx.workspace.action_handle());
+        self.add_tab_for(ctx, canvas, name);
+        canvas
+    }
+
+    /// Give an existing canvas a tab on this root.
+    fn add_tab_for(&self, ctx: NodeContext, canvas: NodeUid<Canvas>, name: String) {
+        let tab = DesktopTabView::build(ctx.workspace.action_handle(), canvas, ctx.id.cast(), name);
         ctx.workspace
             .submit_action(self.tab_bar, "Add tab", AddChild { child: tab.erase() });
-        canvas
     }
 }
 
@@ -363,6 +376,55 @@ defhandlers! { Desktops {
             ws.submit_action(this.tab_bar, "Removed tab", RemoveChild { child: s.tab });
             ws.delete_node(s.tab);
         },
+        // Duplicate a desktop: the canvas and everything on it, deep cloned.
+        CloneCanvas { tab: NodeUid } => (this, s, ctx) {
+            let ws = ctx.workspace;
+            if let Some(source) = ws.send_request(s.tab.cast::<DesktopTabView>(), TabCanvas) {
+                let copy = ws.deep_clone(source.erase()).cast::<Canvas>();
+                let name = ws
+                    .send_request(s.tab.cast::<DesktopTabView>(), TabName)
+                    .unwrap_or_else(|| "Unnamed desktop".to_owned());
+                this.add_tab_for(ctx, copy, format!("{name} copy"));
+                this.active = copy;
+            }
+        },
+        // A new canvas whose items mirror this one's.
+        MirrorCanvas { tab: NodeUid } => (this, s, ctx) {
+            let ws = ctx.workspace;
+            if let Some(source) = ws.send_request(s.tab.cast::<DesktopTabView>(), TabCanvas) {
+                let mirrored = Canvas::build(ws.action_handle());
+                for item in ws.send_request(source, CanvasChildren).unwrap_or_default() {
+                    if let Some(child) = ws.send_request(item, CanvasNodeChild)
+                        && let Some(layout) = ws.send_request(item, CanvasNodeConstraints)
+                    {
+                        let mirror = ws.insert_node_dyn(Arc::new(Mirror::new(child)));
+                        let framed =
+                            CanvasNode::build(ws.action_handle(), mirror, layout.pos, layout.size);
+                        ws.submit_action(
+                            mirrored,
+                            "Mirrored canvas item",
+                            AdoptCanvasNode { node: framed },
+                        );
+                    }
+                }
+                let name = ws
+                    .send_request(s.tab.cast::<DesktopTabView>(), TabName)
+                    .unwrap_or_else(|| "Unnamed desktop".to_owned());
+                this.add_tab_for(ctx, mirrored, format!("{name} mirror"));
+                this.active = mirrored;
+            }
+        },
+        // Put a tab at `to` in the bar, clamped to the ends.
+        MoveTab { tab: NodeUid, to: usize } => (this, s, ctx) {
+            let ws = ctx.workspace;
+            let tabs = ws.send_request(this.tab_bar, Children).unwrap_or_default();
+            if let Some(from) = tabs.iter().position(|t| *t == s.tab) {
+                let to = s.to.min(tabs.len().saturating_sub(1));
+                if from != to {
+                    ws.submit_action(this.tab_bar, "Reordered tabs", Reorder { from, to });
+                }
+            }
+        },
         SetSidebarWidth { width: f32 } => (this, s) {
             this.sidebar_width = s.width;
         },
@@ -386,6 +448,12 @@ defhandlers! { Desktops {
                 .workspace
                 .send_request(this.sidebar, canvas::sidebar::SidebarPythonPrelude {})
                 .expect("Canvas sidebar should exist and understand SidebarPythonPrelude request")
+        },
+    ],
+    extern_requests: [
+        // The inspector belongs to the root, so ask the root about it.
+        crate::layouts::inspector::InspectorOpen => (this, s, ctx): bool {
+            ctx.workspace.send_request(this.inspector, s).unwrap_or(false)
         },
     ],
 }}
@@ -428,6 +496,133 @@ impl DesktopTabView {
         })
     }
 }
+
+/// What a desktop tab offers the inspector.
+#[utils::portable]
+pub struct TabInspector {
+    /// The tab these commands act on.
+    #[uid_ref]
+    tab: NodeUid<DesktopTabView>,
+    clone_button: NodeUid<Button>,
+    mirror_button: NodeUid<Button>,
+    delete_button: NodeUid<Button>,
+    front_button: NodeUid<Button>,
+    back_button: NodeUid<Button>,
+    left_button: NodeUid<Button>,
+    right_button: NodeUid<Button>,
+    column: NodeUid<VerticalLayout>,
+}
+
+impl TabInspector {
+    fn build(ctx: NodeContext, tab: NodeUid<DesktopTabView>) -> NodeUid<TabInspector> {
+        let ws = ctx.workspace.action_handle();
+        let command = |label: &str| Button::build(ws.clone(), Label::new(label.to_owned()));
+        let clone_button = command("Clone desktop");
+        let mirror_button = command("Mirror desktop");
+        let delete_button = command("Delete");
+        let front_button = command("Move to front");
+        let back_button = command("Move to back");
+        let left_button = command("Move left");
+        let right_button = command("Move right");
+
+        let column = VerticalLayout::build(
+            ws.clone(),
+            vec![
+                clone_button.erase(),
+                mirror_button.erase(),
+                delete_button.erase(),
+                front_button.erase(),
+                back_button.erase(),
+                left_button.erase(),
+                right_button.erase(),
+            ],
+            2.0,
+        );
+        ws.insert_node(Self {
+            tab,
+            clone_button,
+            mirror_button,
+            delete_button,
+            front_button,
+            back_button,
+            left_button,
+            right_button,
+            column,
+        })
+    }
+}
+
+#[utils::dynamic_node(skip)]
+impl Node for TabInspector {
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "Desktop Menu".into()
+    }
+
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
+        let constraints = ctx.constraints;
+        let drawn = ctx.draw_workspace_node(self.column.erase(), constraints);
+
+        let ws = ctx.node.workspace;
+        let taken = |button: NodeUid<Button>| {
+            ws.send_request(button.erase(), TakeClicked)
+                .unwrap_or(false)
+        };
+        let root = ws.root();
+        let tab = self.tab.erase();
+
+        // The tab's place in the bar, for the reordering commands.
+        let tabs = ws
+            .send_request(root.cast::<Desktops>(), Tabs)
+            .unwrap_or_default();
+        let at = tabs.iter().position(|t| *t == tab);
+
+        if taken(self.clone_button) {
+            ws.submit_action(root, "Cloned desktop", CloneCanvas { tab });
+        } else if taken(self.mirror_button) {
+            ws.submit_action(root, "Mirrored desktop", MirrorCanvas { tab });
+        } else if taken(self.delete_button) {
+            ws.submit_action(root, "Closed desktop", CloseCanvas { tab });
+        } else if taken(self.front_button) {
+            ws.submit_action(root, "Moved desktop to front", MoveTab { tab, to: 0 });
+        } else if taken(self.back_button) {
+            ws.submit_action(
+                root,
+                "Moved desktop to back",
+                MoveTab {
+                    tab,
+                    to: tabs.len().saturating_sub(1),
+                },
+            );
+        } else if taken(self.left_button) {
+            if let Some(at) = at.filter(|at| *at > 0) {
+                ws.submit_action(root, "Moved desktop left", MoveTab { tab, to: at - 1 });
+            }
+        } else if taken(self.right_button)
+            && let Some(at) = at
+        {
+            ws.submit_action(root, "Moved desktop right", MoveTab { tab, to: at + 1 });
+        }
+
+        drawn.unwrap_or(DrawResult::Complete { region: None })
+    }
+
+    fn on_delete(&self, ctx: NodeContext) {
+        ctx.workspace.delete_node(self.column.erase());
+        for button in [
+            self.clone_button,
+            self.mirror_button,
+            self.delete_button,
+            self.front_button,
+            self.back_button,
+            self.left_button,
+            self.right_button,
+        ] {
+            ctx.workspace.delete_node(button.erase());
+        }
+    }
+}
+
+defhandlers! { TabInspector {} }
 
 #[utils::dynamic_node(skip)]
 impl Node for DesktopTabView {
@@ -577,6 +772,10 @@ impl Node for DesktopTabView {
         }
     }
 
+    fn build_inspector(&self, ctx: NodeContext) -> Option<NodeUid> {
+        Some(TabInspector::build(ctx, ctx.id.cast()).erase())
+    }
+
     fn on_delete(&self, ctx: NodeContext) {
         ctx.workspace.delete_node(self.name.erase());
         ctx.workspace.delete_node(self.sensor.erase());
@@ -589,5 +788,9 @@ defhandlers! { DesktopTabView {
     requests: [
         // The canvas this tab stands for.
         TabCanvas => (this, _q): NodeUid<Canvas> { this.canvas },
+        // The tab's label, for naming a copy after it.
+        TabName => (this, _q, ctx): String {
+            ctx.workspace.send_request(this.name, GetText).unwrap_or_default()
+        },
     ],
 }}

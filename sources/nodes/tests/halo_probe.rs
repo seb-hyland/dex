@@ -38,6 +38,8 @@ fn the_probe_finds_a_canvas_item_under_the_pointer() {
     let mut ws = Desktops::new_workspace();
     let root = ws.root();
 
+    let _ = target_under(&mut ws, egui::pos2(-100.0, -100.0));
+
     ws.submit_action_dyn(Action {
         dest: root,
         description: "add item".into(),
@@ -47,10 +49,6 @@ fn the_probe_finds_a_canvas_item_under_the_pointer() {
         }),
     });
     ws.process_pending();
-
-    // A frame off-screen first: the item is centred using the canvas viewport,
-    // which is only known once the canvas has drawn.
-    let _ = target_under(&mut ws, egui::pos2(-100.0, -100.0));
 
     let canvas = ws
         .send_request(root.cast::<Desktops>(), ActiveCanvas)
@@ -75,5 +73,115 @@ fn the_probe_finds_a_canvas_item_under_the_pointer() {
         target_under(&mut ws, centre),
         Some(item.erase()),
         "the pointer over a canvas item finds that item"
+    );
+}
+
+/// A node clipped out of view cannot be pointed at, even where it would have
+/// drawn: the canvas is clipped below the tab bar, so an item panned up under
+/// the bar is unreachable there.
+#[test]
+fn a_clipped_node_is_not_a_candidate() {
+    use dex_nodes::layouts::canvas::layout::{CanvasChildren, NodeScreenRect};
+    use dex_nodes::layouts::desktops::ActiveCanvas;
+
+    dex_nodes::scripting::init_python();
+    let mut ws = Desktops::new_workspace();
+    let root = ws.root();
+
+    // Added before the first frame, so it is centred from an unknown viewport
+    // and lands up and to the left — over the tab bar and the sidebar.
+    ws.submit_action_dyn(Action {
+        dest: root,
+        description: "add item".into(),
+        body: Box::new(AddCanvasItem {
+            child: Arc::new(Label::new("out of bounds".to_owned())),
+            size: Vector { x: 200.0, y: 100.0 },
+        }),
+    });
+    ws.process_pending();
+    let _ = target_under(&mut ws, egui::pos2(-100.0, -100.0));
+
+    let canvas = ws
+        .send_request(root.cast::<Desktops>(), ActiveCanvas)
+        .expect("a canvas is active");
+    let item = *ws
+        .send_request(canvas, CanvasChildren)
+        .unwrap_or_default()
+        .first()
+        .expect("the item was added");
+    let rect = ws
+        .send_request(root, NodeScreenRect { node: item.erase() })
+        .flatten()
+        .expect("the item reports where it would draw");
+
+    // Its own top-left is above the content area, so nothing of it is there.
+    assert!(
+        rect.min.y < 42.0,
+        "this item really does reach up under the tab bar"
+    );
+    assert_ne!(
+        target_under(&mut ws, egui::pos2(rect.min.x + 4.0, rect.min.y + 4.0)),
+        Some(item.erase()),
+        "the clipped-away part of an item is not pointable"
+    );
+}
+
+/// Panning is gated on where a drag begins: `ConnectableAt` is the same hit
+/// test the pan uses, so it answers for an item and not for empty background.
+#[test]
+fn the_canvas_distinguishes_items_from_background() {
+    use dex_nodes::layouts::canvas::layout::{CanvasChildren, ConnectableAt, NodeScreenRect};
+    use dex_nodes::layouts::desktops::ActiveCanvas;
+
+    dex_nodes::scripting::init_python();
+    let mut ws = Desktops::new_workspace();
+    let root = ws.root();
+
+    // A frame first, so the item is centred in a known viewport.
+    let _ = target_under(&mut ws, egui::pos2(-100.0, -100.0));
+    ws.submit_action_dyn(Action {
+        dest: root,
+        description: "add item".into(),
+        body: Box::new(AddCanvasItem {
+            child: Arc::new(Label::new("body".to_owned())),
+            size: Vector { x: 200.0, y: 100.0 },
+        }),
+    });
+    ws.process_pending();
+    let _ = target_under(&mut ws, egui::pos2(-100.0, -100.0));
+
+    let canvas = ws
+        .send_request(root.cast::<Desktops>(), ActiveCanvas)
+        .expect("a canvas is active");
+    let item = *ws
+        .send_request(canvas, CanvasChildren)
+        .unwrap_or_default()
+        .first()
+        .expect("the item was added");
+    let rect = ws
+        .send_request(root, NodeScreenRect { node: item.erase() })
+        .flatten()
+        .expect("the item is on screen");
+
+    let centre = ScreenPos {
+        x: (rect.min.x + rect.max.x) * 0.5,
+        y: (rect.min.y + rect.max.y) * 0.5,
+    };
+    assert_eq!(
+        ws.send_request(canvas, ConnectableAt { pos: centre })
+            .flatten(),
+        Some(item.erase()),
+        "a point inside the item belongs to the item, so a drag there is not a pan"
+    );
+
+    let background = ScreenPos {
+        x: rect.max.x + 80.0,
+        y: rect.max.y + 80.0,
+    };
+    assert_eq!(
+        ws.send_request(canvas, ConnectableAt { pos: background })
+            .flatten(),
+        None,
+        "empty background belongs to no item, so a drag there pans"
     );
 }

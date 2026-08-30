@@ -12,10 +12,12 @@ use crate::primitives::shapes::Rect;
 use crate::primitives::text::Label;
 
 /// Where the lens sits relative to the node it belongs to.
-const HANDLE_OFFSET: f32 = 22.0;
+const HANDLE_OFFSET: f32 = 8.0;
 const HANDLE_SIZE: Vector = Vector { x: 14.0, y: 22.0 };
 /// The menu's width. Fixed, as the popup sizes itself to its contents.
 const MENU_WIDTH: f32 = 160.0;
+/// How far the pointer may stray from the menu before it closes.
+const MENU_SLACK: f32 = 36.0;
 /// A stable egui id: there is only ever one handle.
 const HANDLE_ID: &str = "dex_halo_handle";
 
@@ -101,7 +103,7 @@ impl Node for Inspector {
         let handle_region = ScreenRegion::from_min_size(
             ScreenPos {
                 x: region.min.x - HANDLE_OFFSET,
-                y: region.min.y,
+                y: region.min.y - HANDLE_OFFSET,
             },
             HANDLE_SIZE,
         );
@@ -109,9 +111,9 @@ impl Node for Inspector {
         let resp = ctx
             .ui
             .interact(handle_region.into(), Id::new(HANDLE_ID), Sense::CLICK);
-        let engaged = resp.hovered() || resp.is_pointer_button_down_on();
+        let engaged =
+            resp.hovered() || resp.is_pointer_button_down_on() || self.inspector.is_some();
 
-        // A grip plate: quiet until approached, then it lifts and darkens.
         Rect {
             size: HANDLE_SIZE,
             corner_radius: 4.0,
@@ -159,11 +161,14 @@ impl Node for Inspector {
         let node = ctx.node;
         let popup = Popup::menu(&resp)
             .kind(PopupKind::Tooltip)
-            .close_behavior(PopupCloseBehavior::CloseOnClick)
+            .close_behavior(PopupCloseBehavior::IgnoreClicks)
             .width(MENU_WIDTH);
         let was_open = popup.is_open();
+        let popup_id = popup.get_id();
+        // Last frame's rect, in case this frame's is not reported.
+        let previous_rect = popup.get_popup_rect();
 
-        popup.show(|ui| {
+        let shown = popup.show(|ui| {
             let Some(inspector) = inspector else {
                 return;
             };
@@ -183,6 +188,18 @@ impl Node for Inspector {
                 ui.allocate_space(size.into());
             }
         });
+
+        // Close once the pointer has left the menu for good.
+        if was_open {
+            let pointer = ctx.ui.ctx().pointer_latest_pos();
+            let within =
+                |rect: egui::Rect| pointer.is_some_and(|p| rect.expand(MENU_SLACK).contains(p));
+            let menu_rect = shown.as_ref().map(|r| r.response.rect).or(previous_rect);
+            let holding = menu_rect.is_some_and(within) || within(handle_region.into());
+            if !holding {
+                Popup::close_id(ctx.ui.ctx(), popup_id);
+            }
+        }
 
         // Build on the click that opened it; tear down once it has closed.
         if was_open && self.inspected != Some(target) {
@@ -209,75 +226,52 @@ impl Node for Inspector {
     }
 }
 
-/// The inspector's default menu.
+/// Copy and Mirror, for a node that can belong on a canvas.
 #[utils::portable]
-pub struct InspectorMenu {
-    /// The node these commands act on.
+pub struct PlacementCommands {
+    /// The node these place a copy or a mirror of.
     #[uid_ref]
     target: NodeUid,
-    /// The target's on-screen size when the menu opened.
+    /// The size a placed copy should take when it has no canvas layout of its own.
     size: Vector,
     copy_button: NodeUid<Button>,
     mirror_button: NodeUid<Button>,
-    /// The target's own commands, if it has any.
-    extra: Option<NodeUid>,
     column: NodeUid<VerticalLayout>,
 }
 
-impl InspectorMenu {
-    fn build(
-        ws: &Workspace,
-        target: NodeUid,
-        size: Vector,
-        extra: Option<NodeUid>,
-    ) -> NodeUid<InspectorMenu> {
+impl PlacementCommands {
+    /// Build the Copy and Mirror pair for `target`, to sit in its inspector.
+    pub fn build(ctx: NodeContext, target: NodeUid, size: Vector) -> NodeUid<PlacementCommands> {
+        let ws = ctx.workspace.action_handle();
         let command = |label: &str| {
-            Button::build_with(ws.action_handle(), Label::new(label.to_owned()), |b| {
+            Button::build_with(ws.clone(), Label::new(label.to_owned()), |b| {
                 b.padding = 4.0;
                 b.corner_radius = 3.0;
                 b.border = Stroke::NONE;
                 b.fill_width = true;
             })
         };
-
-        let target_ctx = NodeContext {
-            id: target,
-            workspace: ws,
-        };
-        let ty_label = ws
-            .get_node(target)
-            .map(|t| t.type_name(target_ctx))
-            .map(Label::new);
-
         let copy_button = command("Copy");
         let mirror_button = command("Mirror");
-
-        let rows = [
-            ty_label.map(Arc::new).map(|l| LayoutChild::Node(l)),
-            Some(LayoutChild::Id(copy_button.erase())),
-            Some(LayoutChild::Id(mirror_button.erase())),
-            extra.map(LayoutChild::Id),
-        ];
-        let column = ws.insert_node(VerticalLayout::new(
-            rows.into_iter().flatten().collect(),
+        let column = VerticalLayout::build(
+            ws.clone(),
+            vec![copy_button.erase(), mirror_button.erase()],
             2.0,
-        ));
-
+        );
         ws.insert_node(Self {
             target,
             size,
             copy_button,
             mirror_button,
-            extra,
             column,
         })
     }
 }
 
 #[utils::dynamic_node(skip)]
-impl Node for InspectorMenu {
+impl Node for PlacementCommands {
     fn type_name(&self, _ctx: NodeContext) -> String {
-        "An Inspector Menu".into()
+        "Placement Commands".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
@@ -322,6 +316,65 @@ impl Node for InspectorMenu {
         ctx.workspace.delete_node(self.column.erase());
         ctx.workspace.delete_node(self.copy_button.erase());
         ctx.workspace.delete_node(self.mirror_button.erase());
+    }
+}
+
+defhandlers! { PlacementCommands {} }
+
+/// The inspector's default menu.
+#[utils::portable]
+pub struct InspectorMenu {
+    /// The node this menu describes.
+    #[uid_ref]
+    target: NodeUid,
+    /// The target's own commands, if it has any.
+    extra: Option<NodeUid>,
+    column: NodeUid<VerticalLayout>,
+}
+
+impl InspectorMenu {
+    fn build(ws: &Workspace, target: NodeUid, extra: Option<NodeUid>) -> NodeUid<InspectorMenu> {
+        let target_ctx = NodeContext {
+            id: target,
+            workspace: ws,
+        };
+        let ty_label = ws
+            .get_node(target)
+            .map(|t| t.type_name(target_ctx))
+            .map(Label::new);
+
+        // A name, and whatever the target offers. Commands are the target's to decide.
+        let rows = [
+            ty_label.map(|l| LayoutChild::Node(Arc::new(l))),
+            extra.map(LayoutChild::Id),
+        ];
+        let column = ws.insert_node(VerticalLayout::new(
+            rows.into_iter().flatten().collect(),
+            2.0,
+        ));
+
+        ws.insert_node(Self {
+            target,
+            extra,
+            column,
+        })
+    }
+}
+
+#[utils::dynamic_node(skip)]
+impl Node for InspectorMenu {
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "An Inspector Menu".into()
+    }
+
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
+        let constraints = ctx.constraints;
+        ctx.draw_workspace_node(self.column.erase(), constraints)
+            .unwrap_or(DrawResult::Complete { region: None })
+    }
+
+    fn on_delete(&self, ctx: NodeContext) {
+        ctx.workspace.delete_node(self.column.erase());
         if let Some(extra) = self.extra {
             ctx.workspace.delete_node(extra);
         }
@@ -344,7 +397,7 @@ defhandlers! { Inspector {
                 .get_node(a.node)
                 .and_then(|node| node.build_inspector(target_ctx));
             this.inspector = Some(
-                InspectorMenu::build(ctx.workspace, a.node, a.size, extra).erase(),
+                InspectorMenu::build(ctx.workspace, a.node, extra).erase(),
             );
             this.inspected = Some(a.node);
         },
@@ -356,5 +409,7 @@ defhandlers! { Inspector {
         },
     ],
     requests: [
+        // Whether a menu is currently up.
+        InspectorOpen => (this, _q): bool { this.inspector.is_some() },
     ],
 }}

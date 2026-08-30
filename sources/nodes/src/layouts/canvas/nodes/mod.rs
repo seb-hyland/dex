@@ -6,6 +6,7 @@ use utils::Transient;
 
 use crate::composites::button::Button;
 use crate::layouts::canvas::layout::RemoveCanvasItem;
+use crate::layouts::inspector::PlacementCommands;
 use crate::layouts::vertical::VerticalLayout;
 use crate::primitives::{
     interaction::{ContainsPointer, InteractionBox, TakeClicked, WasDragged, WasHovered},
@@ -27,8 +28,8 @@ pub struct CanvasNode {
     proximity: NodeUid<InteractionBox>,
     /// Drag/hover sensor for this item's move handle.
     move_sensor: NodeUid<InteractionBox>,
-    /// The eight resize grips: tl, tr, bl, br, top, bottom, left, right.
-    grips: [NodeUid<InteractionBox>; 8],
+    /// The eight resize grips: tr, bl, br, top, bottom, left, right.
+    grips: [NodeUid<InteractionBox>; 7],
 }
 
 #[utils::dynamic_methods]
@@ -70,20 +71,13 @@ impl CanvasNodeInspector {
         ctx: NodeContext,
         target: NodeUid<CanvasNode>,
         child: NodeUid,
+        size: Vector,
     ) -> NodeUid<CanvasNodeInspector> {
-        let command = |label: &str| {
-            Button::build_with(
-                ctx.workspace.action_handle(),
-                Label::new(label.to_owned()),
-                |b| {
-                    b.padding = 4.0;
-                    b.corner_radius = 3.0;
-                    b.border = dex_core::Stroke::NONE;
-                    b.fill_width = true;
-                },
-            )
-        };
-        let delete_button = command("Delete");
+        let delete_button = Button::build(
+            ctx.workspace.action_handle(),
+            Label::new("Delete".to_owned()),
+        );
+        let placement = PlacementCommands::build(ctx, target.erase(), size);
         let child_ctx = NodeContext {
             id: child,
             workspace: ctx.workspace,
@@ -95,10 +89,14 @@ impl CanvasNodeInspector {
             .and_then(|child_node| child_node.build_inspector(child_ctx));
         let column = VerticalLayout::build(
             ctx.workspace.action_handle(),
-            [Some(delete_button.erase()), target_inspector]
-                .into_iter()
-                .flatten()
-                .collect(),
+            [
+                Some(placement.erase()),
+                Some(delete_button.erase()),
+                target_inspector,
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
             2.0,
         );
         ctx.workspace.insert_node(Self {
@@ -170,7 +168,7 @@ impl Node for CanvasNode {
         const MIN_SIZE: f32 = 24.0;
         const HANDLE_SIZE: Vector = Vector { x: 12.0, y: 18.0 };
         // Beyond the inspector's lens, which sits at 22.
-        const HANDLE_OFFSET: f32 = 42.0;
+        const HANDLE_OFFSET: f32 = 22.0;
         const VISIBILITY_MARGIN: f32 = 16.0;
 
         // Muted palette, matching the discreet canvas affordances.
@@ -236,12 +234,6 @@ impl Node for CanvasNode {
             let edge_h = (h - d).max(0.0);
             // (key, local top-left, sensor size, size multiplier)
             let grips = [
-                (
-                    "tl",
-                    Vector { x: -r, y: -r },
-                    Vector { x: d, y: d },
-                    Vector { x: -1.0, y: -1.0 },
-                ),
                 (
                     "tr",
                     Vector { x: w - r, y: -r },
@@ -391,7 +383,6 @@ impl Node for CanvasNode {
                     },
             };
             let grip_positions = [
-                (-1.0, -1.0),
                 (1.0, -1.0),
                 (-1.0, 1.0),
                 (1.0, 1.0),
@@ -450,7 +441,9 @@ impl Node for CanvasNode {
     }
 
     fn build_inspector(&self, ctx: NodeContext) -> Option<NodeUid> {
-        Some(CanvasNodeInspector::build(ctx, ctx.id.cast(), self.child).erase())
+        Some(
+            CanvasNodeInspector::build(ctx, ctx.id.cast(), self.child, self.committed.size).erase(),
+        )
     }
 
     fn deref_target(&self) -> Option<NodeUid> {
