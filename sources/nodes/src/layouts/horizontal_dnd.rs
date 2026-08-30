@@ -3,7 +3,7 @@ use utils::Transient;
 
 use crate::primitives::{
     interaction::{DragPointerPos, InteractionBox, WasDragReleased},
-    shapes::{Line, Rect},
+    shapes::{Path, Rect},
 };
 
 /**
@@ -193,10 +193,10 @@ impl Node for HorizontalDnD {
             }
             .paint(ctx.ui.painter(), region.min);
 
-            Line {
-                span: Vector { x: 0.0, y: max_h },
-                stroke: Stroke::new(2.0, Color::gray(120)),
-            }
+            Path::span(
+                Vector { x: 0.0, y: max_h },
+                Stroke::new(2.0, Color::gray(120)),
+            )
             .paint(
                 ctx.ui.painter(),
                 ScreenPos {

@@ -1,6 +1,6 @@
 use dex_core::prelude::*;
 
-use crate::primitives::shapes::{self, Line};
+use crate::primitives::shapes::{self, Path};
 
 #[derive(Copy)]
 #[utils::portable(noop_reset)]
@@ -95,13 +95,13 @@ impl Node for SectionDivider {
             };
         };
 
-        Line {
-            span: Vector { x: width, y: 0.0 },
-            stroke: Stroke {
+        Path::span(
+            Vector { x: width, y: 0.0 },
+            Stroke {
                 width: DIVIDER_HEIGHT,
                 color: DIVIDER_COLOR,
             },
-        }
+        )
         .paint(ctx.ui.painter(), ctx.constraints.pos);
 
         DrawResult::Complete {

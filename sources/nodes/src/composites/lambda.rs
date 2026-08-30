@@ -20,7 +20,7 @@ use crate::{
     primitives::{
         interaction::{DragPointerPos, InteractionBox, WasClicked, WasDragReleased},
         nothing::Nothing,
-        shapes::{Circle, Line},
+        shapes::{Circle, Path},
         text::{CodeEditor, GetText, Label, LabelEditable, SetText},
     },
 };
@@ -188,11 +188,8 @@ impl Node for ConnectionPort {
         if let Some(pos) = cur_drag_pos {
             // Update ongoing drag
             self.drag_pos.set(pos);
-            Line {
-                span: (pos - port_center).to_vector(),
-                stroke: wire_stroke,
-            }
-            .paint(&wire_painter, port_center);
+            Path::span((pos - port_center).to_vector(), wire_stroke)
+                .paint(&wire_painter, port_center);
             // Say what would be wired up if the drag ended here.
             if let Some(rect) = ws.inspectable_at(pos).and_then(|c| ws.inspectable_rect(c)) {
                 outline(&mark_painter, rect, CANDIDATE_COLOR);
@@ -204,11 +201,8 @@ impl Node for ConnectionPort {
                 x: (rect.min.x + rect.max.x) * 0.5,
                 y: (rect.min.y + rect.max.y) * 0.5,
             };
-            Line {
-                span: (target_anchor - port_center).to_vector(),
-                stroke: wire_stroke,
-            }
-            .paint(&wire_painter, port_center);
+            Path::span((target_anchor - port_center).to_vector(), wire_stroke)
+                .paint(&wire_painter, port_center);
 
             outline(&mark_painter, rect, wire_color);
         }
