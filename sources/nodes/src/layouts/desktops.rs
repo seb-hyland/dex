@@ -8,7 +8,7 @@ use crate::{
         canvas::{self, layout::Canvas, sidebar::CanvasSidebar},
         child::LayoutChild,
         horizontal::HorizontalLayout,
-        horizontal_dnd::{AddChild, HorizontalDnD},
+        horizontal_dnd::{AddChild, Children, HorizontalDnD, RemoveChild},
     },
     primitives::{
         interaction::{InteractionBox, WasClicked, WasDoubleClicked, WasDragged, WasHovered},
@@ -30,7 +30,8 @@ pub struct Desktops {
     tab_bar: NodeUid<HorizontalDnD>,
     /// Which desktop is showing.
     #[uid_ref]
-    active: Option<NodeUid<Canvas>>,
+    /// The canvas on display.
+    active: NodeUid<Canvas>,
     sidebar: NodeUid<CanvasSidebar>,
     add_button: NodeUid<Button>,
     divider: NodeUid<InteractionBox>,
@@ -74,7 +75,7 @@ impl Desktops {
             id,
             Desktops {
                 tab_bar,
-                active: Some(canvas),
+                active: canvas,
                 sidebar,
                 add_button,
                 divider,
@@ -93,6 +94,18 @@ const SIDEBAR_MIN: f32 = 120.0;
 const SIDEBAR_MAX: f32 = 500.0;
 const TAB_BAR_H: f32 = 42.0;
 const TAB_SPACING: f32 = 6.0;
+
+impl Desktops {
+    /// Build a fresh canvas and its tab into the workspace, returning the canvas.
+    fn open_canvas(&self, ctx: NodeContext, name: String) -> NodeUid<Canvas> {
+        let handle = ctx.workspace.action_handle();
+        let canvas = Canvas::build(handle.clone());
+        let tab = DesktopTabView::build(handle, canvas, ctx.id.cast(), name);
+        ctx.workspace
+            .submit_action(self.tab_bar, "Add tab", AddChild { child: tab.erase() });
+        canvas
+    }
+}
 
 #[utils::dynamic_node]
 impl Node for Desktops {
@@ -218,9 +231,7 @@ impl Node for Desktops {
                 ctx.submit_action_for_self::<Self, _>(AddCanvas, "Add canvas");
             }
 
-            if let Some(active) = self.active {
-                ctx.draw_workspace_node(active.erase(), content_constraints);
-            }
+            ctx.draw_workspace_node(self.active.erase(), content_constraints);
         }
 
         // Draw sidebar splitter ----------------------------------------
@@ -295,29 +306,44 @@ impl Node for Desktops {
         self.override_stack
             .last()
             .copied()
-            .or_else(|| self.active.map(|canvas| canvas.erase()))
+            .or(Some(self.active.erase()))
     }
 }
 
 defhandlers! { Desktops {
     actions: [
         AddCanvas => (this, _a, ctx) {
-            let canvas = Canvas::build(ctx.workspace.action_handle());
-            let tab = DesktopTabView::build(
-                ctx.workspace.action_handle(),
-                canvas,
-                ctx.id.cast(),
-                "New canvas".to_owned(),
-            );
-            ctx.workspace.submit_action(
-                this.tab_bar,
-                "Add tab",
-                AddChild { child: tab.erase() },
-            );
-            this.active = Some(canvas);
+            this.active = this.open_canvas(ctx, "Unnamed desktop".to_owned());
         },
         SetActive { canvas: NodeUid<Canvas> } => (this, s) {
-            this.active = Some(s.canvas);
+            this.active = s.canvas;
+        },
+
+        // Close a canvas and its tab.
+        CloseCanvas { tab: NodeUid } => (this, s, ctx) {
+            let ws = ctx.workspace;
+            let tabs = ws.send_request(this.tab_bar, Children).unwrap_or_default();
+            let closing = ws.send_request(s.tab.cast::<DesktopTabView>(), TabCanvas);
+
+            if closing == Some(this.active) {
+                // Prefer the tab to the left, as a browser does; fall back to the one on the right.
+                let neighbour = tabs
+                    .iter()
+                    .position(|t| *t == s.tab)
+                    .and_then(|i| {
+                        // `i - 1` underflows to `None` at the first tab.
+                        tabs.get(i.wrapping_sub(1)).or_else(|| tabs.get(i + 1))
+                    })
+                    .and_then(|t| ws.send_request(t.cast::<DesktopTabView>(), TabCanvas));
+                // Closing the last desktop opens an empty one in its place.
+                this.active = match neighbour {
+                    Some(canvas) => canvas,
+                    None => this.open_canvas(ctx, "Unnamed desktop".to_owned()),
+                };
+            }
+
+            ws.submit_action(this.tab_bar, "Removed tab", RemoveChild { child: s.tab });
+            ws.delete_node(s.tab);
         },
         SetSidebarWidth { width: f32 } => (this, s) {
             this.sidebar_width = s.width;
@@ -332,7 +358,11 @@ defhandlers! { Desktops {
         },
     ],
     requests: [
-        ActiveCanvas => (this, _q): Option<NodeUid<Canvas>> { this.active },
+        ActiveCanvas => (this, _q): NodeUid<Canvas> { this.active },
+        // The open tabs, in display order.
+        Tabs => (this, _q, ctx): Vec<NodeUid> {
+            ctx.workspace.send_request(this.tab_bar, Children).unwrap_or_default()
+        },
         PythonPrelude => (this, _q, ctx): String {
             ctx
                 .workspace
@@ -353,6 +383,7 @@ struct DesktopTabView {
     parent: NodeUid<Desktops>,
     /// Click/double-click sensor over the whole tab.
     sensor: NodeUid<InteractionBox>,
+    delete_button: NodeUid<Button>,
 }
 
 impl DesktopTabView {
@@ -365,11 +396,17 @@ impl DesktopTabView {
     ) -> NodeUid<DesktopTabView> {
         let name = ws.insert_node(LabelEditable::click_to_edit(name_text));
         let sensor = ws.insert_node(InteractionBox::sensing(false, true, false));
+        let delete_button = Button::build_with(ws.clone(), Label::new("×".to_owned()), |b| {
+            b.padding = 2.0;
+            b.corner_radius = 3.0;
+            b.border = Stroke::NONE;
+        });
         ws.insert_node(Self {
             canvas,
             name,
             parent,
             sensor,
+            delete_button,
         })
     }
 }
@@ -383,6 +420,8 @@ impl Node for DesktopTabView {
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
         const PAD_X: f32 = 10.0;
         const PAD_Y: f32 = 5.0;
+        /// Space between the name and the close button.
+        const GAP: f32 = 6.0;
 
         let avail_w = ctx
             .constraints
@@ -401,12 +440,8 @@ impl Node for DesktopTabView {
             .workspace
             .send_request(self.name, IsInteractive)
             .unwrap_or(false);
-        let active = ctx
-            .node
-            .workspace
-            .send_request(self.parent, ActiveCanvas)
-            .flatten()
-            == Some(self.canvas);
+        let active =
+            ctx.node.workspace.send_request(self.parent, ActiveCanvas) == Some(self.canvas);
 
         // The editable name, inset by the padding.
         let name_res = ctx.draw_workspace_node(
@@ -424,9 +459,32 @@ impl Node for DesktopTabView {
             .map(|r| r.size())
             .unwrap_or(Vector { x: 48.0, y: 18.0 });
 
+        // The close button follows the name; drawn unconstrained, so it reports
+        // the natural size the tab is then sized around.
+        let button_res = ctx.draw_workspace_node(
+            self.delete_button.erase(),
+            DrawConstraints {
+                pos: origin
+                    + Vector {
+                        x: PAD_X + name_size.x + GAP,
+                        y: PAD_Y,
+                    },
+                x: None,
+                y: None,
+                wrap: WrapConstraints::NotAllowed,
+                should_clip: false,
+            },
+        );
+        let button_size = button_res
+            .and_then(|r| r.region())
+            .map(|r| r.size())
+            .unwrap_or(Vector { x: 14.0, y: 14.0 });
+
+        // Everything left of the close button is the tab's own click target.
+        let name_area_w = PAD_X + name_size.x + GAP;
         let tab_size = Vector {
-            x: name_size.x + 2.0 * PAD_X,
-            y: name_size.y + 2.0 * PAD_Y,
+            x: name_area_w + button_size.x + PAD_X,
+            y: name_size.y.max(button_size.y) + 2.0 * PAD_Y,
         };
 
         // Outline; the active tab gets a stronger accent.
@@ -450,7 +508,8 @@ impl Node for DesktopTabView {
                 self.sensor.erase(),
                 DrawConstraints {
                     pos: origin,
-                    x: Some(AxisConstraint::Exactly(tab_size.x)),
+                    // Stops short of the close button.
+                    x: Some(AxisConstraint::Exactly(name_area_w)),
                     y: Some(AxisConstraint::Exactly(tab_size.y)),
                     wrap: WrapConstraints::NotAllowed,
                     should_clip: false,
@@ -482,6 +541,19 @@ impl Node for DesktopTabView {
             }
         }
 
+        if ctx
+            .node
+            .workspace
+            .send_request(self.delete_button.erase(), WasClicked)
+            .unwrap_or(false)
+        {
+            ctx.node.workspace.submit_action(
+                self.parent,
+                "Closed canvas",
+                CloseCanvas { tab: ctx.node.id },
+            );
+        }
+
         DrawResult::Complete {
             region: Some(ScreenRegion::from_min_size(origin, tab_size)),
         }
@@ -490,8 +562,14 @@ impl Node for DesktopTabView {
     fn on_delete(&self, ctx: NodeContext) {
         ctx.workspace.delete_node(self.name.erase());
         ctx.workspace.delete_node(self.sensor.erase());
+        ctx.workspace.delete_node(self.delete_button.erase());
         ctx.workspace.delete_node(self.canvas.erase());
     }
 }
 
-defhandlers! { DesktopTabView {} }
+defhandlers! { DesktopTabView {
+    requests: [
+        // The canvas this tab stands for.
+        TabCanvas => (this, _q): NodeUid<Canvas> { this.canvas },
+    ],
+}}

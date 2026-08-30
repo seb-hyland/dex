@@ -372,3 +372,86 @@ fn a_script_node_declares_what_it_owns_and_its_handles_follow_the_copy() {
         "an undeclared reference is not copied"
     );
 }
+
+/// Closing a tab removes it, disposes of the canvas it owned, and hands the
+/// active slot to a neighbour.
+#[test]
+fn closing_a_tab_removes_its_canvas_and_reactivates_a_neighbour() {
+    use dex_nodes::layouts::desktops::{
+        ActiveCanvas, AddCanvas, CloseCanvas, Desktops, Tabs,
+    };
+
+    let mut ws = Desktops::new_workspace();
+    let root = ws.root().cast::<Desktops>();
+
+    let first_canvas = ws
+        .send_request(root, ActiveCanvas)
+        .expect("the root answers with its active canvas");
+
+    ws.submit_action(root, "Add canvas", AddCanvas);
+    ws.process_pending();
+
+    let second_canvas = ws
+        .send_request(root, ActiveCanvas)
+        .expect("the new canvas becomes active");
+    assert_ne!(first_canvas, second_canvas);
+
+    let tabs = ws.send_request(root, Tabs).unwrap_or_default();
+    assert_eq!(tabs.len(), 2, "both canvases have a tab");
+
+    // Close the active (second) tab.
+    ws.submit_action(root, "Close canvas", CloseCanvas { tab: tabs[1] });
+    ws.process_pending();
+
+    let remaining = ws.send_request(root, Tabs).unwrap_or_default();
+    assert_eq!(remaining, vec![tabs[0]], "only the first tab is left");
+    assert_eq!(
+        ws.send_request(root, ActiveCanvas),
+        Some(first_canvas),
+        "the neighbouring canvas takes over"
+    );
+    assert!(
+        ws.get_node(tabs[1]).is_none(),
+        "the closed tab is gone from the registry"
+    );
+    assert!(
+        ws.get_node(second_canvas.erase()).is_none(),
+        "deleting the tab disposed of the canvas it owned"
+    );
+}
+
+/// There is always somewhere to work: closing the only tab opens a fresh
+/// desktop rather than leaving an empty root.
+#[test]
+fn closing_the_last_tab_opens_an_empty_desktop() {
+    use dex_nodes::layouts::desktops::{ActiveCanvas, CloseCanvas, Desktops, Tabs};
+
+    let mut ws = Desktops::new_workspace();
+    let root = ws.root().cast::<Desktops>();
+
+    let tabs = ws.send_request(root, Tabs).unwrap_or_default();
+    assert_eq!(tabs.len(), 1, "a fresh workspace has exactly one desktop");
+    let only_canvas = ws
+        .send_request(root, ActiveCanvas)
+        .expect("the root answers with its active canvas");
+
+    ws.submit_action(root, "Close canvas", CloseCanvas { tab: tabs[0] });
+    ws.process_pending();
+
+    let remaining = ws.send_request(root, Tabs).unwrap_or_default();
+    assert_eq!(remaining.len(), 1, "a replacement desktop takes its place");
+    assert_ne!(remaining[0], tabs[0], "and it is a new tab, not the closed one");
+
+    let active = ws
+        .send_request(root, ActiveCanvas)
+        .expect("the root still has an active canvas");
+    assert_ne!(active, only_canvas, "the replacement canvas is active");
+    assert!(
+        ws.get_node(only_canvas.erase()).is_none(),
+        "the closed canvas is gone"
+    );
+    assert!(
+        ws.get_node(active.erase()).is_some(),
+        "the replacement canvas is live"
+    );
+}

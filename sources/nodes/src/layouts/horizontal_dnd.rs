@@ -272,5 +272,7 @@ defhandlers! { HorizontalDnD {
     ],
     requests: [
         ChildCount => (this, _q): usize { this.children.len() },
+        // The children in display order, for a caller that needs to pick a neighbour.
+        Children => (this, _q): Vec<NodeUid> { this.children.clone() },
     ],
 }}
