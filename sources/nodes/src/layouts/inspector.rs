@@ -227,6 +227,7 @@ impl Node for Inspector {
 }
 
 /// Copy and Mirror, for a node that can belong on a canvas.
+#[utils::dynamic_type]
 #[utils::portable]
 pub struct PlacementCommands {
     /// The node these place a copy or a mirror of.
@@ -239,10 +240,14 @@ pub struct PlacementCommands {
     column: NodeUid<VerticalLayout>,
 }
 
+#[utils::dynamic_methods]
 impl PlacementCommands {
     /// Build the Copy and Mirror pair for `target`, to sit in its inspector.
-    pub fn build(ctx: NodeContext, target: NodeUid, size: Vector) -> NodeUid<PlacementCommands> {
-        let ws = ctx.workspace.action_handle();
+    pub fn build(
+        ws: WorkspaceActionHandle,
+        target: NodeUid,
+        size: Vector,
+    ) -> NodeUid<PlacementCommands> {
         let command = |label: &str| {
             Button::build_with(ws.clone(), Label::new(label.to_owned()), |b| {
                 b.padding = 4.0;

@@ -136,6 +136,21 @@ class TiledLayout:
         """
         return [child for child in self.children if isinstance(child, dex.NodeUid)]
 
+    def build_inspector(self, ctx):
+        """The commands this layout offers the inspector's lens.
+
+        Returns a node — a handle to one built here, or any value, which the
+        runtime registers. Whatever comes back belongs to the inspector and is
+        deleted when the menu closes, so do not hold on to it.
+
+        Nothing is offered by default: Copy and Mirror come from
+        `dex.PlacementCommands`, opted into here the same way a Rust node does.
+        """
+        handle = ctx.workspace.action_handle()
+        return dex.PlacementCommands.build(
+            handle, ctx.id, dex.Vector.new(240.0, 180.0)
+        )
+
     def on_delete(self, ctx):
         """Delete the children we own."""
         for child in self.owned_nodes():

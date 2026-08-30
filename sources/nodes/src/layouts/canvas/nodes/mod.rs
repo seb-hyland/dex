@@ -77,7 +77,8 @@ impl CanvasNodeInspector {
             ctx.workspace.action_handle(),
             Label::new("Delete".to_owned()),
         );
-        let placement = PlacementCommands::build(ctx, target.erase(), size);
+        let placement =
+            PlacementCommands::build(ctx.workspace.action_handle(), target.erase(), size);
         let child_ctx = NodeContext {
             id: child,
             workspace: ctx.workspace,

@@ -151,6 +151,12 @@ impl dex_core::refs::NodeRefs for DynamicNode {
     }
 }
 
+/// Register an error to show in place of the inspector a script could not build.
+fn inspector_error(ctx: NodeContext, message: String) -> NodeUid {
+    ctx.workspace
+        .insert_node_dyn(Arc::new(ErrorLayout::message(message)))
+}
+
 /// A script object gets the same `Node` surface a Rust node has. Each hook is optional.
 #[utils::dynamic_node(skip)]
 impl Node for DynamicNode {
@@ -172,6 +178,39 @@ impl Node for DynamicNode {
                 .name()
                 .map(|n| n.to_string())
                 .unwrap_or_else(|_| "Dynamic Node".to_owned())
+        })
+    }
+
+    fn build_inspector(&self, ctx: NodeContext) -> Option<NodeUid> {
+        Python::attach(|py| {
+            let bound = self.obj.as_ref()?.bind(py);
+            if !bound.hasattr("build_inspector").unwrap_or(false) {
+                return None;
+            }
+            let called = PyNodeContext::enter(py, ctx, |pyctx| {
+                bound.call_method1("build_inspector", (pyctx.clone(),))
+            });
+            match called {
+                Ok(Ok(value)) if !value.is_none() => Some(
+                    // A handle names a node the script built and registered
+                    // itself; anything else is a value that still needs a home.
+                    match value.extract::<NodeHandle>() {
+                        Ok(handle) => handle.0,
+                        Err(_) => ctx
+                            .workspace
+                            .insert_node_dyn(crate::scripting::to_dyn_node_py(&value)),
+                    },
+                ),
+                Ok(Ok(_)) => None,
+                Ok(Err(e)) => Some(inspector_error(
+                    ctx,
+                    format!("Python node's build_inspector raised: {e}"),
+                )),
+                Err(e) => Some(inspector_error(
+                    ctx,
+                    format!("Python node's build_inspector could not be called: {e}"),
+                )),
+            }
         })
     }
 
