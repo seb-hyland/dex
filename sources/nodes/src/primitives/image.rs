@@ -48,8 +48,8 @@ impl Image {
 
 #[utils::dynamic_node]
 impl Node for Image {
-    fn type_name(&self) -> String {
-        "Image".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "An Image".into()
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {

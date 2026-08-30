@@ -55,8 +55,8 @@ impl Default for Inspector {
 
 #[utils::dynamic_node(skip)]
 impl Node for Inspector {
-    fn type_name(&self) -> String {
-        "Inspector".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "An Inspector".into()
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {
@@ -159,7 +159,7 @@ impl Node for Inspector {
         let node = ctx.node;
         let popup = Popup::menu(&resp)
             .kind(PopupKind::Tooltip)
-            .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
+            .close_behavior(PopupCloseBehavior::CloseOnClick)
             .width(MENU_WIDTH);
         let was_open = popup.is_open();
 
@@ -240,13 +240,14 @@ impl InspectorMenu {
             })
         };
 
-        let ty_name = ws.get_node(target).map(|t| t.type_name());
-        let ty_label = ty_name.map(|name| {
-            Label::new(format!(
-                "A{} {name}",
-                if starts_with_vowel(&name) { "n" } else { "" }
-            ))
-        });
+        let target_ctx = NodeContext {
+            id: target,
+            workspace: ws,
+        };
+        let ty_label = ws
+            .get_node(target)
+            .map(|t| t.type_name(target_ctx))
+            .map(Label::new);
 
         let copy_button = command("Copy");
         let mirror_button = command("Mirror");
@@ -273,14 +274,10 @@ impl InspectorMenu {
     }
 }
 
-pub fn starts_with_vowel(s: &str) -> bool {
-    s.starts_with(['a', 'e', 'i', 'o', 'u'])
-}
-
 #[utils::dynamic_node(skip)]
 impl Node for InspectorMenu {
-    fn type_name(&self) -> String {
-        "Halo Menu".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "An Inspector Menu".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {

@@ -194,8 +194,8 @@ impl FileBrowser {
 
 #[utils::dynamic_node(skip)]
 impl Node for FileBrowser {
-    fn type_name(&self) -> String {
-        "File Browser".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A File Browser".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
@@ -382,8 +382,8 @@ impl FileOpenError {
 
 #[utils::dynamic_node(skip)]
 impl Node for FileOpenError {
-    fn type_name(&self) -> String {
-        "File Open Error".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A File Opening Error".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {

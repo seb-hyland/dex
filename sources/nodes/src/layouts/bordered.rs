@@ -34,8 +34,8 @@ impl Bordered {
 
 #[utils::dynamic_node]
 impl Node for Bordered {
-    fn type_name(&self) -> String {
-        "Bordered".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Bordered Node".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {

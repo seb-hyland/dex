@@ -8,8 +8,8 @@ pub struct CanvasRect;
 
 #[utils::dynamic_node(skip)]
 impl Node for CanvasRect {
-    fn type_name(&self) -> String {
-        "Canvas Rect".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Canvas Rect".into()
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {
@@ -43,8 +43,8 @@ pub struct CanvasCircle;
 
 #[utils::dynamic_node(skip)]
 impl Node for CanvasCircle {
-    fn type_name(&self) -> String {
-        "Canvas Circle".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Canvas Circle".into()
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {
@@ -76,8 +76,8 @@ pub struct SectionDivider;
 
 #[utils::dynamic_node(skip)]
 impl Node for SectionDivider {
-    fn type_name(&self) -> String {
-        "Section Divider".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Section Divider".into()
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {

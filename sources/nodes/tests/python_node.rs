@@ -569,7 +569,13 @@ class Full:
     });
 
     // `type_name` comes from the script, not a hardcoded placeholder.
-    assert_eq!(node.type_name(), "My Node");
+    assert_eq!(
+        node.type_name(NodeContext {
+            id: NodeUid::nil(),
+            workspace: &ws,
+        }),
+        "My Node"
+    );
     // `deref_target` forwards, so messages route on down the chain.
     assert_eq!(node.deref_target(), Some(target));
 
@@ -623,11 +629,17 @@ class Bare:
         to_dyn_node_py(&py.eval(c"Bare()", Some(&globals), None).unwrap())
     });
 
-    // Falls back to the class name rather than a generic placeholder.
-    assert_eq!(node.type_name(), "Bare");
     assert_eq!(node.deref_target(), None);
 
     let mut ws = Workspace::new_empty();
+    // Falls back to the class name rather than a generic placeholder.
+    assert_eq!(
+        node.type_name(NodeContext {
+            id: NodeUid::nil(),
+            workspace: &ws,
+        }),
+        "Bare"
+    );
     let uid = ws.insert_node_dyn(node);
     ws.process_pending();
     // Ticking and deleting a hookless node must not raise.

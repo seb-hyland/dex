@@ -255,8 +255,8 @@ fn delimiter_for_ext(path: &Path) -> Option<u8> {
 
 #[utils::dynamic_node(skip)]
 impl Node for Table {
-    fn type_name(&self) -> String {
-        "Table".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Table".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
@@ -294,8 +294,8 @@ struct TableWidget {
 
 #[utils::dynamic_node(skip)]
 impl Node for TableWidget {
-    fn type_name(&self) -> String {
-        "Table Body".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Table Body".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {

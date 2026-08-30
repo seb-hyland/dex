@@ -38,8 +38,8 @@ const PAD: f32 = 6.0;
 
 #[utils::dynamic_node(skip)]
 impl Node for SelectionBox {
-    fn type_name(&self) -> String {
-        "Selection Box".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Selection Box".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {

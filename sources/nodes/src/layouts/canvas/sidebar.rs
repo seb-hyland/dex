@@ -100,8 +100,8 @@ impl CanvasSidebar {
 
 #[utils::dynamic_node]
 impl Node for CanvasSidebar {
-    fn type_name(&self) -> String {
-        "Canvas Sidebar".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Canvas Sidebar".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {

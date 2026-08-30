@@ -454,7 +454,7 @@ impl WorkspaceActionHandle {
     pub fn insert_node_at<T: Node>(&self, uid: NodeUid<T>, node: T) {
         self.submit_action_dyn(Action {
             dest: NodeUid::nil(),
-            description: format!("Inserted node of type {}", node.type_name()).into(),
+            description: "Inserted node".into(),
             body: Box::new(PushWorkspaceNode {
                 node: Arc::new(node),
                 uid: uid.erase(),
@@ -467,7 +467,7 @@ impl WorkspaceActionHandle {
 
         self.submit_action_dyn(Action {
             dest: NodeUid::nil(),
-            description: format!("Inserted node of type {}", node.type_name()).into(),
+            description: "Inserted node".into(),
             body: Box::new(PushWorkspaceNode {
                 node,
                 uid: uid.erase(),

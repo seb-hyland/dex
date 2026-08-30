@@ -56,8 +56,8 @@ impl HorizontalDnD {
 
 #[utils::dynamic_node]
 impl Node for HorizontalDnD {
-    fn type_name(&self) -> String {
-        "Horizontal Drag-and-Drop".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Horizontal Drag-and-Drop".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {

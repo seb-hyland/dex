@@ -64,8 +64,8 @@ impl Rect {
 
 #[utils::dynamic_node]
 impl Node for Rect {
-    fn type_name(&self) -> String {
-        "Rectangle".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Rectangle".into()
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {
@@ -119,8 +119,8 @@ impl Circle {
 
 #[utils::dynamic_node]
 impl Node for Circle {
-    fn type_name(&self) -> String {
-        "Circle".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Circle".into()
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {
@@ -175,8 +175,8 @@ impl Triangle {
 
 #[utils::dynamic_node]
 impl Node for Triangle {
-    fn type_name(&self) -> String {
-        "Triangle".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Triangle".into()
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {
@@ -220,8 +220,8 @@ impl Line {
 
 #[utils::dynamic_node]
 impl Node for Line {
-    fn type_name(&self) -> String {
-        "Line".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Line".into()
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {

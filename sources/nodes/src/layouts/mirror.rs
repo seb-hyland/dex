@@ -36,8 +36,15 @@ impl Mirror {
 
 #[utils::dynamic_node]
 impl Node for Mirror {
-    fn type_name(&self) -> String {
-        "Mirror".into()
+    fn type_name(&self, ctx: NodeContext) -> String {
+        let reflection_type_name = ctx
+            .workspace
+            .get_node(self.target)
+            .map(|t| t.type_name(ctx));
+        match reflection_type_name {
+            Some(n) => format!("A Mirror displaying {n}"),
+            None => "A Mirror".into(),
+        }
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {

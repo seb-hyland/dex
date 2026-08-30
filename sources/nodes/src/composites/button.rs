@@ -51,8 +51,8 @@ impl Button {
 
 #[utils::dynamic_node]
 impl Node for Button {
-    fn type_name(&self) -> String {
-        "Button".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Button".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {

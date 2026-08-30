@@ -41,8 +41,8 @@ impl VerticalLayout {
 
 #[utils::dynamic_node]
 impl Node for VerticalLayout {
-    fn type_name(&self) -> String {
-        "Vertical Layout".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Vertical Layout".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {

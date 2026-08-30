@@ -52,8 +52,8 @@ impl ScrollLayout {
 
 #[utils::dynamic_node]
 impl Node for ScrollLayout {
-    fn type_name(&self) -> String {
-        "Scroll Layout".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Scrollable Layout".into()
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {

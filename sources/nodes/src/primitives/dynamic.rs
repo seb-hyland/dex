@@ -155,7 +155,7 @@ impl dex_core::refs::NodeRefs for DynamicNode {
 #[utils::dynamic_node(skip)]
 impl Node for DynamicNode {
     /// The script's own `type_name()`, else its class name.
-    fn type_name(&self) -> String {
+    fn type_name(&self, _ctx: NodeContext) -> String {
         Python::attach(|py| {
             let Some(obj) = &self.obj else {
                 return "Dynamic Node".to_owned();

@@ -55,8 +55,8 @@ impl LambdaEditor {
 
 #[utils::dynamic_node]
 impl Node for LambdaEditor {
-    fn type_name(&self) -> String {
-        "Lambda Editor".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Lambda Editor".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
@@ -106,8 +106,8 @@ impl ConnectionPort {
 
 #[utils::dynamic_node]
 impl Node for ConnectionPort {
-    fn type_name(&self) -> String {
-        "Connection Port".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Connection Port".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
@@ -251,8 +251,8 @@ impl LambdaArg {
 
 #[utils::dynamic_node]
 impl Node for LambdaArg {
-    fn type_name(&self) -> String {
-        "Lambda Argument".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Lambda Argument".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
@@ -321,7 +321,7 @@ impl LambdaArgs {
 
 #[utils::dynamic_node]
 impl Node for LambdaArgs {
-    fn type_name(&self) -> String {
+    fn type_name(&self, _ctx: NodeContext) -> String {
         "Lambda Arguments".into()
     }
 
@@ -630,8 +630,8 @@ impl Lambda {
 
 #[utils::dynamic_node]
 impl Node for Lambda {
-    fn type_name(&self) -> String {
-        "Lambda".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Lambda".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
@@ -764,8 +764,8 @@ impl ComputeParam {
 
 #[utils::dynamic_node]
 impl Node for ComputeParam {
-    fn type_name(&self) -> String {
-        "Compute Parameter".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Compute Parameter".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
@@ -833,8 +833,8 @@ const CC_GAP: f32 = 8.0;
 
 #[utils::dynamic_node]
 impl Node for ComputeCanvas {
-    fn type_name(&self) -> String {
-        "Compute Canvas".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Compute Canvas".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
@@ -1037,8 +1037,8 @@ impl CanvasLambda {
 
 #[utils::dynamic_node]
 impl Node for CanvasLambda {
-    fn type_name(&self) -> String {
-        "Canvas Lambda".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Canvas Lambda".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {

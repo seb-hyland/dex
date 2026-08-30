@@ -62,8 +62,8 @@ impl InteractionBox {
 
 #[utils::dynamic_node]
 impl Node for InteractionBox {
-    fn type_name(&self) -> String {
-        "Interaction Sensor".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "An Interaction Sensor".into()
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {

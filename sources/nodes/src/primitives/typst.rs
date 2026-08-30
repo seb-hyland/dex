@@ -200,8 +200,8 @@ impl TypstEditor {
 
 #[utils::dynamic_node]
 impl Node for TypstEditor {
-    fn type_name(&self) -> String {
-        "Typst".to_owned()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Typst Editor".to_owned()
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {

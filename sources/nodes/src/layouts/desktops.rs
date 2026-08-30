@@ -115,7 +115,7 @@ impl Desktops {
 
 #[utils::dynamic_node]
 impl Node for Desktops {
-    fn type_name(&self) -> String {
+    fn type_name(&self, _ctx: NodeContext) -> String {
         "Desktops".into()
     }
 
@@ -431,8 +431,8 @@ impl DesktopTabView {
 
 #[utils::dynamic_node(skip)]
 impl Node for DesktopTabView {
-    fn type_name(&self) -> String {
-        "Canvas Tab".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Desktop Tab".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {

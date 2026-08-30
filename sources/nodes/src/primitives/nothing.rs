@@ -6,7 +6,7 @@ pub struct Nothing;
 
 #[utils::dynamic_node(skip)]
 impl Node for Nothing {
-    fn type_name(&self) -> String {
+    fn type_name(&self, _ctx: NodeContext) -> String {
         "Nothing".into()
     }
 

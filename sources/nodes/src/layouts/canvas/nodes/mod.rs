@@ -111,8 +111,8 @@ impl CanvasNodeInspector {
 
 #[utils::dynamic_node(skip)]
 impl Node for CanvasNodeInspector {
-    fn type_name(&self) -> String {
-        "Canvas Item Menu".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Canvas Item Menu".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
@@ -150,8 +150,18 @@ defhandlers! { CanvasNodeInspector {} }
 
 #[utils::dynamic_node]
 impl Node for CanvasNode {
-    fn type_name(&self) -> String {
-        "Canvas Node".into()
+    /// An item is named for what it frames, not for the frame.
+    fn type_name(&self, ctx: NodeContext) -> String {
+        let child_ctx = NodeContext {
+            id: self.child,
+            workspace: ctx.workspace,
+        };
+        ctx.workspace
+            .get_node(self.child)
+            // A child naming itself after this node would loop forever.
+            .filter(|_| self.child != ctx.id)
+            .map(|child| child.type_name(child_ctx))
+            .unwrap_or_else(|| "A Canvas Node".to_owned())
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {

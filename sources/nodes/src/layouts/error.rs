@@ -33,8 +33,8 @@ impl ErrorLayout {
 
 #[utils::dynamic_node]
 impl Node for ErrorLayout {
-    fn type_name(&self) -> String {
-        "Error".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "An Error".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {

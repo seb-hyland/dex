@@ -46,8 +46,8 @@ defhandlers! { HorizontalLayout {} }
 
 #[utils::dynamic_node]
 impl Node for HorizontalLayout {
-    fn type_name(&self) -> String {
-        "Horizontal Layout".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Horizontal Layout".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {

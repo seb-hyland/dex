@@ -57,8 +57,8 @@ impl Canvas {
 
 #[utils::dynamic_node]
 impl Node for Canvas {
-    fn type_name(&self) -> String {
-        "Canvas".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Canvas".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {

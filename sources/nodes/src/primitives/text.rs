@@ -18,8 +18,8 @@ pub struct Label {
 
 #[utils::dynamic_node]
 impl Node for Label {
-    fn type_name(&self) -> String {
-        "Label".into()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Label".into()
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
@@ -305,8 +305,8 @@ impl LabelEditable {
 
 #[utils::dynamic_node]
 impl Node for LabelEditable {
-    fn type_name(&self) -> String {
-        "Editable Label".to_owned()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "An Editable Label".to_owned()
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {
@@ -497,8 +497,8 @@ impl CodeEditor {
 
 #[utils::dynamic_node]
 impl Node for CodeEditor {
-    fn type_name(&self) -> String {
-        "Code Editor".to_owned()
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Code Editor".to_owned()
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {
