@@ -352,6 +352,7 @@ defhandlers! { FileBrowser {
 #[utils::portable]
 pub struct FileOpenError {
     /// The workspace slot to restore a browser into on "back".
+    #[uid_ref]
     owner: NodeUid,
     /// The directory the browser was in when the file was picked.
     dir: String,

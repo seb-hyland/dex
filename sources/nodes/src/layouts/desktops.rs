@@ -28,6 +28,8 @@ use crate::{
 #[utils::portable]
 pub struct Desktops {
     tab_bar: NodeUid<HorizontalDnD>,
+    /// Which desktop is showing.
+    #[uid_ref]
     active: Option<NodeUid<Canvas>>,
     sidebar: NodeUid<CanvasSidebar>,
     add_button: NodeUid<Button>,
@@ -38,6 +40,7 @@ pub struct Desktops {
 
     /// A stack of surfaces temporarily shown fullscreen in place of the tabs + active canvas.
     #[dynamic(skip)]
+    #[uid_ref]
     override_stack: Vec<NodeUid>,
     close_override_button: NodeUid<Button>,
 }
@@ -345,6 +348,8 @@ defhandlers! { Desktops {
 struct DesktopTabView {
     canvas: NodeUid<Canvas>,
     name: NodeUid<LabelEditable>,
+    /// A back-reference to the root.
+    #[uid_ref]
     parent: NodeUid<Desktops>,
     /// Click/double-click sensor over the whole tab.
     sensor: NodeUid<InteractionBox>,
@@ -485,6 +490,7 @@ impl Node for DesktopTabView {
     fn on_delete(&self, ctx: NodeContext) {
         ctx.workspace.delete_node(self.name.erase());
         ctx.workspace.delete_node(self.sensor.erase());
+        ctx.workspace.delete_node(self.canvas.erase());
     }
 }
 

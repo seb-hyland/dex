@@ -59,15 +59,6 @@ impl<T: ?Sized> NodeUid<T> {
             _marker: PhantomData,
         }
     }
-
-    /**
-       ## Returns
-       - `true` for a workspace-owned node
-       - `false` for a local node
-    */
-    pub fn is_workspace(self) -> bool {
-        self.id.get_version_num() == 4
-    }
 }
 
 /*

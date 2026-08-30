@@ -2,10 +2,12 @@ use proc_macro::TokenStream;
 use synstructure::decl_derive;
 
 mod dynamic;
+mod node_refs;
 mod portable;
 mod reset;
 
 decl_derive!([Reset] => reset::reset_derive);
+decl_derive!([NodeRefs, attributes(uid_ref)] => node_refs::node_refs_derive);
 
 /// Derive standard required trait implementations for usage within dex.
 #[proc_macro_attribute]

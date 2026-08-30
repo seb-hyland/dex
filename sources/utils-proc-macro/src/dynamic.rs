@@ -82,6 +82,7 @@ pub fn dynamic_type_impl(attr: TokenStream, body: TokenStream) -> TokenStream {
     // `#[dynamic_type(name = "...")]` overrides the script-facing name.
     let mut name_override: Option<String> = None;
     let mut no_reduce = false;
+    let mut no_copy = false;
     let mut constructor = false;
     let name_parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("name") {
@@ -94,6 +95,11 @@ pub fn dynamic_type_impl(attr: TokenStream, body: TokenStream) -> TokenStream {
         } else if meta.path.is_ident("no_reduce") {
             // For types holding something unserialisable — a live channel, say.
             no_reduce = true;
+            Ok(())
+        } else if meta.path.is_ident("no_copy") {
+            // For a type whose copy semantics are not plain `Clone`, so it can
+            // write its own `__copy__` / `__deepcopy__`.
+            no_copy = true;
             Ok(())
         } else {
             Err(meta.error("unsupported #[dynamic_type] option"))
@@ -153,6 +159,27 @@ pub fn dynamic_type_impl(attr: TokenStream, body: TokenStream) -> TokenStream {
                             &#names,
                         )? ),*
                     })
+                }
+            }
+        }
+    });
+
+    // Copying a bound value is cloning it, unless the type opts out to define
+    // its own — a node handle rewrites itself when copied into a clone.
+    let copy_methods = (!no_copy).then(|| {
+        quote! {
+            #[::pyo3::pymethods]
+            impl #name {
+                fn __copy__(&self) -> Self {
+                    ::core::clone::Clone::clone(self)
+                }
+
+                #[pyo3(signature = (_memo=None))]
+                fn __deepcopy__(
+                    &self,
+                    _memo: ::core::option::Option<::pyo3::Bound<'_, ::pyo3::PyAny>>,
+                ) -> Self {
+                    ::core::clone::Clone::clone(self)
                 }
             }
         }
@@ -258,20 +285,7 @@ pub fn dynamic_type_impl(attr: TokenStream, body: TokenStream) -> TokenStream {
             A Rust `Clone` is the deep copy: these types own their data, and a
             shared `Arc<dyn Node>` is an immutable value.
         */
-        #[::pyo3::pymethods]
-        impl #name {
-            fn __copy__(&self) -> Self {
-                ::core::clone::Clone::clone(self)
-            }
-
-            #[pyo3(signature = (_memo=None))]
-            fn __deepcopy__(
-                &self,
-                _memo: ::core::option::Option<::pyo3::Bound<'_, ::pyo3::PyAny>>,
-            ) -> Self {
-                ::core::clone::Clone::clone(self)
-            }
-        }
+        #copy_methods
 
         // Every bound type is usable on both sides of any bound signature.
         impl ::dex_core::scripting::FromDynamic for #name {

@@ -37,10 +37,7 @@ impl dex_core::scripting::FromDynamic for LayoutChild {
 }
 
 impl dex_core::scripting::IntoDynamic for LayoutChild {
-    fn into_dynamic(
-        self,
-        py: pyo3::Python<'_>,
-    ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
+    fn into_dynamic(self, py: pyo3::Python<'_>) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
         match self {
             LayoutChild::Id(uid) => uid.into_dynamic(py),
             LayoutChild::Node(node) => node.into_dynamic(py),
@@ -53,6 +50,28 @@ impl Reset for LayoutChild {
         match self {
             LayoutChild::Id(uid) => uid.reset(),
             LayoutChild::Node(node) => node.reset(),
+        }
+    }
+}
+
+impl dex_core::refs::NodeRefs for LayoutChild {
+    fn owned_refs(&self, f: &mut dyn FnMut(NodeUid)) {
+        match self {
+            LayoutChild::Id(uid) => f(*uid),
+            LayoutChild::Node(node) => node.owned_refs(f),
+        }
+    }
+
+    fn remap_refs(&mut self, map: &std::collections::HashMap<NodeUid, NodeUid>) {
+        match self {
+            LayoutChild::Id(uid) => {
+                if let Some(replacement) = map.get(uid) {
+                    *uid = *replacement;
+                }
+            }
+            LayoutChild::Node(node) => {
+                *node = dex_core::refs::remapped(&**node, map);
+            }
         }
     }
 }

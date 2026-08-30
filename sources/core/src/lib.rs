@@ -11,6 +11,7 @@ mod constraints;
 pub mod messages;
 mod pool;
 pub mod pycontext;
+pub mod refs;
 mod region;
 pub mod scripting;
 pub mod stubs;
@@ -25,6 +26,7 @@ pub mod prelude {
         constraints::*,
         messages::*,
         pool::NodeUid,
+        refs::NodeRefs,
         pycontext::{PyDrawContext, PyNodeContext, PyWorkspace},
         region::{ScreenPos, ScreenRegion, Vector},
         scripting::{NodeExtractor, NodeHandle},
@@ -40,7 +42,7 @@ use utils::Reset;
 
 #[typetag::serde]
 pub trait Node:
-    RequestableDyn + ActionHandler + Reset + 'static + DynClone + Send + Sync + utils::AsAny
+    RequestableDyn + ActionHandler + Reset + NodeRefs + 'static + DynClone + Send + Sync + utils::AsAny
 {
     fn type_name(&self) -> String;
 
@@ -113,11 +115,9 @@ impl<'ctx> DrawContext<'ctx> {
         N: Node + ?Sized,
         A: ActionFor<N> + 'static,
     {
-        if self.node.id.is_workspace() {
-            self.node
-                .workspace
-                .submit_action(self.node.id.cast::<N>(), description, body);
-        }
+        self.node
+            .workspace
+            .submit_action(self.node.id.cast::<N>(), description, body);
     }
 
     pub fn request_skip_frame(&self) {

@@ -24,6 +24,8 @@ use crate::{
 #[utils::dynamic_type]
 #[utils::portable]
 pub struct CanvasSidebar {
+    /// A back-reference to the root.
+    #[uid_ref]
     desktops: NodeUid<Desktops>,
     buttons: Vec<NodeUid<Button>>,
 

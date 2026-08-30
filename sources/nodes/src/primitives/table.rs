@@ -28,6 +28,9 @@ use crate::layouts::{Bordered, LayoutChild, ScrollLayout};
 #[derive(Clone, Debug)]
 pub struct ArrowData(pub RecordBatch);
 
+// Columnar data holds no node references.
+dex_core::impl_NodeRefs_noop!(ArrowData);
+
 impl ArrowData {
     /// Encode the batch as a Zstd-compressed IPC stream.
     fn to_ipc(&self) -> Result<Vec<u8>, ArrowError> {
@@ -284,6 +287,8 @@ defhandlers! { Table {} }
 struct TableWidget {
     data: ArrowData,
     striped: bool,
+    /// The `Table` this body was built for; set fresh at draw time.
+    #[uid_ref]
     owner: NodeUid,
 }
 

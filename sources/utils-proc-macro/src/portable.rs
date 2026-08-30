@@ -33,7 +33,7 @@ pub fn portable_impl(attr_tokens: TokenStream, body_tokens: TokenStream) -> Toke
         let ident = &input.ident;
         let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
         quote! {
-            #[derive(Clone, ::serde::Serialize, ::serde::Deserialize #extra)]
+            #[derive(Clone, ::serde::Serialize, ::serde::Deserialize, ::utils::NodeRefs #extra)]
             #body
 
             impl #impl_generics ::utils::Reset for #ident #ty_generics #where_clause {
@@ -44,7 +44,7 @@ pub fn portable_impl(attr_tokens: TokenStream, body_tokens: TokenStream) -> Toke
         .into()
     } else {
         quote! {
-            #[derive(Clone, ::serde::Serialize, ::serde::Deserialize, ::utils::Reset #extra)]
+            #[derive(Clone, ::serde::Serialize, ::serde::Deserialize, ::utils::Reset, ::utils::NodeRefs #extra)]
             #body
         }
         .into()

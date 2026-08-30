@@ -1,6 +1,7 @@
 use std::{
     any::Any,
     borrow::Cow,
+    collections::{HashMap, VecDeque},
     sync::{Arc, mpsc},
 };
 
@@ -16,6 +17,7 @@ use crate::{
     messages::{Action, ActionGroup, Request, downcast_resp},
     pool::{NodeUid, Registry},
     pycontext::{PyDrawContext, PyWorkspace},
+    refs::remapped,
 };
 
 pub struct Workspace {
@@ -171,6 +173,11 @@ impl Workspace {
         self.actions_handle.insert_node_dyn(node)
     }
 
+    /// Copy `source` and everything it owns, returning the copy's root id.
+    pub fn deep_clone(&self, source: NodeUid) -> NodeUid {
+        self.actions_handle.deep_clone(source)
+    }
+
     #[dynamic(skip)] // host lifecycle: not for scripts
     pub fn draw_frame(&mut self, ui: &mut Ui, draw_area: Rect) {
         self.tick_all();
@@ -178,8 +185,10 @@ impl Workspace {
         self.process_actions();
     }
 
-    /// Tick every live node, drawn or not.
-    fn tick_all(&self) {
+    /// Tick every live node, drawn or not. Part of a frame; exposed so a host
+    /// (or a test) can drive one without drawing.
+    #[dynamic(skip)] // host lifecycle: not for scripts
+    pub fn tick_all(&self) {
         for id in self.registry.live_ids() {
             if let Some(node) = self.registry.get(id) {
                 node.tick(NodeContext {
@@ -246,32 +255,84 @@ impl Workspace {
 
     fn process_actions(&mut self) {
         while let Ok(act) = self.actions.try_recv() {
+            // One epoch per queued action, so a group is a single undo step.
             self.registry.start_epoch(act.clone());
+            self.dispatch(act);
+        }
+    }
 
-            match_dyn! { act.body,
-                req_group: ActionGroup => {
-                    for req in req_group.actions {
-                        self.apply_action(req);
-                    }
-                },
-                push_action: PushWorkspaceNode => {
-                    self.registry.push(push_action);
-                },
-                remove_action: RemoveWorkspaceNode => {
-                    self.remove_node(remove_action.uid);
-                },
-                commit: CommitOutput => {
-                    // Point `target` at the node `source` currently holds.
-                    // `target`'s id remains stable.
-                    if let Some(node) = self.registry.get(commit.source) {
-                        self.registry.push(PushWorkspaceNode {
-                            node,
-                            uid: commit.target,
-                        });
-                    }
-                },
-                _ => self.apply_action(act),
-            }
+    /// Carry out one action. Workspace-level bodies are handled here; anything
+    /// else is routed to its destination node.
+    fn dispatch(&mut self, act: Action) {
+        match_dyn! { act.body,
+            req_group: ActionGroup => {
+                // Recurse rather than routing: a group may carry workspace-level
+                // bodies, and those have no destination node to route to.
+                for req in req_group.actions {
+                    self.dispatch(req);
+                }
+            },
+            push_action: PushWorkspaceNode => {
+                self.registry.push(push_action);
+            },
+            remove_action: RemoveWorkspaceNode => {
+                self.remove_node(remove_action.uid);
+            },
+            commit: CommitOutput => {
+                // Point `target` at the node `source` currently holds.
+                // `target`'s id remains stable.
+                if let Some(node) = self.registry.get(commit.source) {
+                    self.registry.push(PushWorkspaceNode {
+                        node,
+                        uid: commit.target,
+                    });
+                }
+            },
+            clone_action: CloneSubtree => {
+                self.clone_subtree(clone_action.source, clone_action.dest);
+            },
+            _ => self.apply_action(act),
+        }
+    }
+
+    /**
+        Copy `source` and everything it owns into fresh ids, rooting the copy at
+        the pre-minted `dest`.
+
+        Ownership is the default for a uid field, with `#[uid_ref]` marking the
+        exceptions, so the walk follows children and stops at references. Every uid the copies hold is rewritten; if a referential uid is found in the copied set (e.g., a self- or back-reference), it is replaced with the new reference.
+    */
+    fn clone_subtree(&mut self, source: NodeUid, dest: NodeUid) {
+        let mut ids: HashMap<NodeUid, NodeUid> = HashMap::from([(source, dest)]);
+        let mut order: Vec<NodeUid> = Vec::new();
+        let mut queue: VecDeque<NodeUid> = VecDeque::from([source]);
+
+        // Breadth-first over owned edges, minting an id for each node as it is discovered.
+        while let Some(uid) = queue.pop_front() {
+            let Some(node) = self.registry.get(uid) else {
+                continue;
+            };
+            order.push(uid);
+            node.owned_refs(&mut |child| {
+                if child == NodeUid::nil() || ids.contains_key(&child) {
+                    return;
+                }
+                ids.insert(child, NodeUid::new_workspace());
+                queue.push_back(child);
+            });
+        }
+
+        for uid in order {
+            let Some(node) = self.registry.get(uid) else {
+                continue;
+            };
+            let copy = remapped(&*node, &ids);
+            // A copy starts with no cached state of its own.
+            copy.reset();
+            self.registry.push(PushWorkspaceNode {
+                node: copy,
+                uid: ids[&uid],
+            });
         }
     }
 
@@ -418,6 +479,17 @@ impl WorkspaceActionHandle {
         });
     }
 
+    /// Copy `source` and everything it owns, returning the copy's root id.
+    pub fn deep_clone(&self, source: NodeUid) -> NodeUid {
+        let dest = NodeUid::new_workspace();
+        self.submit_action_dyn(Action {
+            dest: NodeUid::nil(),
+            description: "Cloned node".into(),
+            body: Box::new(CloneSubtree { source, dest }),
+        });
+        dest
+    }
+
     /// Point `target` at the node `source` currently holds, keeping `target`'s
     /// id stable. Resolved workspace-side, so `source` must already be queued.
     pub fn commit_output(&self, target: NodeUid, source: NodeUid) {
@@ -445,6 +517,16 @@ pub(crate) struct RemoveWorkspaceNode {
 
 #[typetag::serde]
 impl ActionBody for RemoveWorkspaceNode {}
+
+/// Copy a subtree into fresh ids, rooted at a caller-minted `dest`.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct CloneSubtree {
+    pub source: NodeUid,
+    pub dest: NodeUid,
+}
+
+#[typetag::serde]
+impl ActionBody for CloneSubtree {}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct CommitOutput {

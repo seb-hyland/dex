@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 use crate::{Node, NodeUid};
 
 /// A fully type-erased id, as seen by scripts. Replaces [`NodeUid`]
-#[utils::dynamic_type(name = "NodeUid")]
+#[utils::dynamic_type(name = "NodeUid", no_copy)]
 #[utils::portable]
 pub struct NodeHandle(pub NodeUid);
 
@@ -26,6 +26,59 @@ impl NodeHandle {
     fn __repr__(&self) -> String {
         format!("{:?}", self.0)
     }
+
+    /**
+        Rewrite this handle when it is copied as part of a deep clone.
+
+        `copy.deepcopy` reaches every handle in a script's object graph — nested
+        in lists, dicts, tuples, other objects, cycles included — so hooking the
+        leaf is all it takes. The clone's id map rides along in `memo` under
+        [`CLONE_REMAP_KEY`], which is where `deepcopy` already threads per-copy
+        context.
+    */
+    #[pyo3(signature = (memo=None))]
+    fn __deepcopy__(&self, memo: Option<Bound<'_, PyAny>>) -> NodeHandle {
+        let replacement = memo
+            .and_then(|memo| memo.get_item(CLONE_REMAP_KEY).ok())
+            .and_then(|table| table.get_item(NodeHandle(self.0)).ok())
+            .and_then(|found| found.extract::<NodeHandle>().ok());
+        NodeHandle(replacement.map_or(self.0, |handle| handle.0))
+    }
+
+    fn __copy__(&self) -> NodeHandle {
+        // A plain copy is not part of a clone, so the id stands.
+        NodeHandle(self.0)
+    }
+}
+
+/**
+    The `copy.deepcopy` memo key carrying a clone's id map.
+
+    `deepcopy` keys its own bookkeeping by `id()`, so a string key rides
+    alongside it untouched.
+*/
+pub const CLONE_REMAP_KEY: &str = "__dex_clone_remap__";
+
+/**
+    A `deepcopy` memo seeded with `map`, so handles buried in a script's state
+    rewrite themselves through `NodeHandle`'s `__deepcopy__`.
+
+    Handed to `copy.deepcopy` as its second argument. Keyed by handle, which
+    hashes and compares by uid.
+*/
+pub fn clone_memo<'py>(
+    py: Python<'py>,
+    map: &std::collections::HashMap<NodeUid, NodeUid>,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    use pyo3::types::PyDictMethods;
+
+    let table = pyo3::types::PyDict::new(py);
+    for (from, to) in map {
+        table.set_item(NodeHandle(*from), NodeHandle(*to))?;
+    }
+    let memo = pyo3::types::PyDict::new(py);
+    memo.set_item(CLONE_REMAP_KEY, table)?;
+    Ok(memo)
 }
 
 /// Coerces a Python value into some type of node (Rust or dynamic-defined).

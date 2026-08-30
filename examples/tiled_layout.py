@@ -127,9 +127,18 @@ class TiledLayout:
     def type_name(self):
         return "Tiled Layout"
 
+    def owned_nodes(self):
+        """The nodes this layout owns, for deleting and for deep cloning.
+
+        Deep cloning uses this to decide what to copy. It does not need to be
+        told where the handles live — a handle buried anywhere in this object
+        rewrites itself to point at the copy.
+        """
+        return [child for child in self.children if isinstance(child, dex.NodeUid)]
+
     def on_delete(self, ctx):
-        """Delete the children we own, as a Rust layout does."""
-        for child in self.children:
+        """Delete the children we own."""
+        for child in self.owned_nodes():
             ctx.workspace.delete_node(child)
 
 

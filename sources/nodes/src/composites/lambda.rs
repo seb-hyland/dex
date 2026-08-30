@@ -85,6 +85,8 @@ defhandlers! { LambdaEditor {
 #[utils::dynamic_type]
 #[utils::portable]
 pub struct ConnectionPort {
+    /// Wired to a node that lives elsewhere on the canvas.
+    #[uid_ref]
     connected: Option<NodeUid>,
     drag_sensor: NodeUid<InteractionBox>,
     drag_pos: Transient<ScreenPos>,

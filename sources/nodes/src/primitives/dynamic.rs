@@ -39,6 +39,33 @@ impl DynamicNode {
         self.obj.as_ref()
     }
 
+    /// The script object, `copy.deepcopy`d so a clone shares no mutable state.
+    ///
+    /// `map` rides along in the copy's memo, so every handle inside rewrites
+    /// itself as `deepcopy` reaches it.
+    fn deep_copied_object(
+        &self,
+        map: &std::collections::HashMap<NodeUid, NodeUid>,
+    ) -> Option<Py<PyAny>> {
+        self.obj.as_ref().map(|o| {
+            Python::attach(|py| {
+                let bound = o.bind(py);
+                match dex_core::scripting::clone_memo(py, map)
+                    .and_then(|memo| py.import("copy")?.call_method1("deepcopy", (bound, memo)))
+                {
+                    Ok(copied) => copied.unbind(),
+                    Err(e) => {
+                        eprintln!(
+                            "dynamic node could not be deep-copied ({e}); \
+                             the copy shares the original's state"
+                        );
+                        o.clone_ref(py)
+                    }
+                }
+            })
+        })
+    }
+
     /// Wrap a Python object returned by a script.
     pub fn from_python(obj: &Bound<'_, PyAny>) -> Self {
         Self {
@@ -87,6 +114,41 @@ impl<'de> Deserialize<'de> for DynamicNode {
 impl utils::Reset for DynamicNode {
     #[inline(always)]
     fn reset(&self) {}
+}
+
+impl dex_core::refs::NodeRefs for DynamicNode {
+    /**
+        The nodes the script declares it owns, via an optional `owned_nodes`
+        returning a list of handles.
+    */
+    fn owned_refs(&self, f: &mut dyn FnMut(NodeUid)) {
+        Python::attach(|py| {
+            let Some(obj) = &self.obj else { return };
+            let bound = obj.bind(py);
+            if !bound.hasattr("owned_nodes").unwrap_or(false) {
+                return;
+            }
+            match bound
+                .call_method0("owned_nodes")
+                .and_then(|list| list.extract::<Vec<NodeHandle>>())
+            {
+                Ok(handles) => {
+                    for handle in handles {
+                        f(handle.0);
+                    }
+                }
+                Err(e) => eprintln!("dynamic node `owned_nodes` did not yield node handles: {e}"),
+            }
+        });
+    }
+
+    /**
+        Replace the script object with a deep copy of itself, which is what
+        rewrites the handles inside it.
+    */
+    fn remap_refs(&mut self, map: &std::collections::HashMap<NodeUid, NodeUid>) {
+        self.obj = self.deep_copied_object(map);
+    }
 }
 
 /// A script object gets the same `Node` surface a Rust node has. Each hook is optional.
