@@ -220,7 +220,7 @@ impl Workspace {
 
         // Using an `Area` allows egui to recognise the pointer as being over this area for scroll behaviour.
         egui::Area::new(Id::new("root_node_painter"))
-            .order(Order::Foreground)
+            .order(Order::Middle)
             .fixed_pos(draw_area.min)
             .movable(false)
             .constrain(false)
@@ -393,6 +393,16 @@ impl Workspace {
     #[dynamic(skip)] // borrows a per-frame record
     pub fn inspect_target(&self) -> Option<InspectTarget> {
         self.probe.target()
+    }
+
+    /// The innermost addressable node drawn over `pos`.
+    pub fn inspectable_at(&self, pos: ScreenPos) -> Option<NodeUid> {
+        self.probe.at(pos)
+    }
+
+    /// Where an addressable `node` last drew, for anchoring to it on screen.
+    pub fn inspectable_rect(&self, node: NodeUid) -> Option<ScreenRegion> {
+        self.probe.region_of(node)
     }
 
     pub fn node_version(&self, uid: NodeUid) -> u64 {
@@ -636,16 +646,12 @@ impl<'ctx> DrawContext<'ctx> {
         let workspace = self.node.workspace;
         let depth = self.depth;
 
-        workspace.probe.enter(id);
         let result = self.draw_workspace_node(id, constraints);
 
-        // Clipped to what is actually on screen, so a node scrolled out of view inside a scroll area is not considered.
         let clip = ScreenRegion::from(self.ui.clip_rect());
-        let visible = result
-            .as_ref()
-            .and_then(|r| r.region())
-            .and_then(|region| region.intersect(clip));
-        workspace.probe.leave(id, depth, visible);
+        let region = result.as_ref().and_then(|r| r.region());
+        let visible = region.and_then(|region| region.intersect(clip));
+        workspace.probe.record(id, depth, region, visible);
         result
     }
 

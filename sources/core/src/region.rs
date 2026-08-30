@@ -167,6 +167,19 @@ impl ScreenRegion {
             Some(Self::from(origin_rect.intersect(clip_rect)))
         }
     }
+
+    pub fn expand(self, margin: f32) -> Self {
+        ScreenRegion::from_min_max(
+            ScreenPos {
+                x: self.min.x - margin,
+                y: self.min.y - margin,
+            },
+            ScreenPos {
+                x: self.max.x + margin,
+                y: self.max.y + margin,
+            },
+        )
+    }
 }
 
 /**

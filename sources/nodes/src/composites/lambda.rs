@@ -13,10 +13,7 @@ use crate::{
     composites::button::Button,
     layouts::{
         Bordered, HorizontalLayout, LayoutChild, VerticalLayout,
-        canvas::{
-            layout::{Canvas, ConnectableAt, NodeScreenRect},
-            nodes::shapes::SectionDivider,
-        },
+        canvas::{layout::Canvas, nodes::shapes::SectionDivider},
         error::ErrorLayout,
         pending::PendingLayout,
     },
@@ -81,6 +78,26 @@ defhandlers! { LambdaEditor {
     ],
 }}
 
+/// Marks the node a wire runs to, drawn over it.
+const CONNECTION_MARK_INSET: f32 = 1.0;
+/// The drop candidate under a live drag, distinct from a settled connection.
+const CANDIDATE_COLOR: Color = Color {
+    r: 40,
+    g: 160,
+    b: 110,
+    a: 255,
+};
+
+/// Ring to show the target of a wire.
+fn outline(painter: &egui::Painter, region: ScreenRegion, color: Color) {
+    painter.rect_stroke(
+        egui::Rect::from(region).shrink(CONNECTION_MARK_INSET),
+        4.0,
+        egui::Stroke::new(2.0, egui::Color32::from(color)),
+        egui::StrokeKind::Inside,
+    );
+}
+
 /// A draggable connection knob for a lambda argument.
 #[utils::dynamic_type]
 #[utils::portable]
@@ -143,7 +160,12 @@ impl Node for ConnectionPort {
         let wire_painter = ctx
             .ui
             .ctx()
-            .layer_painter(LayerId::new(Order::Background, Id::new("lambda_wires")));
+            .layer_painter(LayerId::new(Order::Foreground, Id::new("lambda_wires")));
+        // The outline goes over the nodes.
+        let mark_painter = ctx.ui.ctx().layer_painter(LayerId::new(
+            Order::Foreground,
+            Id::new("lambda_wire_marks"),
+        ));
 
         // Poll the drag sensor.
         ctx.draw_workspace_node(
@@ -162,6 +184,7 @@ impl Node for ConnectionPort {
             .send_request(self.drag_sensor, DragPointerPos {})
             .flatten();
 
+        let ws = ctx.node.workspace;
         if let Some(pos) = cur_drag_pos {
             // Update ongoing drag
             self.drag_pos.set(pos);
@@ -170,12 +193,12 @@ impl Node for ConnectionPort {
                 stroke: wire_stroke,
             }
             .paint(&wire_painter, port_center);
+            // Say what would be wired up if the drag ended here.
+            if let Some(rect) = ws.inspectable_at(pos).and_then(|c| ws.inspectable_rect(c)) {
+                outline(&mark_painter, rect, CANDIDATE_COLOR);
+            }
         } else if let Some(target) = self.connected
-            && let Some(rect) = ctx
-                .node
-                .workspace
-                .send_request(ctx.node.workspace.root(), NodeScreenRect { node: target })
-                .flatten()
+            && let Some(rect) = ws.inspectable_rect(target)
         {
             let target_anchor = ScreenPos {
                 x: (rect.min.x + rect.max.x) * 0.5,
@@ -186,6 +209,8 @@ impl Node for ConnectionPort {
                 stroke: wire_stroke,
             }
             .paint(&wire_painter, port_center);
+
+            outline(&mark_painter, rect, wire_color);
         }
 
         let drag_released = ctx
@@ -194,11 +219,8 @@ impl Node for ConnectionPort {
             .send_request(self.drag_sensor, WasDragReleased {})
             .unwrap_or(false);
         if drag_released && let Some(pos) = *self.drag_pos.val() {
-            let target = ctx
-                .node
-                .workspace
-                .send_request(ctx.node.workspace.root(), ConnectableAt { pos })
-                .flatten();
+            // Anything the user can point at, at whatever depth it sits.
+            let target = ws.inspectable_at(pos);
             ctx.submit_action_for_self::<Self, _>(
                 SetConnection { target },
                 "Set lambda argument connection",
@@ -730,9 +752,10 @@ impl Node for Lambda {
 }
 
 defhandlers! { Lambda {
+    requests: [
+        LambdaOutput => (this, _q): NodeUid { this.output },
+    ],
     extern_requests: [
-        // A lambda represents its output for value resolution.
-        ValueDelegate => (this, _q): Option<NodeUid> { Some(this.output) },
         // Forwarded to the editor, so the script is reachable from the lambda.
         ActiveScript => (this, _q, ctx): String {
             ctx.workspace.send_request(this.editor, ActiveScript).unwrap_or_default()
@@ -808,9 +831,6 @@ pub struct ComputeCanvas {
     #[dynamic(skip)]
     params: Vec<NodeUid<ComputeParam>>,
     output_port: NodeUid<ConnectionPort>,
-    /// Screen rects of the param pins this frame, for connection hit-testing.
-    #[dynamic(skip)]
-    param_rects: Transient<Vec<(NodeUid, ScreenRegion)>>,
 }
 
 #[utils::dynamic_methods]
@@ -822,7 +842,6 @@ impl ComputeCanvas {
             canvas,
             params: Vec::new(),
             output_port,
-            param_rects: Transient::default(),
         })
     }
 }
@@ -842,11 +861,10 @@ impl Node for ComputeCanvas {
         let avail_h = ctx.constraints.y.map(|a| a.provided_value()).unwrap_or(0.0);
         let origin = ctx.constraints.pos;
 
-        // Parameter row along the top; record each pin's rect for hit-testing.
-        let mut rects: Vec<(NodeUid, ScreenRegion)> = Vec::new();
+        // Parameter row along the top. Drawn as things the user can point at.
         let mut x = origin.x + CC_GAP;
         for &param in &self.params {
-            let res = ctx.draw_workspace_node(
+            let res = ctx.draw_inspectable_node(
                 param.erase(),
                 DrawConstraints {
                     pos: ScreenPos {
@@ -860,11 +878,9 @@ impl Node for ComputeCanvas {
                 },
             );
             if let Some(region) = res.and_then(|r| r.region()) {
-                rects.push((param.erase(), region));
                 x += region.size().x + CC_GAP;
             }
         }
-        self.param_rects.set(rects);
 
         // Inner canvas fills the middle.
         let canvas_y = origin.y + CC_PARAM_H;
@@ -975,29 +991,6 @@ defhandlers! { ComputeCanvas {
         // The inner node the output pin is wired to.
         OutputConnected => (this, _q, ctx): Option<NodeUid> {
             ctx.workspace.send_request(this.output_port, ConnectedTarget).flatten()
-        },
-    ],
-    extern_requests: [
-        // Connection hit-test: a param pin under `pos`, else defer to the canvas.
-        ConnectableAt => (this, s, ctx): Option<NodeUid> {
-            let pin = this.param_rects.val().as_ref().and_then(|rects| {
-                rects
-                    .iter()
-                    .find(|(_, rect)| egui::Rect::from(*rect).contains(egui::Pos2::from(s.pos)))
-                    .map(|(uid, _)| *uid)
-            });
-            pin.or_else(|| {
-                ctx.workspace.send_request(this.canvas, ConnectableAt { pos: s.pos }).flatten()
-            })
-        },
-        // Wire anchor: a param pin's rect, else defer to the canvas.
-        NodeScreenRect => (this, s, ctx): Option<ScreenRegion> {
-            let pin = this.param_rects.val().as_ref().and_then(|rects| {
-                rects.iter().find(|(uid, _)| *uid == s.node).map(|(_, rect)| *rect)
-            });
-            pin.or_else(|| {
-                ctx.workspace.send_request(this.canvas, NodeScreenRect { node: s.node }).flatten()
-            })
         },
     ],
 }}
