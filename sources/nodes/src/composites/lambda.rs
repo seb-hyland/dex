@@ -543,10 +543,14 @@ impl Lambda {
             .send_request(ctx.workspace.root().cast::<Desktops>(), PythonPrelude)
             .unwrap_or_default();
 
+        // The graph as it stands now, so the script can look up what its
+        // arguments point at once it is off on a worker thread.
+        let graph = GraphSnapshot::capture(workspace);
+
         let output = self.output;
         let task = ComputeTask::new(ctx.id, move || {
             let (handle, actions) = WorkspaceActionHandle::buffered();
-            match run_script(&source, &py_prelude, &handle, &args) {
+            match run_script(&source, &py_prelude, &handle, &args, graph) {
                 Ok(ScriptOutput::Nothing) => handle.insert_node_at_dyn(output, Arc::new(Nothing)),
                 Ok(ScriptOutput::Node(node)) => handle.insert_node_at_dyn(output, node),
                 Ok(ScriptOutput::Handle(uid)) => handle.commit_output(output, uid),

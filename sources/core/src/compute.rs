@@ -22,6 +22,16 @@ pub struct ComputeSchedulerHandle {
 }
 
 impl ComputeSchedulerHandle {
+    /// A handle attached to no scheduler, with submission dropped on the floor. For detached workspaces.
+    pub fn disconnected() -> Self {
+        let (task_sender, _) = mpsc::channel();
+        let (cancellation_sender, _) = mpsc::channel();
+        Self {
+            task_sender,
+            cancellation_sender,
+        }
+    }
+
     pub fn submit_task(&self, task: ComputeTask) {
         let _ = self.task_sender.send(task);
     }

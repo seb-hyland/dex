@@ -92,6 +92,7 @@ defhandlers! { Label {
         },
     ],
     extern_requests: [
+        GetText => (this, _q): String { this.text.clone() },
         // A label has no outline, so its text colour is its fill.
         PreviewFill => (this, q): bool {
             match q.color {

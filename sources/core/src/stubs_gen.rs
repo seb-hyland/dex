@@ -144,8 +144,9 @@ pub fn render() -> String {
         out.push('\n');
     }
 
-    // The workspace handle a script is handed as a global.
+    // The two handles a script is handed as globals: one to write with, one to read.
     let _ = writeln!(out, "ws: WorkspaceActionHandle");
+    let _ = writeln!(out, "snapshot: Snapshot");
 
     out
 }

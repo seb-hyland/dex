@@ -248,14 +248,17 @@ impl From<NulError> for ScriptError {
     }
 }
 
-/// Run `source` as Python with `handle` as context and `args` seeded as globals.
+/**
+    Run `source` as Python with `handle` as context and `args` seeded as globals.
+*/
 pub fn run_script(
     source: &str,
     py_prelude: &str,
     handle: &WorkspaceActionHandle,
     args: &[(String, ScriptValue)],
+    graph: GraphSnapshot,
 ) -> Result<ScriptOutput, ScriptError> {
-    run_python(source, py_prelude, handle, args)
+    run_python(source, py_prelude, handle, args, graph)
 }
 
 fn run_python(
@@ -263,6 +266,7 @@ fn run_python(
     prelude: &str,
     handle: &WorkspaceActionHandle,
     args: &[(String, ScriptValue)],
+    graph: GraphSnapshot,
 ) -> Result<ScriptOutput, ScriptError> {
     use pyo3::prelude::*;
     use pyo3::types::PyDict;
@@ -272,9 +276,12 @@ fn run_python(
         let map_err = |e: PyErr| ScriptError::Python(e.to_string());
         let dex_mod = dex_dynamic::build_python_module(py).map_err(map_err)?;
 
-        // Seed `dex.ws`.
+        // Seed `dex.ws` (writes) and `dex.snapshot` (reads).
         let ws = Bound::new(py, handle.clone()).map_err(map_err)?;
         dex_mod.add("ws", ws).map_err(map_err)?;
+        let snapshot =
+            Bound::new(py, dex_core::snapshot::PySnapshot::new(graph)).map_err(map_err)?;
+        dex_mod.add("snapshot", snapshot).map_err(map_err)?;
 
         let globals = PyDict::new(py);
         // Present the exec namespace as the `__main__` module.

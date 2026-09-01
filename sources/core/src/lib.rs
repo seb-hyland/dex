@@ -15,6 +15,7 @@ pub mod pycontext;
 pub mod refs;
 mod region;
 pub mod scripting;
+pub mod snapshot;
 pub mod stubs;
 pub mod stubs_gen;
 mod style;
@@ -32,6 +33,7 @@ pub mod prelude {
         refs::NodeRefs,
         region::{ScreenPos, ScreenRegion, Vector},
         scripting::{NodeExtractor, NodeHandle},
+        snapshot::GraphSnapshot,
         style::{BOLD_FAMILY, BOLD_ITALIC_FAMILY, Color, Font, ITALIC_FAMILY, Stroke, StrokeKind},
         workspace::{Workspace, WorkspaceActionHandle},
         *,

@@ -80,15 +80,43 @@ impl Workspace {
         self.actions_handle.clone()
     }
 
+    /// A workspace holding nodes and nothing else: no scheduler, and an action queue nobody drains.
+    pub(crate) fn detached(root: NodeUid, nodes: Vec<(NodeUid, Arc<dyn Node>)>) -> Self {
+        let (action_sender, actions) = mpsc::channel();
+
+        let mut registry = Registry::empty();
+        for (uid, node) in nodes {
+            registry.push(PushWorkspaceNode { node, uid });
+        }
+
+        Self {
+            root_node: root,
+            registry,
+            actions_handle: WorkspaceActionHandle { action_sender },
+            actions,
+            scheduler: ComputeSchedulerHandle::disconnected(),
+            probe: InspectProbe::default(),
+        }
+    }
+
+    /// Every live node, paired with its id.
+    pub(crate) fn live_nodes(&self) -> Vec<(NodeUid, Arc<dyn Node>)> {
+        self.registry
+            .live_ids()
+            .into_iter()
+            .filter_map(|uid| self.registry.get(uid).map(|node| (uid, node)))
+            .collect()
+    }
+
     /// Insert a node into the registry immediately, without going through the action queue.
     #[dynamic(skip)] // host lifecycle: not for scripts
     pub fn insert_node_now<T: Node>(&mut self, node: T) -> NodeUid<T> {
-        let uid = NodeUid::new_workspace();
+        let uid = NodeUid::mint();
         self.insert_node_now_at(uid, node);
         uid
     }
 
-    /// Insert a node under a caller-chosen id (minted with [`NodeUid::new_workspace`]).
+    /// Insert a node under a caller-chosen id (minted with [`NodeUid::mint`]).
     #[dynamic(skip)] // host lifecycle: not for scripts
     pub fn insert_node_now_at<T: Node>(&mut self, uid: NodeUid<T>, node: T) {
         self.registry.push(PushWorkspaceNode {
@@ -326,7 +354,7 @@ impl Workspace {
                 if child == NodeUid::nil() || ids.contains_key(&child) {
                     return;
                 }
-                ids.insert(child, NodeUid::new_workspace());
+                ids.insert(child, NodeUid::mint());
                 queue.push_back(child);
             });
         }
@@ -473,7 +501,7 @@ impl WorkspaceActionHandle {
     }
 
     pub fn insert_node_dyn(&self, node: Arc<dyn Node>) -> NodeUid {
-        let uid = NodeUid::new_workspace();
+        let uid = NodeUid::mint();
 
         self.submit_action_dyn(Action {
             dest: NodeUid::nil(),
@@ -506,7 +534,7 @@ impl WorkspaceActionHandle {
 
     /// Copy `source` and everything it owns, returning the copy's root id.
     pub fn deep_clone(&self, source: NodeUid) -> NodeUid {
-        let dest = NodeUid::new_workspace();
+        let dest = NodeUid::mint();
         self.submit_action_dyn(Action {
             dest: NodeUid::nil(),
             description: "Cloned node".into(),
@@ -523,6 +551,92 @@ impl WorkspaceActionHandle {
             description: "Committed node output".into(),
             body: Box::new(CommitOutput { target, source }),
         });
+    }
+}
+
+/// The parts of the handle that cannot be bound automatically.
+#[pyo3::pymethods]
+impl WorkspaceActionHandle {
+    /// Queue `action` against `dest`.
+    #[pyo3(name = "submit_action", signature = (dest, action, description=None))]
+    fn submit_action_py(
+        &self,
+        dest: crate::NodeHandle,
+        action: pyo3::Bound<'_, pyo3::PyAny>,
+        description: Option<String>,
+    ) -> pyo3::PyResult<()> {
+        self.submit_action_dyn(build_action(dest, &action, description)?);
+        Ok(())
+    }
+
+    /// Queue `actions` — `(dest, action)` pairs — as a single step.
+    #[pyo3(signature = (actions, description=None))]
+    fn batch(
+        &self,
+        actions: Vec<(crate::NodeHandle, pyo3::Py<pyo3::PyAny>)>,
+        description: Option<String>,
+    ) -> pyo3::PyResult<()> {
+        let group = pyo3::Python::attach(|py| {
+            actions
+                .into_iter()
+                .map(|(dest, action)| build_action(dest, action.bind(py), None))
+                .collect::<pyo3::PyResult<Vec<Action>>>()
+        })?;
+
+        self.submit_action_dyn(Action {
+            dest: NodeUid::nil(),
+            description: description
+                .map(Cow::Owned)
+                .unwrap_or(Cow::Borrowed("Batch")),
+            body: Box::new(ActionGroup { actions: group }),
+        });
+        Ok(())
+    }
+}
+
+/// Resolve a Python message into an addressed [`Action`].
+fn build_action(
+    dest: crate::NodeHandle,
+    action: &pyo3::Bound<'_, pyo3::PyAny>,
+    description: Option<String>,
+) -> pyo3::PyResult<Action> {
+    let entry = crate::messages::action_for(action)
+        .ok_or_else(|| crate::pycontext::not_a_message(action, false))?;
+    Ok(Action {
+        dest: dest.0,
+        description: description
+            .map(Cow::Owned)
+            .unwrap_or(Cow::Borrowed(entry.name)),
+        body: (entry.build)(action)?,
+    })
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    crate::stubs::StubMethod {
+        owner: "WorkspaceActionHandle",
+        name: "submit_action",
+        doc: "Queue `action` against `dest`.",
+        params: &[
+            crate::stubs::StubField { name: "dest", ty: "NodeUid" },
+            crate::stubs::StubField { name: "action", ty: "Any" },
+            crate::stubs::StubField { name: "description", ty: "Option<String>" },
+        ],
+        returns: "",
+        is_static: false,
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    crate::stubs::StubMethod {
+        owner: "WorkspaceActionHandle",
+        name: "batch",
+        doc: "Queue `actions` \u{2014} `(dest, action)` pairs \u{2014} as a single undo step.",
+        params: &[
+            crate::stubs::StubField { name: "actions", ty: "Vec<(NodeUid, Any)>" },
+            crate::stubs::StubField { name: "description", ty: "Option<String>" },
+        ],
+        returns: "",
+        is_static: false,
     }
 }
 

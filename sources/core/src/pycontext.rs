@@ -188,16 +188,12 @@ impl PyWorkspace {
         dest: NodeHandle,
         request: Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
-        let entry = request_for(&request).ok_or_else(|| not_a_message(&request, true))?;
-        let body = (entry.build)(&request)?;
-
-        let response = self.try_with(|ws| ws.send_request_dyn(Request { dest: dest.0, body }))?;
-
-        match response {
-            Some(any) => (entry.respond)(any, py),
-            // The node did not answer; indistinguishable from a `None` answer.
-            None => Ok(py.None()),
-        }
+        let ws = self
+            .0
+            .with(|ws| ws as *const Workspace)
+            .ok_or_else(expired_handle)?;
+        // SAFETY: the pointer is live for this call; `with` just proved it.
+        send_request_py(unsafe { &*ws }, dest.0, &request, py)
     }
 
     /// Queue `action` against `dest`.
@@ -228,8 +224,25 @@ impl PyWorkspace {
     }
 }
 
+/// Route `request` to `dest` in `ws` and hand the response back to Python.
+pub(crate) fn send_request_py(
+    ws: &Workspace,
+    dest: NodeUid,
+    request: &Bound<'_, PyAny>,
+    py: Python<'_>,
+) -> PyResult<Py<PyAny>> {
+    let entry = request_for(request).ok_or_else(|| not_a_message(request, true))?;
+    let body = (entry.build)(request)?;
+
+    match ws.send_request_dyn(Request { dest, body }) {
+        Some(any) => (entry.respond)(any, py),
+        // The node did not answer; indistinguishable from a `None` answer.
+        None => Ok(py.None()),
+    }
+}
+
 /// The error a script sees when it passes something that is not a message.
-fn not_a_message(obj: &Bound<'_, PyAny>, is_request: bool) -> PyErr {
+pub(crate) fn not_a_message(obj: &Bound<'_, PyAny>, is_request: bool) -> PyErr {
     let (requests, actions) = registered_messages();
     let (kind, mut known) = if is_request {
         ("request", requests)

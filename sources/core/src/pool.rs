@@ -26,7 +26,7 @@ pub struct NodeUid<T: ?Sized = dyn Node> {
 
 impl<T: ?Sized> NodeUid<T> {
     /// A fresh id for a workspace node.
-    pub fn new_workspace() -> Self {
+    pub fn mint() -> Self {
         Self {
             id: Uuid::new_v4(),
             _marker: PhantomData,
@@ -131,7 +131,7 @@ impl Registry {
         let mut pool = NodePool::default();
         let mut snapshot = WorldSnapshot::default();
 
-        let root_id = NodeUid::new_workspace();
+        let root_id = NodeUid::mint();
         snapshot.push(Arc::new(root_node), root_id, &mut pool);
 
         (

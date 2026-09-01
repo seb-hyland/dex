@@ -12,6 +12,12 @@ pub struct NodeHandle(pub NodeUid);
 
 #[pyo3::pymethods]
 impl NodeHandle {
+    /// A fresh id, usable before the node it names exists.
+    #[staticmethod]
+    fn mint() -> NodeHandle {
+        NodeHandle(NodeUid::mint())
+    }
+
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
         other.extract::<NodeHandle>().is_ok_and(|o| o.0 == self.0)
     }
@@ -48,6 +54,17 @@ impl NodeHandle {
     fn __copy__(&self) -> NodeHandle {
         // A plain copy is not part of a clone, so the id stands.
         NodeHandle(self.0)
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    crate::stubs::StubMethod {
+        owner: "NodeUid",
+        name: "mint",
+        doc: "A fresh id, usable before the node it names exists.",
+        params: &[],
+        returns: "NodeUid",
+        is_static: true,
     }
 }
 

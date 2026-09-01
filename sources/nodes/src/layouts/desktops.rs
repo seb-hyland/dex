@@ -74,7 +74,7 @@ impl Desktops {
 
     /// Build the desktops root (and its whole subtree) into `ws`.
     pub fn build(ws: WorkspaceActionHandle) -> NodeUid<Desktops> {
-        let id = NodeUid::<Desktops>::new_workspace();
+        let id = NodeUid::<Desktops>::mint();
 
         let canvas = Canvas::build(ws.clone());
         let tab = DesktopTabView::build(ws.clone(), canvas, id, "Canvas 1".to_owned());
