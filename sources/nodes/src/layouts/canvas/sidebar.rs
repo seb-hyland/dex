@@ -21,6 +21,7 @@ use crate::{
         checkout,
         file_browser::FileBrowser,
         interaction::TakeClicked,
+        number::{Float, Integer},
         shapes::{Circle, Path},
         text::{CodeEditor, GetCommittedText, Label, LabelEditable, SetText},
         typst::TypstEditor,
@@ -79,8 +80,10 @@ pub struct CanvasSidebar {
 impl CanvasSidebar {
     /// Labels for the option buttons, in order. The button at index `i` inserts
     /// the node produced by [`CanvasSidebar::dispatch`] for that index.
-    pub const OPTIONS: [&'static str; 9] = [
+    pub const OPTIONS: [&'static str; 11] = [
         "Text",
+        "Integer",
+        "Float",
         "Rect",
         "Circle",
         "Typst",
@@ -140,32 +143,45 @@ impl CanvasSidebar {
 
     /// The insert action for the option at `index`.
     fn dispatch(&self, index: usize, ws: WorkspaceActionHandle) -> Option<Action> {
-        let dest = self.desktops.erase();
+        let (child, size) = Self::prototype(index, ws)?;
+        Some(Action {
+            dest: self.desktops.erase(),
+            description: "Insert new node".into(),
+            body: Box::new(AddCanvasItem { child, size }),
+        })
+    }
+
+    /// The node the option at `index` inserts, and the size it takes.
+    /// Paired with [`CanvasSidebar::OPTIONS`] by position.
+    #[dynamic(skip)] // builds a node value, not something a script needs
+    pub fn prototype(index: usize, ws: WorkspaceActionHandle) -> Option<(Arc<dyn Node>, Vector)> {
         const DEFAULT: Vector = Vector { x: 160.0, y: 40.0 };
         let (child, size): (Arc<dyn Node>, Vector) = match index {
             0 => (
                 Arc::new(LabelEditable::new("Text here".to_owned())),
                 DEFAULT,
             ),
-            1 => (Arc::new(CanvasRect), DEFAULT),
-            2 => (
+            1 => (Arc::new(Integer::new(0)), Vector { x: 80.0, y: 32.0 }),
+            2 => (Arc::new(Float::new(0.0)), Vector { x: 80.0, y: 32.0 }),
+            3 => (Arc::new(CanvasRect), DEFAULT),
+            4 => (
                 Arc::new(Circle::new(40.0, Color::rgb(120, 170, 220))),
                 Vector { x: 80.0, y: 80.0 },
             ),
-            3 => (
+            5 => (
                 Arc::new(TypstEditor::new(ws)),
                 Vector { x: 280.0, y: 220.0 },
             ),
-            4 => (Arc::new(Lambda::new(ws)), Vector { x: 420.0, y: 340.0 }),
-            5 => (
+            6 => (Arc::new(Lambda::new(ws)), Vector { x: 420.0, y: 340.0 }),
+            7 => (
                 Arc::new(CanvasLambda::new(ws)),
                 Vector { x: 280.0, y: 220.0 },
             ),
-            6 => (
+            8 => (
                 Arc::new(FileBrowser::new(ws)),
                 Vector { x: 320.0, y: 240.0 },
             ),
-            7 => (
+            9 => (
                 Arc::new(Path::polygon(
                     vec![
                         Vector::new(0.0, 0.0),
@@ -178,7 +194,7 @@ impl CanvasSidebar {
                 )),
                 Vector { x: 90.0, y: 90.0 },
             ),
-            8 => (
+            10 => (
                 Arc::new(Path::polyline(
                     vec![Vector::new(0.0, 0.0), Vector::new(140.0, 60.0)],
                     Stroke::new(2.5, Color::rgb(80, 80, 90)),
@@ -187,11 +203,7 @@ impl CanvasSidebar {
             ),
             _ => return None,
         };
-        Some(Action {
-            dest,
-            description: "Insert new node".into(),
-            body: Box::new(AddCanvasItem { child, size }),
-        })
+        Some((child, size))
     }
 
     /// Check the prelude out to a file and open it in the user's editor.

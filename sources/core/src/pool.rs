@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use rpds::HashTrieMap;
+use rpds::HashTrieMapSync;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use slotmap::{Key, SlotMap, new_key_type};
 use utils::{HistoryGraph, Reset, Timestamp, impl_Reset_noop};
@@ -214,7 +214,7 @@ impl Registry {
 */
 #[derive(Clone, Default, Reset, Serialize, Deserialize)]
 struct WorldSnapshot {
-    map: HashTrieMap<NodeUid, NodeObject>,
+    map: HashTrieMapSync<NodeUid, NodeObject>,
 }
 
 impl WorldSnapshot {

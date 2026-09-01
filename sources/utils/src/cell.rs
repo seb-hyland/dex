@@ -5,7 +5,7 @@ use parking_lot::{
     lock_api::{MappedRwLockReadGuard, MappedRwLockWriteGuard},
 };
 use petgraph::{EdgeType, csr::IndexType, prelude::StableGraph};
-use rpds::HashTrieMap;
+use rpds::HashTrieMapSync;
 use serde::{Deserialize, Serialize};
 use slotmap::SlotMap;
 
@@ -162,7 +162,7 @@ impl<K: slotmap::Key, V: Reset> Reset for SlotMap<K, V> {
     }
 }
 
-impl<K: Eq + Hash, V: Reset> Reset for HashTrieMap<K, V> {
+impl<K: Eq + Hash, V: Reset> Reset for HashTrieMapSync<K, V> {
     fn reset(&self) {
         for value in self.values() {
             value.reset();

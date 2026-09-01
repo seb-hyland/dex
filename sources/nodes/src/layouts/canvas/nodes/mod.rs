@@ -48,9 +48,23 @@ impl CanvasNode {
         canvas_pos: Vector,
         size: Vector,
     ) -> NodeUid<CanvasNode> {
+        let uid = NodeUid::mint();
+        Self::build_at(ws, uid.erase(), child, canvas_pos, size);
+        uid
+    }
+
+    /// Build one under an id the caller chose, for a caller that has to wire to
+    /// the item before the queue drains.
+    pub fn build_at(
+        ws: WorkspaceActionHandle,
+        uid: NodeUid,
+        child: NodeUid,
+        canvas_pos: Vector,
+        size: Vector,
+    ) -> NodeUid<CanvasNode> {
         let sensor = |kind| ws.insert_node(kind);
 
-        ws.insert_node(Self {
+        let node = Self {
             child,
             committed: ConstraintsTuple {
                 pos: canvas_pos,
@@ -60,7 +74,10 @@ impl CanvasNode {
             proximity: sensor(InteractionBox::sensing(true, false, false)),
             move_sensor: sensor(InteractionBox::sensing(true, false, true)),
             grips: std::array::from_fn(|_| sensor(InteractionBox::sensing(false, false, true))),
-        })
+        };
+        let uid = uid.cast::<CanvasNode>();
+        ws.insert_node_at(uid, node);
+        uid
     }
 }
 
@@ -80,6 +97,10 @@ impl CanvasNodeInspector {
         child: NodeUid,
         size: Vector,
     ) -> NodeUid<CanvasNodeInspector> {
+        let deletable = ctx
+            .workspace
+            .send_request(child, CanvasItemDeletable)
+            .unwrap_or(true);
         let delete_button = Button::build(
             ctx.workspace.action_handle(),
             Label::new("Delete".to_owned()),
@@ -99,7 +120,7 @@ impl CanvasNodeInspector {
             ctx.workspace.action_handle(),
             [
                 Some(placement.erase()),
-                Some(delete_button.erase()),
+                deletable.then_some(delete_button.erase()),
                 target_inspector,
             ]
             .into_iter()
@@ -153,6 +174,18 @@ impl Node for CanvasNodeInspector {
         ctx.workspace.delete_node(self.delete_button.erase());
     }
 }
+
+dex_core::defrequest!(
+    /**
+        Whether this item may be removed from the surface it sits on.
+
+        Absent or `true` for anything ordinary. A node answers `false` when its
+        presence is decided elsewhere — a parameter pin exists because its
+        lambda has that argument, so deleting it here would only have the next
+        sync put it back.
+    */
+    CanvasItemDeletable: bool
+);
 
 defhandlers! { CanvasNodeInspector {} }
 

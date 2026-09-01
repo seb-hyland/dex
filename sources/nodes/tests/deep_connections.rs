@@ -7,9 +7,7 @@
 //! the one hit test, at any depth.
 
 use dex_core::prelude::*;
-use dex_nodes::composites::lambda::{
-    ComputeCanvas, ComputeParam, Lambda, LambdaOutput, SyncParams,
-};
+use dex_nodes::composites::lambda::{ComputeCanvas, Lambda, LambdaOutput, ParamPins, SyncParams};
 use dex_nodes::layouts::canvas::layout::{AddCanvasItem, CanvasChildren};
 use dex_nodes::layouts::canvas::nodes::{
     CanvasNode, CanvasNodeChild, CanvasNodeConstraints, SetLayout,
@@ -17,7 +15,6 @@ use dex_nodes::layouts::canvas::nodes::{
 use dex_nodes::layouts::desktops::{ActiveCanvas, Desktops};
 use dex_nodes::primitives::text::Label;
 use dex_nodes::scripting::{ScriptValue, resolve_arg};
-use std::collections::HashSet;
 
 const SCREEN: egui::Vec2 = egui::vec2(1200.0, 900.0);
 
@@ -44,23 +41,6 @@ fn centre(region: ScreenRegion) -> ScreenPos {
         x: (region.min.x + region.max.x) * 0.5,
         y: (region.min.y + region.max.y) * 0.5,
     }
-}
-
-/// Every node reachable from the root, so a test can find one by type.
-fn all_nodes(ws: &Workspace) -> Vec<NodeUid> {
-    let mut seen = HashSet::new();
-    let mut queue = vec![ws.root()];
-    let mut out = Vec::new();
-    while let Some(uid) = queue.pop() {
-        if !seen.insert(uid) {
-            continue;
-        }
-        out.push(uid);
-        if let Some(node) = ws.get_node(uid) {
-            node.owned_refs(&mut |child| queue.push(child));
-        }
-    }
-    out
 }
 
 /// A desktop holding one lambda, whose output already carries a value.
@@ -203,13 +183,23 @@ fn a_compute_canvas_pin_is_wirable_where_it_drew() {
     ws.process_pending();
     ws.set_root(compute.erase());
 
+    // A pin stands for whatever the argument is wired to, so give it something
+    // with a type worth preserving.
+    let count = ws
+        .action_handle()
+        .insert_node(dex_nodes::primitives::number::Integer::new(7));
+    let word = ws
+        .action_handle()
+        .insert_node(dex_nodes::primitives::text::Label::new("two".to_owned()));
+    ws.process_pending();
+
     ws.submit_action(
         compute,
         "sync params",
         SyncParams {
             entries: vec![
-                ("first".to_owned(), "one".to_owned()),
-                ("second".to_owned(), "two".to_owned()),
+                ("first".to_owned(), Some(count.erase())),
+                ("second".to_owned(), Some(word.erase())),
             ],
         },
     );
@@ -219,27 +209,34 @@ fn a_compute_canvas_pin_is_wirable_where_it_drew() {
     dex_nodes::fonts::install_fonts(&ctx);
     settle(&mut ws, &ctx);
 
-    let pins: Vec<NodeUid> = all_nodes(&ws)
-        .into_iter()
-        .filter(|uid| {
-            ws.get_node(*uid)
-                .is_some_and(|node| (*node).as_any_ref().is::<ComputeParam>())
-        })
-        .collect();
+    let pins = ws.send_request(compute, ParamPins).unwrap_or_default();
     assert_eq!(pins.len(), 2, "both pins are live");
 
-    // The pins used to be found through a register the compute canvas kept by
-    // hand; they are found now because they are drawn as pointable.
-    for pin in pins {
+    for pin in &pins {
         let rect = ws
-            .inspectable_rect(pin)
+            .inspectable_rect(*pin)
             .expect("the pin drew somewhere pointable");
         assert_eq!(
             ws.inspectable_at(centre(rect)),
-            Some(pin),
+            Some(*pin),
             "dropping on a pin wires to that pin"
         );
     }
+
+    // The point of the pin pointing rather than copying: an int stays an int.
+    // Copying rendered it to text, and `2 ** x` inside the canvas then raised.
+    let first = dex_nodes::scripting::resolve_arg(&ws, pins[0]).value;
+    assert!(
+        matches!(first, dex_nodes::scripting::ScriptValue::Int(7)),
+        "a wired number reaches the canvas as a number, got {}",
+        first.display()
+    );
+    let second = dex_nodes::scripting::resolve_arg(&ws, pins[1]).value;
+    assert!(
+        matches!(&second, dex_nodes::scripting::ScriptValue::Str(s) if s == "two"),
+        "and text reaches it as text, got {}",
+        second.display()
+    );
 }
 
 /// A canvas holding one label, ready to be shoved around.

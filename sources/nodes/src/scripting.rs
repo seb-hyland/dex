@@ -6,11 +6,11 @@ use dex_core::prelude::*;
 use arrow::array::RecordBatch;
 
 use crate::{
-    composites::lambda::ComputeParam,
     layouts::pending::PendingLayout,
     primitives::{
         dynamic::DynamicNode,
         nothing::Nothing,
+        number::{Float, Integer},
         table::Table,
         text::{Label, LabelEditable},
     },
@@ -80,6 +80,18 @@ impl TypedRequestBody for ValueDelegate {
     type Response = Option<NodeUid>;
 }
 
+dex_core::defrequest!(
+    /**
+        The uid standing for this node's value: what a wire should point at to
+        consume it.
+
+        The output half of the dataflow protocol. Declared here rather than on
+        any one node because it is a protocol several kinds answer, and because
+        anything may want to ask — the halo uses it to recognise a result.
+    */
+    DataflowOutput: Option<NodeUid>
+);
+
 /// A wired argument resolved to its leaf value.
 pub struct ResolvedArg {
     /// The leaf's value, if it is a value-bearing node.
@@ -137,8 +149,11 @@ pub fn node_to_value(node: &dyn Node) -> Option<ScriptValue> {
     if let Some(l) = any.downcast_ref::<LabelEditable>() {
         return Some(ScriptValue::Str(l.resolved_text()));
     }
-    if let Some(p) = any.downcast_ref::<ComputeParam>() {
-        return Some(ScriptValue::Str(p.value.clone()));
+    if let Some(n) = any.downcast_ref::<Integer>() {
+        return Some(ScriptValue::Int(n.value));
+    }
+    if let Some(n) = any.downcast_ref::<Float>() {
+        return Some(ScriptValue::Float(n.value));
     }
     if let Some(t) = any.downcast_ref::<Table>() {
         return Some(ScriptValue::Table(t.batch().clone()));
@@ -161,10 +176,10 @@ pub fn to_dyn_node_py(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> Arc<dyn Node> {
         return Arc::new(Label::new(v.to_string()));
     }
     if let Ok(v) = obj.extract::<i64>() {
-        return Arc::new(Label::new(v.to_string()));
+        return Arc::new(Integer::new(v));
     }
     if let Ok(v) = obj.extract::<f64>() {
-        return Arc::new(Label::new(v.to_string()));
+        return Arc::new(Float::new(v));
     }
     if let Ok(v) = obj.extract::<String>() {
         return Arc::new(Label::new(v));

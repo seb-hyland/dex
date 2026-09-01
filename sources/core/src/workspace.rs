@@ -18,7 +18,7 @@ use crate::{
     messages::{Action, ActionGroup, Request, downcast_resp},
     pool::{NodeUid, Registry},
     pycontext::{PyDrawContext, PyWorkspace},
-    refs::remapped,
+    refs::{NodeRefs, remapped},
 };
 
 pub struct Workspace {
@@ -97,6 +97,23 @@ impl Workspace {
             scheduler: ComputeSchedulerHandle::disconnected(),
             probe: InspectProbe::default(),
         }
+    }
+
+    /// The id of every node currently in the workspace.
+    pub fn live_ids(&self) -> Vec<NodeUid> {
+        self.registry.live_ids()
+    }
+
+    /// The node that owns `uid`, by the same relation a deep clone follows.
+    /// A `#[uid_ref]` pointer is not ownership, so a wire is not an owner.
+    pub fn owner_of(&self, uid: NodeUid) -> Option<NodeUid> {
+        self.registry.live_ids().into_iter().find(|&candidate| {
+            let mut owns = false;
+            if let Some(node) = self.registry.get(candidate) {
+                node.owned_refs(&mut |child| owns |= child == uid);
+            }
+            owns
+        })
     }
 
     /// Every live node, paired with its id.
@@ -326,7 +343,11 @@ impl Workspace {
                 }
             },
             clone_action: CloneSubtree => {
-                self.clone_subtree(clone_action.source, clone_action.dest);
+                let seed = HashMap::from([(clone_action.source, clone_action.dest)]);
+                self.clone_subtree(clone_action.source, seed);
+            },
+            clone_as: CloneSubtreeAs => {
+                self.clone_subtree(clone_as.source, clone_as.ids.into_iter().collect());
             },
             _ => self.apply_action(act),
         }
@@ -339,10 +360,15 @@ impl Workspace {
         Ownership is the default for a uid field, with `#[uid_ref]` marking the
         exceptions, so the walk follows children and stops at references. Every uid the copies hold is rewritten; if a referential uid is found in the copied set (e.g., a self- or back-reference), it is replaced with the new reference.
     */
-    fn clone_subtree(&mut self, source: NodeUid, dest: NodeUid) {
-        let mut ids: HashMap<NodeUid, NodeUid> = HashMap::from([(source, dest)]);
+    fn clone_subtree(&mut self, source: NodeUid, mut ids: HashMap<NodeUid, NodeUid>) {
+        // Whatever the caller did not name gets a fresh id.
+        ids.entry(source).or_insert_with(NodeUid::mint);
         let mut order: Vec<NodeUid> = Vec::new();
         let mut queue: VecDeque<NodeUid> = VecDeque::from([source]);
+        // A caller-supplied map already has entries, so `ids` no longer doubles
+        // as the record of what has been walked.
+        let mut visited: std::collections::HashSet<NodeUid> =
+            std::collections::HashSet::from([source]);
 
         // Breadth-first over owned edges, minting an id for each node as it is discovered.
         while let Some(uid) = queue.pop_front() {
@@ -351,10 +377,11 @@ impl Workspace {
             };
             order.push(uid);
             node.owned_refs(&mut |child| {
-                if child == NodeUid::nil() || ids.contains_key(&child) {
+                if child == NodeUid::nil() || visited.contains(&child) {
                     return;
                 }
-                ids.insert(child, NodeUid::mint());
+                visited.insert(child);
+                ids.entry(child).or_insert_with(NodeUid::mint);
                 queue.push_back(child);
             });
         }
@@ -543,6 +570,15 @@ impl WorkspaceActionHandle {
         dest
     }
 
+    /// Copy `source` and everything it owns into the ids named by `ids`.
+    pub fn deep_clone_as(&self, source: NodeUid, ids: Vec<(NodeUid, NodeUid)>) {
+        self.submit_action_dyn(Action {
+            dest: NodeUid::nil(),
+            description: "Cloned node".into(),
+            body: Box::new(CloneSubtreeAs { source, ids }),
+        });
+    }
+
     /// Point `target` at the node `source` currently holds, keeping `target`'s
     /// id stable. Resolved workspace-side, so `source` must already be queued.
     pub fn commit_output(&self, target: NodeUid, source: NodeUid) {
@@ -667,6 +703,17 @@ pub(crate) struct CloneSubtree {
 #[typetag::serde]
 impl ActionBody for CloneSubtree {}
 
+/// Copy a subtree into ids the caller chose.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct CloneSubtreeAs {
+    pub source: NodeUid,
+    /// Old id to new. Anything unnamed is copied under a fresh id.
+    pub ids: Vec<(NodeUid, NodeUid)>,
+}
+
+#[typetag::serde]
+impl ActionBody for CloneSubtreeAs {}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct CommitOutput {
     pub target: NodeUid,
@@ -750,6 +797,16 @@ impl<'ctx> DrawContext<'ctx> {
         self.draw_node_with(node, NodeUid::nil(), constraints)
     }
 
+    /// Draw `node` under this node's own id, so anything it addresses to itself comes back here.
+    pub fn draw_child_as_self(
+        &mut self,
+        node: &dyn Node,
+        constraints: DrawConstraints,
+    ) -> DrawResult {
+        let id = self.node.id;
+        self.draw_node_with(node, id, constraints)
+    }
+
     /// Draw a workspace node and offer it to the halo as an addressable element.
     pub fn draw_inspectable_node(
         &mut self,
@@ -763,7 +820,11 @@ impl<'ctx> DrawContext<'ctx> {
         let result = self.draw_workspace_node(id, constraints);
 
         let clip = ScreenRegion::from(self.ui.clip_rect());
-        let region = result.as_ref().and_then(|r| r.region());
+        // A node that draws nothing is still addressable over the space it was given.
+        let region = result
+            .as_ref()
+            .and_then(|r| r.region())
+            .or_else(|| allotted(&constraints));
         let visible = region.and_then(|region| region.intersect(clip));
         workspace.probe.record(id, depth, region, visible);
         result
@@ -800,4 +861,19 @@ impl<'ctx> DrawContext<'ctx> {
         let node = self.node.workspace.registry.get(id)?;
         Some(self.draw_node_with(&*node, id, constraints))
     }
+}
+
+/// The box `constraints` hand out, when they bound both axes.
+fn allotted(constraints: &DrawConstraints) -> Option<ScreenRegion> {
+    let width = constraints.x?.provided_value();
+    let height = constraints.y?.provided_value();
+    (width.is_finite() && height.is_finite()).then(|| {
+        ScreenRegion::from_min_size(
+            constraints.pos,
+            Vector {
+                x: width,
+                y: height,
+            },
+        )
+    })
 }

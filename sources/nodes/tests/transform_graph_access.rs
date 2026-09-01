@@ -150,3 +150,91 @@ def transform():
     let args = [("target".to_owned(), ScriptValue::Node(first))];
     run_script(source, "", &handle, &args, GraphSnapshot::capture(&ws)).expect("script runs");
 }
+
+/// Numbers cross the script boundary as numbers, in both directions, the way
+/// text crosses as text.
+#[test]
+fn numbers_are_seen_as_numbers() {
+    dex_nodes::scripting::init_python();
+    let mut ws = Workspace::new_empty();
+    let handle = ws.action_handle();
+    let count = handle.insert_node(dex_nodes::primitives::number::Integer::new(7));
+    let ratio = handle.insert_node(dex_nodes::primitives::number::Float::new(0.5));
+    ws.process_pending();
+    ws.set_root(count.erase());
+
+    let source = r#"
+def transform():
+    assert isinstance(count, int), type(count)
+    assert isinstance(ratio, float), type(ratio)
+    return count * 2 + ratio
+"#;
+    let (handle, _actions) = WorkspaceActionHandle::buffered();
+    let args = [
+        (
+            "count".to_owned(),
+            dex_nodes::scripting::resolve_arg(&ws, count.erase()).value,
+        ),
+        (
+            "ratio".to_owned(),
+            dex_nodes::scripting::resolve_arg(&ws, ratio.erase()).value,
+        ),
+    ];
+    let out = run_script(source, "", &handle, &args, GraphSnapshot::capture(&ws)).unwrap();
+
+    let ScriptOutput::Node(node) = out else {
+        panic!("the script returns a number")
+    };
+    // A returned float comes back as a `Float`, not stringified into a label.
+    assert!(
+        node.as_ref()
+            .as_any_ref()
+            .is::<dex_nodes::primitives::number::Float>(),
+        "a returned float becomes a Float node"
+    );
+    assert_eq!(
+        dex_nodes::scripting::node_to_value(&*node).map(|v| v.display()),
+        Some("14.5".to_owned())
+    );
+}
+
+/// Text that is not a number is dropped: the field snaps back to the value.
+#[test]
+fn a_number_refuses_text_that_is_not_one() {
+    use dex_nodes::primitives::number::Integer;
+    use dex_nodes::primitives::text::{GetText, SetText};
+
+    let mut ws = Workspace::new_empty();
+    let handle = ws.action_handle();
+    let count = handle.insert_node(Integer::new(7));
+    ws.process_pending();
+    ws.set_root(count.erase());
+
+    ws.submit_action(
+        count,
+        "Edit",
+        SetText {
+            value: " 12 ".to_owned(),
+        },
+    );
+    ws.process_pending();
+    assert_eq!(
+        ws.send_request(count.erase(), GetText).as_deref(),
+        Some("12"),
+        "a number, surrounding space and all, is accepted"
+    );
+
+    ws.submit_action(
+        count,
+        "Edit",
+        SetText {
+            value: "twelve".to_owned(),
+        },
+    );
+    ws.process_pending();
+    assert_eq!(
+        ws.send_request(count.erase(), GetText).as_deref(),
+        Some("12"),
+        "text that is not a number leaves the value alone"
+    );
+}

@@ -76,7 +76,11 @@ fn the_colour_on_show_follows_the_pointer_before_it_is_let_go() {
 
     frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(IN_SQUARE)]);
     frame(&mut ws, &ctx, vec![button(IN_SQUARE, true)]);
-    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(ELSEWHERE_IN_SQUARE)]);
+    frame(
+        &mut ws,
+        &ctx,
+        vec![egui::Event::PointerMoved(ELSEWHERE_IN_SQUARE)],
+    );
 
     assert_eq!(
         ws.send_request(picker, IsPicking),

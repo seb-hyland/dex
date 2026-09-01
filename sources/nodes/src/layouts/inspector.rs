@@ -9,6 +9,7 @@ use crate::{
         vertical::VerticalLayout,
     },
     primitives::{interaction::TakeClicked, shapes::Rect, text::Label},
+    scripting::DataflowOutput,
 };
 
 static VAR_NAME: f32 = 8.0;
@@ -237,6 +238,43 @@ impl Node for Inspector {
     }
 }
 
+/**
+    The placement commands for `target`, if `target` is a node's result.
+
+    A canvas item gets these from [`CanvasNode`](crate::layouts::canvas::nodes::CanvasNode),
+    but a transform's output is not a canvas item and so had nothing — there was
+    no way to copy or keep what a lambda had just computed. A result is
+    recognised the way the dataflow protocol defines one: the node that owns
+    `target` reports `target` as its `DataflowOutput`.
+*/
+fn result_commands(ws: &Workspace, target: NodeUid) -> Option<NodeUid<PlacementCommands>> {
+    let owner = owner_of(ws, target)?;
+    if ws.send_request(owner, DataflowOutput).flatten() != Some(target) {
+        return None;
+    }
+    // The size it last drew at: a copy should arrive looking like what was
+    // pointed at, and the halo already records this to anchor itself.
+    let size = ws
+        .inspectable_rect(target)
+        .map(|region| region.size())
+        .unwrap_or(DEFAULT_RESULT_SIZE);
+    Some(PlacementCommands::build(ws.action_handle(), target, size))
+}
+
+/// The node that owns `target`, by the same relation a deep clone follows.
+fn owner_of(ws: &Workspace, target: NodeUid) -> Option<NodeUid> {
+    ws.live_ids().into_iter().find(|&candidate| {
+        let mut owns = false;
+        if let Some(node) = ws.get_node(candidate) {
+            node.owned_refs(&mut |child| owns |= child == target);
+        }
+        owns
+    })
+}
+
+/// What a copied result takes when nothing recorded where it drew.
+const DEFAULT_RESULT_SIZE: Vector = Vector { x: 160.0, y: 60.0 };
+
 /// Copy and Mirror, onto the canvas or into the backpack, for a node that can belong on a canvas.
 #[utils::dynamic_type]
 #[utils::portable]
@@ -396,9 +434,11 @@ impl InspectorMenu {
             .map(|t| t.type_name(target_ctx))
             .map(Label::new);
 
-        // A name, and whatever the target offers. Commands are the target's to decide.
+        // A name, the placement commands if this is a result, and whatever the
+        // target offers. Everything else is the target's to decide.
         let rows = [
             ty_label.map(|l| LayoutChild::Node(Arc::new(l))),
+            result_commands(ws, target).map(|c| LayoutChild::Id(c.erase())),
             extra.map(LayoutChild::Id),
         ];
         let column = ws.insert_node(VerticalLayout::new(

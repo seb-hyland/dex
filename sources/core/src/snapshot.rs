@@ -1,8 +1,7 @@
 //! A read-only view of the node graph that can be carried onto a worker thread.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use pyo3::prelude::*;
 
@@ -67,26 +66,44 @@ impl State {
 }
 
 /// The script-facing snapshot: `dex.snapshot` inside a transform.
-#[pyclass(unsendable, name = "Snapshot")]
+#[pyclass(name = "Snapshot")]
 pub struct PySnapshot {
-    state: RefCell<State>,
+    state: Mutex<State>,
     /// Child-to-parent, derived from ownership. Built on first use.
-    owners: RefCell<Option<HashMap<NodeUid, NodeUid>>>,
+    owners: Mutex<Option<HashMap<NodeUid, NodeUid>>>,
 }
 
 impl PySnapshot {
     pub fn new(snapshot: GraphSnapshot) -> Self {
         Self {
-            state: RefCell::new(State::Captured(snapshot)),
-            owners: RefCell::new(None),
+            state: Mutex::new(State::Captured(snapshot)),
+            owners: Mutex::new(None),
         }
     }
 
     /// Run `f` against the snapshot's workspace, building it if this is the first question asked.
+    ///
+    /// The lock is released before `f` runs: `f` can re-enter, since a
+    /// script-defined node's handler may ask this same snapshot something.
     fn with_ws<R>(&self, f: impl FnOnce(&Workspace) -> R) -> R {
-        self.state.borrow_mut().build();
-        let state = self.state.borrow();
-        f(state.workspace())
+        let ws: *const Workspace = {
+            let mut state = self.lock_state();
+            state.build();
+            state.workspace()
+        };
+        // SAFETY: the workspace is boxed inside `state`, and `build` is the only
+        // thing that writes it — once, leaving `Captured`. Nothing moves or
+        // drops it afterwards short of dropping the snapshot, which cannot
+        // happen while `&self` is borrowed for this call.
+        f(unsafe { &*ws })
+    }
+
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn lock_owners(&self) -> std::sync::MutexGuard<'_, Option<HashMap<NodeUid, NodeUid>>> {
+        self.owners.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -134,6 +151,21 @@ impl PySnapshot {
         NodeHandle(self.with_ws(|ws| ws.root()))
     }
 
+    /// What `uid` owns directly, in the order it holds them.
+    fn owned_refs(&self, uid: NodeHandle) -> Vec<NodeHandle> {
+        self.with_ws(|ws| {
+            let mut owned = Vec::new();
+            if let Some(node) = ws.get_node(uid.0) {
+                node.owned_refs(&mut |child| {
+                    if child != NodeUid::nil() {
+                        owned.push(NodeHandle(child));
+                    }
+                });
+            }
+            owned
+        })
+    }
+
     /**
         The node that owns `uid`, if one does.
 
@@ -142,7 +174,7 @@ impl PySnapshot {
         inner part into the thing it belongs to.
     */
     fn owner_of(&self, uid: NodeHandle) -> Option<NodeHandle> {
-        if self.owners.borrow().is_none() {
+        if self.lock_owners().is_none() {
             let index = self.with_ws(|ws| {
                 let mut index: HashMap<NodeUid, NodeUid> = HashMap::new();
                 for (parent, node) in ws.live_nodes() {
@@ -154,10 +186,9 @@ impl PySnapshot {
                 }
                 index
             });
-            *self.owners.borrow_mut() = Some(index);
+            *self.lock_owners() = Some(index);
         }
-        self.owners
-            .borrow()
+        self.lock_owners()
             .as_ref()
             .and_then(|index| index.get(&uid.0).copied())
             .map(NodeHandle)
@@ -245,6 +276,17 @@ dex_dynamic::__rt::inventory::submit! {
 dex_dynamic::__rt::inventory::submit! {
     StubMethod {
         owner: "Snapshot",
+        name: "owned_refs",
+        doc: "What `uid` owns directly, in the order it holds them.",
+        params: &[StubField { name: "uid", ty: "NodeUid" }],
+        returns: "Vec<NodeUid>",
+        is_static: false,
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    StubMethod {
+        owner: "Snapshot",
         name: "owner_of",
         doc: "The node that owns `uid`, if one does.",
         params: &[StubField { name: "uid", ty: "NodeUid" }],
@@ -252,3 +294,10 @@ dex_dynamic::__rt::inventory::submit! {
         is_static: false,
     }
 }
+
+/// The snapshot has to cross to a worker thread, so the graph it carries — and the workspace it becomes — must be `Send`.
+const _COMPILER_SEND_ASSERTION: fn() = || {
+    fn assert_send<T: Send>() {}
+    assert_send::<GraphSnapshot>();
+    assert_send::<Workspace>();
+};

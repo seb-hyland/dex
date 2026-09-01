@@ -6,14 +6,18 @@ use utils::Transient;
 use crate::layouts::desktops::{Desktops, PythonPrelude};
 use crate::primitives::checkout;
 use crate::scripting::{
-    ScriptOutput, ScriptValue, ValueDelegate, is_valid_ident, resolve_arg, run_script,
+    DataflowOutput, ScriptOutput, ScriptValue, ValueDelegate, is_valid_ident, resolve_arg,
+    run_script,
 };
 
 use crate::{
     composites::button::Button,
     layouts::{
         Bordered, HorizontalLayout, LayoutChild, VerticalLayout,
-        canvas::{layout::Canvas, nodes::shapes::SectionDivider},
+        canvas::{
+            layout::{AdoptCanvasNode, Canvas, RemoveCanvasItem},
+            nodes::{CanvasItemDeletable, CanvasNode, shapes::SectionDivider},
+        },
         error::ErrorLayout,
         pending::PendingLayout,
     },
@@ -40,13 +44,15 @@ pub struct LambdaEditor {
 impl LambdaEditor {
     /// Build a lambda editor into `ws`.
     pub fn build(ws: WorkspaceActionHandle) -> NodeUid<LambdaEditor> {
-        let python = ws.insert_node(CodeEditor::new(String::new(), "python".to_owned()));
-        let edit_externally = Button::build(ws.clone(), Label::new("Edit in IDE".to_owned()));
+        ws.insert_node(Self::holding(ws.clone(), String::new()))
+    }
 
-        ws.insert_node(Self {
-            python,
-            edit_externally,
-        })
+    /// An editor already holding `source`, for a caller placing one under an id of its own.
+    pub fn holding(ws: WorkspaceActionHandle, source: String) -> LambdaEditor {
+        Self {
+            python: ws.insert_node(CodeEditor::new(source, "python".to_owned())),
+            edit_externally: Button::build(ws.clone(), Label::new("Edit in IDE".to_owned())),
+        }
     }
 }
 
@@ -98,6 +104,20 @@ fn outline(painter: &egui::Painter, region: ScreenRegion, color: Color) {
     );
 }
 
+/// Whether `ancestor` owns `start`, at any depth.
+fn encloses(ws: &Workspace, ancestor: NodeUid, start: NodeUid) -> bool {
+    const MAX_DEPTH: usize = 64;
+    let mut current = Some(start);
+    for _ in 0..MAX_DEPTH {
+        match current {
+            Some(uid) if uid == ancestor => return true,
+            Some(uid) => current = ws.owner_of(uid),
+            None => return false,
+        }
+    }
+    false
+}
+
 /// A draggable connection knob for a lambda argument.
 #[utils::dynamic_type]
 #[utils::portable]
@@ -112,12 +132,17 @@ pub struct ConnectionPort {
 #[utils::dynamic_methods]
 impl ConnectionPort {
     pub fn build(ws: WorkspaceActionHandle) -> NodeUid<ConnectionPort> {
-        let drag_sensor_uid = ws.insert_node(InteractionBox::sensing(false, false, true));
-        ws.insert_node(Self {
+        let port = Self::empty(ws.clone());
+        ws.insert_node(port)
+    }
+
+    /// An unwired port, for a caller placing one under an id of its own.
+    pub fn empty(ws: WorkspaceActionHandle) -> ConnectionPort {
+        Self {
             connected: None,
-            drag_sensor: drag_sensor_uid,
+            drag_sensor: ws.insert_node(InteractionBox::sensing(false, false, true)),
             drag_pos: Transient::default(),
-        })
+        }
     }
 }
 
@@ -128,7 +153,7 @@ impl Node for ConnectionPort {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        let wire_color = Color::rgb(70, 130, 180);
+        let wire_color = Color::rgba(176, 202, 224, 150);
         let port_color = Color::rgb(50, 110, 160);
 
         let outer_radius = 4.0;
@@ -156,16 +181,24 @@ impl Node for ConnectionPort {
         };
         inner_circle.paint(ctx.ui.painter(), port_center);
 
-        let wire_stroke = Stroke::new(2.0, wire_color);
+        let wire_stroke = Stroke::new(1.5, wire_color);
+
+        let clip = crate::layouts::canvas::layout::wire_clip(ctx.ui.ctx())
+            .unwrap_or_else(|| ctx.ui.clip_rect());
         let wire_painter = ctx
             .ui
             .ctx()
-            .layer_painter(LayerId::new(Order::Foreground, Id::new("lambda_wires")));
+            .layer_painter(LayerId::new(Order::Foreground, Id::new("lambda_wires")))
+            .with_clip_rect(clip);
         // The outline goes over the nodes.
-        let mark_painter = ctx.ui.ctx().layer_painter(LayerId::new(
-            Order::Foreground,
-            Id::new("lambda_wire_marks"),
-        ));
+        let mark_painter = ctx
+            .ui
+            .ctx()
+            .layer_painter(LayerId::new(
+                Order::Foreground,
+                Id::new("lambda_wire_marks"),
+            ))
+            .with_clip_rect(clip);
 
         // Poll the drag sensor.
         ctx.draw_workspace_node(
@@ -213,8 +246,10 @@ impl Node for ConnectionPort {
             .send_request(self.drag_sensor, WasDragReleased {})
             .unwrap_or(false);
         if drag_released && let Some(pos) = *self.drag_pos.val() {
-            // Anything the user can point at, at whatever depth it sits.
-            let target = ws.inspectable_at(pos);
+            // Anything the user can point at, at whatever depth it sits, except something this port lives inside.
+            let target = ws
+                .inspectable_at(pos)
+                .filter(|&candidate| !encloses(ws, candidate, ctx.node.id));
             ctx.submit_action_for_self::<Self, _>(
                 SetConnection { target },
                 "Set lambda argument connection",
@@ -254,14 +289,36 @@ pub struct LambdaArg {
 impl LambdaArg {
     /// Build an argument into `ws`.
     pub fn build(ws: WorkspaceActionHandle) -> NodeUid<LambdaArg> {
-        let label = ws.insert_node(LabelEditable::new("label".to_owned()));
-        let param_name = ws.insert_node(LabelEditable::new("param_name".to_owned()));
+        let arg = NodeUid::mint();
         let port = ConnectionPort::build(ws.clone());
-        ws.insert_node(Self {
-            label,
-            param_name,
-            port,
-        })
+        Self::build_with(ws, arg, port.erase(), "param_name".to_owned())
+    }
+
+    /**
+        Build an argument named `name` under ids the caller chose.
+
+    */
+    pub fn build_with(
+        ws: WorkspaceActionHandle,
+        arg: NodeUid<LambdaArg>,
+        port: NodeUid,
+        name: String,
+    ) -> NodeUid<LambdaArg> {
+        let label = ws.insert_node(LabelEditable::new("label".to_owned()));
+        let param_name = ws.insert_node(LabelEditable::new(name));
+        ws.insert_node_at(
+            port.cast::<ConnectionPort>(),
+            ConnectionPort::empty(ws.clone()),
+        );
+        ws.insert_node_at(
+            arg,
+            Self {
+                label,
+                param_name,
+                port: port.cast(),
+            },
+        );
+        arg
     }
 }
 
@@ -311,8 +368,31 @@ defhandlers! { LambdaArg {
             let target = ctx.workspace.send_request(this.port, ConnectedTarget).flatten();
             (name, target)
         },
+        /*
+            The same binding, plus the port that holds it.
+
+            A reader wants the name and the source; a writer wants somewhere to
+            send `SetConnection`. Handing back both means a script that is
+            rewiring does not have to go looking for the port separately.
+        */
+        ArgInput => (this, _q, ctx): (String, NodeUid, Option<NodeUid>) {
+            let name = ctx.workspace.send_request(this.param_name, GetText).unwrap_or_default();
+            let target = ctx.workspace.send_request(this.port, ConnectedTarget).flatten();
+            (name, this.port.erase(), target)
+        },
     ],
 }}
+
+/// The little × an argument row is polled against.
+fn delete_arg_button(ws: WorkspaceActionHandle) -> NodeUid<Button> {
+    let mut label = Label::new("×".to_owned());
+    label.font = Font::proportional(11.0);
+    label.color = Color::gray(120);
+    Button::build_with(ws, label, |b| {
+        b.padding = 1.0;
+        b.border = dex_core::Stroke::NONE;
+    })
+}
 
 #[utils::dynamic_type]
 #[utils::portable]
@@ -326,12 +406,16 @@ pub struct LambdaArgs {
 impl LambdaArgs {
     /// Build the (empty) args row into `ws`.
     pub fn build(ws: WorkspaceActionHandle) -> NodeUid<LambdaArgs> {
-        let add_button = Button::build(ws.clone(), Label::new("+".to_owned()));
-        ws.insert_node(Self {
+        ws.insert_node(Self::empty(ws.clone()))
+    }
+
+    /// An empty args row, for a caller placing one under an id of its own.
+    pub fn empty(ws: WorkspaceActionHandle) -> LambdaArgs {
+        Self {
             args: Vec::new(),
             delete_buttons: Vec::new(),
-            add_button,
-        })
+            add_button: Button::build(ws.clone(), Label::new("+".to_owned())),
+        }
     }
 }
 
@@ -414,17 +498,19 @@ defhandlers! { LambdaArgs {
     actions: [
         AddArg => (this, _a, ctx) {
             let arg = LambdaArg::build(ctx.workspace.action_handle());
-
-            // A delete button, polled by this row.
-            let mut delete_label = Label::new("×".to_owned());
-            delete_label.font = Font::proportional(11.0);
-            delete_label.color = Color::gray(120);
-            let delete_button = Button::build_with(ctx.workspace.action_handle(), delete_label, |b| {
-                b.padding = 1.0;
-                b.border = dex_core::Stroke::NONE;
-            });
-
+            let delete_button = delete_arg_button(ctx.workspace.action_handle());
             this.args.push(arg);
+            this.delete_buttons.push(delete_button);
+        },
+        /*
+            Take an argument the caller already built, keeping its ids.
+
+            [`AddArg`] mints everything itself, so the caller learns none of it
+            until the queue drains — too late to wire the port in the same pass.
+        */
+        AddArgAt { arg: NodeUid } => (this, s, ctx) {
+            let delete_button = delete_arg_button(ctx.workspace.action_handle());
+            this.args.push(s.arg.cast());
             this.delete_buttons.push(delete_button);
         },
         DeleteArg { index: usize } => (this, s, ctx) {
@@ -444,6 +530,17 @@ defhandlers! { LambdaArgs {
                 .iter()
                 .map(|arg| ctx.workspace.send_request(*arg, ArgBinding).unwrap_or_default())
                 .collect()
+        },
+        // Every input as `(name, port, source)`, in declaration order.
+        DataflowInputs => (this, _q, ctx): Vec<(String, NodeUid, Option<NodeUid>)> {
+            this.args
+                .iter()
+                .filter_map(|arg| ctx.workspace.send_request(*arg, ArgInput))
+                .collect()
+        },
+        // The arguments themselves, for a caller that needs to address one.
+        ArgNodes => (this, _q): Vec<NodeUid> {
+            this.args.iter().map(|a| a.erase()).collect()
         },
     ],
 }}
@@ -473,6 +570,34 @@ pub struct Lambda {
 
 #[utils::dynamic_methods]
 impl Lambda {
+    /**
+        Build a lambda named `name`, running `source`, under ids the caller chose.
+
+        `args` is where its arguments go and `output` is what consumers wire to
+        — the two ids a script has to know before the queue drains. Everything
+        else is minted here, since nothing outside needs to address it.
+    */
+    pub fn new_with(
+        ws: WorkspaceActionHandle,
+        args: NodeUid<LambdaArgs>,
+        output: NodeUid,
+        name: String,
+        source: String,
+    ) -> Lambda {
+        ws.insert_node_at(args, LambdaArgs::empty(ws.clone()));
+        ws.insert_node_at_dyn(output, Arc::new(Nothing));
+        Self {
+            name: ws.insert_node(LabelEditable::new(name)),
+            args,
+            editor: ws.insert_node(LambdaEditor::holding(ws.clone(), source)),
+            update_button: Button::build(ws.clone(), Label::new("Update".to_owned())),
+            edit_externally: Button::build(ws.clone(), Label::new("Edit in IDE".to_owned())),
+            output,
+            seen_deps: Transient::default(),
+            checkout: Transient::default(),
+        }
+    }
+
     /// Build a lambda into `ws`.
     pub fn new(ws: WorkspaceActionHandle) -> Lambda {
         let name = ws.insert_node(LabelEditable::new("Lambda".to_owned()));
@@ -752,11 +877,34 @@ impl Node for Lambda {
 defhandlers! { Lambda {
     requests: [
         LambdaOutput => (this, _q): NodeUid { this.output },
+        /*
+            The display name, which is what identifies an operator.
+
+            A lambda's meaning lives in its script, which nothing can read
+            symbolically, so a walker recognises `Add` from `Mult` by what the
+            user called it.
+        */
+        LambdaName => (this, _q, ctx): String {
+            ctx.workspace.send_request(this.name, GetText).unwrap_or_default()
+        },
+        // The editor, so a caller can read or rewrite the script.
+        LambdaEditorNode => (this, _q): NodeUid { this.editor.erase() },
+        // The name label, so a caller can rename what it built.
+        LambdaNameNode => (this, _q): NodeUid { this.name.erase() },
+        // The arguments row, so a caller can add to or read it.
+        LambdaArgsNode => (this, _q): NodeUid { this.args.erase() },
     ],
     extern_requests: [
+        // A lambda's value is the output slot it recomputes, which is already
+        // drawn as something the user can point at.
+        DataflowOutput => (this, _q): Option<NodeUid> { Some(this.output) },
         // Forwarded to the editor, so the script is reachable from the lambda.
         ActiveScript => (this, _q, ctx): String {
             ctx.workspace.send_request(this.editor, ActiveScript).unwrap_or_default()
+        },
+        // Forwarded to the arguments row, so a lambda describes its own inputs.
+        DataflowInputs => (this, _q, ctx): Vec<(String, NodeUid, Option<NodeUid>)> {
+            ctx.workspace.send_request(this.args, DataflowInputs).unwrap_or_default()
         },
     ],
 }}
@@ -765,21 +913,44 @@ defhandlers! { Lambda {
 // LAMBDA CANVAS
 // ================================================================================
 
-/// One input parameter of a [`ComputeCanvas`].
+/// The tint that marks a parameter apart from the nodes it feeds.
+const PARAM_FILL: Color = Color {
+    r: 227,
+    g: 238,
+    b: 250,
+    a: 255,
+};
+const PARAM_BORDER: Color = Color {
+    r: 90,
+    g: 140,
+    b: 195,
+    a: 255,
+};
+
+/**
+    One input parameter of a [`ComputeCanvas`].
+
+    A pin does not hold a copy of its argument — it *points* at whatever the
+    lambda's argument is wired to and delegates its value there. Copying meant
+    rendering the value to text at the boundary, so every parameter arrived
+    inside the canvas as a string: `2 ** x` raised a `TypeError`, and worse,
+    `a + b` silently concatenated. Delegating keeps the type intact, tables and
+    all, and there is nothing to keep in sync.
+*/
 #[utils::dynamic_type]
 #[utils::portable]
 pub struct ComputeParam {
     pub name: String,
-    pub value: String,
+    /// What the lambda's argument is wired to. Outside this canvas, hence a
+    /// reference rather than a child.
+    #[uid_ref]
+    source: Option<NodeUid>,
 }
 
 #[utils::dynamic_methods]
 impl ComputeParam {
     pub fn build(ws: WorkspaceActionHandle, name: String) -> NodeUid<ComputeParam> {
-        ws.insert_node(Self {
-            name,
-            value: String::new(),
-        })
+        ws.insert_node(Self { name, source: None })
     }
 }
 
@@ -790,61 +961,145 @@ impl Node for ComputeParam {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        let text = if self.value.is_empty() {
+        let shown = self
+            .source
+            .map(|source| resolve_arg(ctx.node.workspace, source).value.display())
+            .unwrap_or_default();
+        let text = if shown.is_empty() {
             self.name.clone()
         } else {
-            format!("{}: {}", self.name, self.value)
+            format!("{}: {}", self.name, shown)
         };
         let pill = Bordered {
             child: LayoutChild::Node(Arc::new(Label::new(text))),
             padding: 5.0,
             corner_radius: 4.0,
-            fill_color: Color::gray(238),
-            border_width: 1.0,
-            border_color: Color::gray(160),
+            fill_color: PARAM_FILL,
+            border_width: 1.5,
+            border_color: PARAM_BORDER,
         };
         let constraints = ctx.constraints;
         ctx.draw_node(&pill, constraints)
     }
 }
 
-// A value leaf: `scripting::node_to_value` reads its `value`.
 defhandlers! { ComputeParam {
     actions: [
-        // Push a fresh name + value.
-        SetParam { name: String, value: String } => (this, s) {
+        // Point this pin at a fresh name and source.
+        SetParam { name: String, source: Option<NodeUid> } => (this, s) {
             this.name = s.name;
-            this.value = s.value;
+            this.source = s.source;
         },
     ],
     requests: [
-        ParamEntry => (this, _q): (String, String) { (this.name.clone(), this.value.clone()) },
+        ParamEntry => (this, _q): (String, Option<NodeUid>) {
+            (this.name.clone(), this.source)
+        },
+    ],
+    extern_requests: [
+        // The pin is worth exactly what the argument is wired to.
+        ValueDelegate => (this, _q): Option<NodeUid> { this.source },
+        // A pin exists because the lambda has that argument; removing it here
+        // would only have the next sync put it back.
+        CanvasItemDeletable => (this, _q): bool { false },
     ],
 }}
+
+/// Where the pin for argument `slot` lands, and how big it is.
+const PARAM_SLOT_W: f32 = 100.0;
+const PARAM_SIZE: Vector = Vector { x: 90.0, y: 32.0 };
+
+fn param_slot(slot: usize) -> Vector {
+    Vector {
+        x: slot as f32 * PARAM_SLOT_W,
+        y: 0.0,
+    }
+}
+
+/// Put a pin for argument `slot` onto `canvas` as an item, under ids of its own.
+fn build_param_item(ws: &Workspace, canvas: NodeUid<Canvas>, slot: usize, name: String) -> NodeUid {
+    let item = NodeUid::mint();
+    place_param_item(ws, canvas, item, slot, name, None);
+    item
+}
+
+/// Build the pin `item` wraps, and the item, and put it on `canvas`.
+///
+/// The item is what the surface draws and what a wire points at; the pin inside
+/// carries the name and the delegation. Adopted rather than placed, because
+/// `PlaceOnCanvas` would centre it and the slot position is the point.
+fn place_param_item(
+    ws: &Workspace,
+    canvas: NodeUid<Canvas>,
+    item: NodeUid,
+    slot: usize,
+    name: String,
+    source: Option<NodeUid>,
+) {
+    let handle = ws.action_handle();
+    let pin = handle.insert_node(ComputeParam { name, source });
+    CanvasNode::build_at(handle, item, pin.erase(), param_slot(slot), PARAM_SIZE);
+    ws.submit_action(
+        canvas,
+        "Show a parameter pin",
+        AdoptCanvasNode { node: item },
+    );
+}
 
 #[utils::dynamic_type]
 #[utils::portable]
 pub struct ComputeCanvas {
     canvas: NodeUid<Canvas>,
+    /**
+        The parameter pins, in argument order — as *canvas items*.
+
+        An item is what a wire can point at and what can be dragged, so the pins
+        are held by their items rather than bare. The surface owns them, so
+        these are references.
+    */
+    #[uid_ref]
     #[dynamic(skip)]
-    params: Vec<NodeUid<ComputeParam>>,
+    params: Vec<NodeUid>,
     output_port: NodeUid<ConnectionPort>,
 }
 
 #[utils::dynamic_methods]
 impl ComputeCanvas {
     pub fn build(ws: WorkspaceActionHandle) -> NodeUid<ComputeCanvas> {
-        let canvas = Canvas::build(ws.clone());
+        let uid = NodeUid::mint();
         let output_port = ConnectionPort::build(ws.clone());
-        ws.insert_node(Self {
-            canvas,
-            params: Vec::new(),
-            output_port,
-        })
+        Self::build_with(ws, uid, output_port.erase())
+    }
+
+    /**
+        Build a compute canvas under ids the caller chose.
+
+        `output_port` is the one piece a caller has to know up front: it is what
+        decides the lambda's result, and there is no way to ask for it before
+        the queue drains. The inner surface needs no id of its own — a canvas
+        action sent here dereferences down to it.
+    */
+    pub fn build_with(
+        ws: WorkspaceActionHandle,
+        uid: NodeUid<ComputeCanvas>,
+        output_port: NodeUid,
+    ) -> NodeUid<ComputeCanvas> {
+        ws.insert_node_at(
+            output_port.cast::<ConnectionPort>(),
+            ConnectionPort::empty(ws.clone()),
+        );
+        ws.insert_node_at(
+            uid,
+            Self {
+                canvas: Canvas::build(ws.clone()),
+                params: Vec::new(),
+                output_port: output_port.cast(),
+            },
+        );
+        uid
     }
 }
 
-const CC_PARAM_H: f32 = 40.0;
 const CC_OUT_H: f32 = 34.0;
 const CC_GAP: f32 = 8.0;
 
@@ -859,30 +1114,10 @@ impl Node for ComputeCanvas {
         let avail_h = ctx.constraints.y.map(|a| a.provided_value()).unwrap_or(0.0);
         let origin = ctx.constraints.pos;
 
-        // Parameter row along the top. Drawn as things the user can point at.
-        let mut x = origin.x + CC_GAP;
-        for &param in &self.params {
-            let res = ctx.draw_inspectable_node(
-                param.erase(),
-                DrawConstraints {
-                    pos: ScreenPos {
-                        x,
-                        y: origin.y + CC_GAP,
-                    },
-                    x: Some(AxisConstraint::AtMost((avail_w - CC_GAP).max(0.0))),
-                    y: Some(AxisConstraint::AtMost(CC_PARAM_H - CC_GAP)),
-                    wrap: WrapConstraints::NotAllowed,
-                    should_clip: false,
-                },
-            );
-            if let Some(region) = res.and_then(|r| r.region()) {
-                x += region.size().x + CC_GAP;
-            }
-        }
-
-        // Inner canvas fills the middle.
-        let canvas_y = origin.y + CC_PARAM_H;
-        let canvas_h = (avail_h - CC_PARAM_H - CC_OUT_H).max(0.0);
+        // The pins are items on the surface below, not a strip up here: they
+        // pan with the graph they feed, so a wire to one stays short.
+        let canvas_y = origin.y;
+        let canvas_h = (avail_h - CC_OUT_H).max(0.0);
         ctx.draw_workspace_node(
             self.canvas.erase(),
             DrawConstraints {
@@ -954,33 +1189,73 @@ impl Node for ComputeCanvas {
 
 defhandlers! { ComputeCanvas {
     actions: [
-        // Reconcile the param pins to `entries` (name, value), preserving pin ids by index so existing connections survive.
-        SyncParams { entries: Vec<(String, String)> } => (this, s, ctx) {
+        /*
+            Reconcile the pins to `entries`, preserving item ids by index so
+            existing connections survive.
+
+            A new pin lands in the next slot along the top row and can be
+            dragged from there; one that is no longer an argument is taken off
+            the surface.
+        */
+        SyncParams { entries: Vec<(String, Option<NodeUid>)> } => (this, s, ctx) {
             while this.params.len() < s.entries.len() {
-                let p = ComputeParam::build(ctx.workspace.action_handle(), String::new());
-                this.params.push(p);
+                let slot = this.params.len();
+                this.params.push(build_param_item(ctx.workspace, this.canvas, slot, String::new()));
             }
             while this.params.len() > s.entries.len() {
-                if let Some(p) = this.params.pop() {
-                    ctx.workspace.delete_node(p.erase());
+                if let Some(item) = this.params.pop() {
+                    ctx.workspace.submit_action(
+                        this.canvas,
+                        "Drop a parameter pin",
+                        RemoveCanvasItem { node: item },
+                    );
                 }
             }
-            for (p, (name, value)) in this.params.iter().zip(&s.entries) {
-                // Only write (and thus bump the version) a param that changed to prevent unnecessary re-firing.
-                let cur = ctx.workspace.send_request(*p, ParamEntry).unwrap_or_default();
-                if &cur.0 != name || &cur.1 != value {
+            for (item, (name, source)) in this.params.iter().zip(&s.entries) {
+                // Only write (and so bump the version) a pin that changed, or
+                // every tick re-fires whatever reads it.
+                let cur = ctx.workspace.send_request(*item, ParamEntry).unwrap_or_default();
+                if &cur.0 != name || &cur.1 != source {
                     ctx.workspace.submit_action(
-                        *p,
+                        *item,
                         "Sync compute param",
-                        SetParam { name: name.clone(), value: value.clone() },
+                        SetParam { name: name.clone(), source: *source },
                     );
                 }
             }
         },
+        /*
+            Set the pins outright, under ids the caller chose.
+
+            [`SyncParams`] mints a pin for each new entry, which a script cannot
+            then wire to — the queue has not drained, so there is nothing to look
+            up. Naming them is what lets a body be built and connected in one
+            pass. Pins left unnamed here are dropped.
+        */
+        SyncParamsAt { entries: Vec<(NodeUid, String, Option<NodeUid>)> } => (this, s, ctx) {
+            let kept: Vec<NodeUid> = s.entries.iter().map(|(uid, _n, _s)| *uid).collect();
+            for old in &this.params {
+                if !kept.contains(old) {
+                    ctx.workspace.submit_action(
+                        this.canvas,
+                        "Drop a parameter pin",
+                        RemoveCanvasItem { node: *old },
+                    );
+                }
+            }
+            this.params = s.entries
+                .into_iter()
+                .enumerate()
+                .map(|(slot, (item, name, source))| {
+                    place_param_item(ctx.workspace, this.canvas, item, slot, name, source);
+                    item
+                })
+                .collect();
+        },
     ],
     requests: [
         // The current (name, value) of each param pin, in order.
-        ParamEntries => (this, _q, ctx): Vec<(String, String)> {
+        ParamEntries => (this, _q, ctx): Vec<(String, Option<NodeUid>)> {
             this.params
                 .iter()
                 .map(|p| ctx.workspace.send_request(*p, ParamEntry).unwrap_or_default())
@@ -989,6 +1264,88 @@ defhandlers! { ComputeCanvas {
         // The inner node the output pin is wired to.
         OutputConnected => (this, _q, ctx): Option<NodeUid> {
             ctx.workspace.send_request(this.output_port, ConnectedTarget).flatten()
+        },
+        /*
+            The parameter pins themselves, in order.
+
+            [`ParamEntries`] says what they hold; this says where they are. A
+            walker that descends into a canvas lambda needs the pins as ids, so
+            it can recognise one when the inner graph points at it.
+        */
+        ParamPins => (this, _q): Vec<NodeUid> { this.params.clone() },
+        // The output pin, so a caller can rewire what this canvas produces.
+        OutputPin => (this, _q): NodeUid { this.output_port.erase() },
+        // The surface the items sit on.
+        InnerCanvas => (this, _q): NodeUid { this.canvas.erase() },
+    ],
+}}
+
+/**
+    Stands in for a canvas lambda's result.
+
+    A wire needs something to point at. Without this the only target a canvas
+    lambda offers is the whole lambda, so consuming its value and referring to
+    the lambda itself are the same gesture — and a script handed one as an
+    argument gets the value, never the lambda. Giving the result its own id
+    separates the two, and mirrors how [`Lambda`] already draws its output.
+*/
+#[utils::dynamic_type]
+#[utils::portable]
+pub struct OutputProxy {
+    /// Whose output pin decides what this stands for. A reference: the lambda
+    /// owns both this and the canvas.
+    #[uid_ref]
+    canvas: NodeUid<ComputeCanvas>,
+}
+
+#[utils::dynamic_methods]
+impl OutputProxy {
+    pub fn build(
+        ws: WorkspaceActionHandle,
+        canvas: NodeUid<ComputeCanvas>,
+    ) -> NodeUid<OutputProxy> {
+        ws.insert_node(Self { canvas })
+    }
+}
+
+#[utils::dynamic_node]
+impl Node for OutputProxy {
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Lambda Output".into()
+    }
+
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
+        let ws = ctx.node.workspace;
+        let text = ws
+            .send_request(self.canvas, OutputConnected)
+            .flatten()
+            .map(|node| resolve_arg(ws, node).value.display())
+            .unwrap_or_else(|| "(no output)".to_owned());
+        let constraints = ctx.constraints;
+        ctx.draw_node(&Label::new(text), constraints)
+    }
+
+    fn build_inspector(&self, ctx: NodeContext) -> Option<NodeUid> {
+        // The proxy is a stand-in, so it offers what it stands for.
+        let target = ctx
+            .workspace
+            .send_request(self.canvas, OutputConnected)
+            .flatten()?;
+        let target_ctx = NodeContext {
+            id: target,
+            workspace: ctx.workspace,
+        };
+        ctx.workspace
+            .get_node(target)
+            .and_then(|node| node.build_inspector(target_ctx))
+    }
+}
+
+defhandlers! { OutputProxy {
+    extern_requests: [
+        // The proxy is worth exactly what the pin is wired to.
+        ValueDelegate => (this, _q, ctx): Option<NodeUid> {
+            ctx.workspace.send_request(this.canvas, OutputConnected).flatten()
         },
     ],
 }}
@@ -1001,28 +1358,51 @@ pub struct CanvasLambda {
     args: NodeUid<LambdaArgs>,
     open_button: NodeUid<Button>,
     compute_canvas: NodeUid<ComputeCanvas>,
+    /// What a consumer wires to, so binding the lambda and binding its result
+    /// are different gestures.
+    output: NodeUid<OutputProxy>,
 }
 
 #[utils::dynamic_methods]
 impl CanvasLambda {
+    /**
+        Build a canvas lambda named `name` under ids the caller chose.
+
+        The three a builder script needs: `args` to hang parameters on,
+        `compute_canvas` to place the body on, and `output_port` to say which
+        node is the result.
+    */
+    pub fn new_with(
+        ws: WorkspaceActionHandle,
+        args: NodeUid<LambdaArgs>,
+        compute_canvas: NodeUid<ComputeCanvas>,
+        output_port: NodeUid,
+        name: String,
+    ) -> CanvasLambda {
+        ws.insert_node_at(args, LambdaArgs::empty(ws.clone()));
+        ComputeCanvas::build_with(ws.clone(), compute_canvas, output_port);
+        Self {
+            name: ws.insert_node(LabelEditable::new(name)),
+            args,
+            open_button: Button::build(ws.clone(), Label::new("Open".to_owned())),
+            compute_canvas,
+            output: OutputProxy::build(ws.clone(), compute_canvas),
+        }
+    }
+
     pub fn new(ws: WorkspaceActionHandle) -> CanvasLambda {
         let name = ws.insert_node(LabelEditable::new("Canvas Lambda".to_owned()));
         let args = LambdaArgs::build(ws.clone());
         let open_button = Button::build(ws.clone(), Label::new("Open".to_owned()));
         let compute_canvas = ComputeCanvas::build(ws.clone());
+        let output = OutputProxy::build(ws.clone(), compute_canvas);
         Self {
             name,
             args,
             open_button,
             compute_canvas,
+            output,
         }
-    }
-
-    /// The node the canvas's output pin is wired to, if any.
-    fn output_node(&self, ctx: NodeContext) -> Option<NodeUid> {
-        ctx.workspace
-            .send_request(self.compute_canvas, OutputConnected)
-            .flatten()
     }
 }
 
@@ -1050,13 +1430,6 @@ impl Node for CanvasLambda {
         };
         let origin = constraints.pos;
 
-        // Preview the current output value.
-        let out_value = self
-            .output_node(ctx.node)
-            .map(|n| resolve_arg(ctx.node.workspace, n).value)
-            .map(|v| v.display())
-            .unwrap_or_else(|| "(no output)".to_owned());
-
         let body = VerticalLayout {
             children: vec![
                 LayoutChild::from(self.name),
@@ -1064,7 +1437,7 @@ impl Node for CanvasLambda {
                 LayoutChild::Node(Arc::new(SectionDivider)),
                 LayoutChild::from(self.open_button),
                 LayoutChild::Node(Arc::new(SectionDivider)),
-                LayoutChild::Node(Arc::new(Label::new(out_value))),
+                LayoutChild::Inspectable(self.output.erase()),
             ],
             spacing: V_SECTIONS_GAP,
             fill_last: true,
@@ -1118,25 +1491,12 @@ impl Node for CanvasLambda {
             .send_request(self.compute_canvas, ParamEntries)
             .unwrap_or_default();
 
-        let desired: Vec<(String, String)> = bindings
+        // The pin points at the argument's source rather than holding a copy,
+        // so there is no value to render and nothing to hold on to while the
+        // source recomputes — `resolve_arg` sees through it either way.
+        let desired: Vec<(String, Option<NodeUid>)> = bindings
             .iter()
-            .enumerate()
-            .map(|(i, (name, target))| {
-                let keep = || current.get(i).map(|(_, v)| v.clone()).unwrap_or_default();
-                let value = match target {
-                    Some(t) => {
-                        let resolved = resolve_arg(ws, *t);
-                        // Hold the last value while the source is recomputing.
-                        if resolved.pending {
-                            keep()
-                        } else {
-                            resolved.value.display()
-                        }
-                    }
-                    None => keep(),
-                };
-                (name.clone(), value)
-            })
+            .map(|(name, target)| (name.clone(), *target))
             .collect();
 
         if desired != current {
@@ -1153,14 +1513,43 @@ impl Node for CanvasLambda {
         ctx.workspace.delete_node(self.args.erase());
         ctx.workspace.delete_node(self.open_button.erase());
         ctx.workspace.delete_node(self.compute_canvas.erase());
+        ctx.workspace.delete_node(self.output.erase());
     }
 }
 
 defhandlers! { CanvasLambda {
-    extern_requests: [
-        // A canvas lambda represents whatever its output pin is wired to.
-        ValueDelegate => (this, _q, ctx): Option<NodeUid> {
+    requests: [
+        /*
+            The node the inner output pin is wired to: this lambda's body.
+
+            Where a symbolic walk starts, and where it resumes when it descends
+            into a nested canvas lambda.
+        */
+        LambdaBody => (this, _q, ctx): Option<NodeUid> {
             ctx.workspace.send_request(this.compute_canvas, OutputConnected).flatten()
+        },
+        // The canvas holding the body.
+        ComputeCanvasNode => (this, _q): NodeUid { this.compute_canvas.erase() },
+    ],
+    extern_requests: [
+        // Deliberately *not* `ValueDelegate`: the lambda is itself, and its
+        // result is the proxy. See [`OutputProxy`].
+        DataflowOutput => (this, _q): Option<NodeUid> { Some(this.output.erase()) },
+        LambdaName => (this, _q, ctx): String {
+            ctx.workspace.send_request(this.name, GetText).unwrap_or_default()
+        },
+        DataflowInputs => (this, _q, ctx): Vec<(String, NodeUid, Option<NodeUid>)> {
+            ctx.workspace.send_request(this.args, DataflowInputs).unwrap_or_default()
+        },
+        LambdaArgsNode => (this, _q): NodeUid { this.args.erase() },
+        LambdaNameNode => (this, _q): NodeUid { this.name.erase() },
+        // Forwarded so a walker need not fetch the canvas to reach the pins.
+        ParamPins => (this, _q, ctx): Vec<NodeUid> {
+            ctx.workspace.send_request(this.compute_canvas, ParamPins).unwrap_or_default()
+        },
+        OutputPin => (this, _q, ctx): NodeUid {
+            ctx.workspace.send_request(this.compute_canvas, OutputPin)
+                .unwrap_or_else(NodeUid::nil)
         },
     ],
 }}

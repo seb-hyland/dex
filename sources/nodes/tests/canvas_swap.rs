@@ -31,10 +31,17 @@ fn a_line_swaps_for_a_path_it_can_be_shaped_from() {
     ws.process_pending();
 
     let points = vec![Vector::new(0.0, 0.0), Vector::new(140.0, 60.0)];
-    ws.submit_action(canvas, "line", AddCanvasItem {
-        child: Arc::new(Path::polyline(points.clone(), Stroke::new(2.5, Color::BLACK))),
-        size: Vector { x: 140.0, y: 60.0 },
-    });
+    ws.submit_action(
+        canvas,
+        "line",
+        AddCanvasItem {
+            child: Arc::new(Path::polyline(
+                points.clone(),
+                Stroke::new(2.5, Color::BLACK),
+            )),
+            size: Vector { x: 140.0, y: 60.0 },
+        },
+    );
     ws.process_pending();
 
     let children = ws.send_request(canvas, CanvasChildren).unwrap_or_default();
@@ -53,12 +60,16 @@ fn a_line_swaps_for_a_path_it_can_be_shaped_from() {
     // Convert: the same outline with a point added on the middle of it.
     let mut split = anchors.clone();
     split.insert(1, Anchor::corner(Vector::new(70.0, 30.0)));
-    ws.submit_action(canvas, "convert", SwapCanvasItem {
-        old: line_item,
-        child: Arc::new(Path::open_through(split, Stroke::new(2.5, Color::BLACK))),
-        pos,
-        size: Vector { x: 140.0, y: 60.0 },
-    });
+    ws.submit_action(
+        canvas,
+        "convert",
+        SwapCanvasItem {
+            old: line_item,
+            child: Arc::new(Path::open_through(split, Stroke::new(2.5, Color::BLACK))),
+            pos,
+            size: Vector { x: 140.0, y: 60.0 },
+        },
+    );
     ws.process_pending();
 
     let children = ws.send_request(canvas, CanvasChildren).unwrap_or_default();
@@ -88,9 +99,16 @@ fn a_line_swaps_for_a_path_it_can_be_shaped_from() {
         "the line's own ends are kept, with a third point on the line between"
     );
     // The added point is on the line, so nothing moved on screen.
-    let (a, m, b) = (poly_anchors[0].pos, poly_anchors[1].pos, poly_anchors[2].pos);
+    let (a, m, b) = (
+        poly_anchors[0].pos,
+        poly_anchors[1].pos,
+        poly_anchors[2].pos,
+    );
     let cross = (b.x - a.x) * (m.y - a.y) - (b.y - a.y) * (m.x - a.x);
-    assert!(cross.abs() < 1e-3, "the new point is collinear with the ends");
+    assert!(
+        cross.abs() < 1e-3,
+        "the new point is collinear with the ends"
+    );
     assert_eq!(
         ws.send_request(poly_child, IsPathClosed),
         Some(false),
@@ -125,10 +143,14 @@ fn a_circle_swaps_for_a_path_that_traces_it() {
     ws.process_pending();
 
     let radius = 40.0;
-    ws.submit_action(canvas, "circle", AddCanvasItem {
-        child: Arc::new(Circle::new(radius, Color::rgb(120, 170, 220))),
-        size: Vector::splat(radius * 2.0),
-    });
+    ws.submit_action(
+        canvas,
+        "circle",
+        AddCanvasItem {
+            child: Arc::new(Circle::new(radius, Color::rgb(120, 170, 220))),
+            size: Vector::splat(radius * 2.0),
+        },
+    );
     ws.process_pending();
 
     let circle_item = *ws
@@ -149,17 +171,21 @@ fn a_circle_swaps_for_a_path_that_traces_it() {
         (bounds.min.y + bounds.max.y) * 0.5,
     );
 
-    ws.submit_action(canvas, "convert", SwapCanvasItem {
-        old: circle_item,
-        child: Arc::new(Path::circle(
-            Vector::splat(radius),
-            radius,
-            Path::default_fill(),
-            Stroke::NONE,
-        )),
-        pos: bounds.min.to_vector(),
-        size: bounds.size(),
-    });
+    ws.submit_action(
+        canvas,
+        "convert",
+        SwapCanvasItem {
+            old: circle_item,
+            child: Arc::new(Path::circle(
+                Vector::splat(radius),
+                radius,
+                Path::default_fill(),
+                Stroke::NONE,
+            )),
+            pos: bounds.min.to_vector(),
+            size: bounds.size(),
+        },
+    );
     ws.process_pending();
 
     let children = ws.send_request(canvas, CanvasChildren).unwrap_or_default();

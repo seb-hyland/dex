@@ -301,6 +301,14 @@ impl LabelEditable {
         self.buf.val().clone().unwrap_or_else(|| self.value.clone())
     }
 
+    /// Overwrite both the committed value and the live edit buffer, so a
+    /// wrapper can correct what an edit committed.
+    #[dynamic(skip)] // takes `&mut self`
+    pub fn set_text(&mut self, value: String) {
+        self.buf.set(value.clone());
+        self.value = value;
+    }
+
     /// A label that starts as static text, becomes editable on [`SetInteractive`], and locks again on focus loss.
     pub fn click_to_edit(value: String) -> Self {
         Self {

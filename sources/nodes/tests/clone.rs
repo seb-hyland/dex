@@ -546,13 +546,7 @@ fn canvas_node_menu_commands_act_on_the_canvas() {
     );
 
     // Delete: the node goes, and so does what it owned.
-    ws.submit_action(
-        canvas,
-        "delete",
-        RemoveCanvasItem {
-            node: copy.erase(),
-        },
-    );
+    ws.submit_action(canvas, "delete", RemoveCanvasItem { node: copy.erase() });
     ws.process_pending();
     let remaining = ws.send_request(canvas, CanvasChildren).unwrap_or_default();
     assert!(

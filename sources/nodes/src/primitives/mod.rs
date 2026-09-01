@@ -6,6 +6,7 @@ pub mod file_browser;
 pub mod image;
 pub mod interaction;
 pub mod nothing;
+pub mod number;
 pub mod shapes;
 pub mod table;
 pub mod text;

@@ -7,6 +7,41 @@ use crate::{
     primitives::interaction::{DragStartPos, InteractionBox, WasDragged},
 };
 
+/**
+    Where the canvas publishes the clip a wire should honour.
+
+    Wires are painted on a foreground layer, which has none of its own. A port
+    cannot use the `Ui` it sits in either: `CanvasNode` draws its child clipped
+    to the card, so a wire would be cut off at the edge of the node it leaves.
+    The surface it crosses is the right bound, and only the surface knows it.
+*/
+const WIRE_CLIP_ID: &str = "dex_canvas_wire_clip";
+
+/// The clip a wire drawn over this frame's canvas should honour, if a canvas
+/// has drawn. See [`WIRE_CLIP_ID`].
+pub fn wire_clip(ctx: &egui::Context) -> Option<egui::Rect> {
+    ctx.memory(|mem| mem.data.get_temp(egui::Id::new(WIRE_CLIP_ID)))
+}
+
+/// Publish `clip` for the duration of `draw`, restoring whatever a surrounding
+/// canvas had published.
+fn with_wire_clip<R>(ctx: &egui::Context, clip: egui::Rect, draw: impl FnOnce() -> R) -> R {
+    let id = egui::Id::new(WIRE_CLIP_ID);
+    let previous: Option<egui::Rect> = ctx.memory_mut(|mem| {
+        let previous = mem.data.get_temp(id);
+        mem.data.insert_temp(id, clip);
+        previous
+    });
+    let out = draw();
+    ctx.memory_mut(|mem| match previous {
+        Some(outer) => {
+            mem.data.insert_temp(id, outer);
+        }
+        None => mem.data.remove::<egui::Rect>(id),
+    });
+    out
+}
+
 #[utils::dynamic_type]
 #[utils::portable]
 pub struct Canvas {
@@ -122,20 +157,25 @@ impl Node for Canvas {
         }
 
         let canvas_origin = origin - self.screen_offset();
-        for &child in &self.children {
-            // Canvas items are content the user points at, so they get an inspector.
-            ctx.draw_inspectable_node(
-                child.erase(),
-                DrawConstraints {
-                    // `CanvasNode` children will draw relative to the origin
-                    pos: canvas_origin,
-                    x: None,
-                    y: None,
-                    wrap: WrapConstraints::NotAllowed,
-                    should_clip: false,
-                },
-            );
-        }
+        // This surface is what bounds the wires its items draw between them.
+        let surface_clip = ctx.ui.clip_rect();
+        let egui_ctx = ctx.ui.ctx().clone();
+        with_wire_clip(&egui_ctx, surface_clip, || {
+            for &child in &self.children {
+                // Canvas items are content the user points at, so they get an inspector.
+                ctx.draw_inspectable_node(
+                    child.erase(),
+                    DrawConstraints {
+                        // `CanvasNode` children will draw relative to the origin
+                        pos: canvas_origin,
+                        x: None,
+                        y: None,
+                        wrap: WrapConstraints::NotAllowed,
+                        should_clip: false,
+                    },
+                );
+            }
+        });
 
         DrawResult::Complete {
             region: Some(region),
@@ -272,3 +312,34 @@ defhandlers! { Canvas {
         },
     ],
 }}
+
+#[cfg(test)]
+mod tests {
+    use super::{wire_clip, with_wire_clip};
+
+    /// A nested surface publishes its own bound and gives the outer one back,
+    /// so a canvas opened over a canvas does not leave the wires beneath it
+    /// clipped to the wrong rectangle.
+    #[test]
+    fn the_wire_clip_nests_and_unwinds() {
+        let ctx = egui::Context::default();
+        let outer = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+        let inner = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(200.0, 100.0));
+
+        assert_eq!(wire_clip(&ctx), None, "nothing is published to begin with");
+
+        with_wire_clip(&ctx, outer, || {
+            assert_eq!(wire_clip(&ctx), Some(outer));
+            with_wire_clip(&ctx, inner, || {
+                assert_eq!(wire_clip(&ctx), Some(inner), "the innermost surface wins");
+            });
+            assert_eq!(wire_clip(&ctx), Some(outer), "and the outer one comes back");
+        });
+
+        assert_eq!(
+            wire_clip(&ctx),
+            None,
+            "a port drawn outside any canvas inherits nothing stale"
+        );
+    }
+}

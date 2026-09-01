@@ -166,3 +166,39 @@ fn only_the_open_tab_draws() {
         "and going back to Prototypes brings the buttons back"
     );
 }
+
+/// Every prototype button inserts something, and the labels line up with what
+/// `dispatch` builds — they are two lists that have to stay in step.
+#[test]
+fn every_prototype_option_builds_a_node() {
+    use dex_nodes::layouts::canvas::sidebar::CanvasSidebar;
+
+    dex_nodes::scripting::init_python();
+    let mut ws = Desktops::new_workspace();
+    ws.process_pending();
+
+    for (index, label) in CanvasSidebar::OPTIONS.iter().enumerate() {
+        let (node, size) = CanvasSidebar::prototype(index, ws.action_handle())
+            .unwrap_or_else(|| panic!("`{label}` (index {index}) builds nothing"));
+        let named = node.type_name(NodeContext {
+            id: NodeUid::nil(),
+            workspace: &ws,
+        });
+        assert!(!named.is_empty(), "`{label}` builds a named node");
+        assert!(
+            size.x > 0.0 && size.y > 0.0,
+            "`{label}` is inserted at a usable size"
+        );
+    }
+    assert!(
+        CanvasSidebar::prototype(CanvasSidebar::OPTIONS.len(), ws.action_handle()).is_none(),
+        "there is no option past the last label"
+    );
+
+    for expected in ["Integer", "Float"] {
+        assert!(
+            CanvasSidebar::OPTIONS.contains(&expected),
+            "the numeric primitives are offered: {expected}"
+        );
+    }
+}
