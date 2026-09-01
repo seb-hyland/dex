@@ -7,11 +7,10 @@
 
 use dex_core::prelude::*;
 use dex_nodes::layouts::canvas::nodes::editors::PathEditor;
+use dex_nodes::layouts::inspector::PlacementCommands;
 use dex_nodes::primitives::checkbox::Checkbox;
 use dex_nodes::primitives::color_picker::ColorPicker;
-use dex_nodes::primitives::shapes::{
-    HasEndArrow, HasStartArrow, IsPathClosed, IsPathFilled, Path,
-};
+use dex_nodes::primitives::shapes::{HasEndArrow, HasStartArrow, IsPathClosed, IsPathFilled, Path};
 
 const SCREEN: egui::Vec2 = egui::vec2(1200.0, 900.0);
 /// The spacing `PathEditorMenu` stacks its controls with.
@@ -88,6 +87,23 @@ fn row_height(ctx: &egui::Context, build: impl FnOnce(&Workspace) -> NodeUid) ->
     height
 }
 
+/**
+    How far down the menu the shape's own controls start.
+
+    Copy, Mirror and the backpack commands head every canvas item's menu, this
+    one included, so the rows below them are offset by that whole block.
+*/
+fn controls_top(ctx: &egui::Context) -> f32 {
+    row_height(ctx, |ws| {
+        PlacementCommands::build(
+            ws.action_handle(),
+            NodeUid::nil(),
+            Vector { x: 90.0, y: 90.0 },
+        )
+        .erase()
+    }) + ROW_GAP
+}
+
 /// Make `target`'s inspector the workspace root, so clicks land on it.
 fn inspecting(ws: &mut Workspace, target: NodeUid) {
     let inspector = ws
@@ -110,8 +126,13 @@ fn inspecting_path(ctx: &egui::Context, path: Path, is_line: bool) -> (Workspace
     let child = ws.insert_node_now(path).erase();
     // Closed shapes start with point editing off, as the canvas builds them.
     let editable = !path_closed;
-    let editor =
-        PathEditor::build(ws.action_handle(), child, Vector::splat(0.0), is_line, editable);
+    let editor = PathEditor::build(
+        ws.action_handle(),
+        child,
+        Vector::splat(0.0),
+        is_line,
+        editable,
+    );
     ws.process_pending();
     inspecting(&mut ws, editor.erase());
     // A frame first: egui only reports a click on a rect it already knows.
@@ -136,7 +157,8 @@ fn each_arrow_box_arms_its_own_end() {
     let tick = row_height(&ctx, |ws| {
         Checkbox::build(ws.action_handle(), "Start arrow".to_owned(), false).erase()
     });
-    let row = |i: usize| egui::pos2(6.0, i as f32 * (tick + ROW_GAP) + tick * 0.5);
+    let top = controls_top(&ctx);
+    let row = |i: usize| egui::pos2(6.0, top + i as f32 * (tick + ROW_GAP) + tick * 0.5);
 
     let arrows = |ws: &Workspace| {
         (
@@ -147,7 +169,11 @@ fn each_arrow_box_arms_its_own_end() {
     assert_eq!(arrows(&ws), (false, false), "a line starts with no arrows");
 
     click_at(&mut ws, &ctx, row(0));
-    assert_eq!(arrows(&ws), (true, false), "the first row is the start arrow");
+    assert_eq!(
+        arrows(&ws),
+        (true, false),
+        "the first row is the start arrow"
+    );
 
     click_at(&mut ws, &ctx, row(1));
     assert_eq!(
@@ -190,8 +216,13 @@ fn a_polygon_is_offered_arrows_too() {
     // Edit points, Closed, Filled, Fill, Border, Start arrow, End arrow, Delete.
     let ticks_above = 3.0 * (tick + ROW_GAP);
     let pickers_above = 2.0 * (picker + ROW_GAP);
-    let arrow_row =
-        |i: f32| egui::pos2(6.0, ticks_above + pickers_above + i * (tick + ROW_GAP) + tick * 0.5);
+    let top = controls_top(&ctx);
+    let arrow_row = |i: f32| {
+        egui::pos2(
+            6.0,
+            top + ticks_above + pickers_above + i * (tick + ROW_GAP) + tick * 0.5,
+        )
+    };
 
     assert_eq!(ws.send_request(child, HasStartArrow), Some(false));
     click_at(&mut ws, &ctx, arrow_row(0.0));
@@ -230,7 +261,8 @@ fn the_polygon_boxes_open_and_unfill_it() {
     let tick = row_height(&ctx, |ws| {
         Checkbox::build(ws.action_handle(), "Edit points".to_owned(), false).erase()
     });
-    let row = |i: usize| egui::pos2(6.0, i as f32 * (tick + ROW_GAP) + tick * 0.5);
+    let top = controls_top(&ctx);
+    let row = |i: usize| egui::pos2(6.0, top + i as f32 * (tick + ROW_GAP) + tick * 0.5);
 
     click_at(&mut ws, &ctx, row(1));
     assert_eq!(

@@ -12,6 +12,7 @@ use crate::{
     composites::button::Button,
     layouts::{
         canvas::layout::{RemoveCanvasItem, SwapCanvasItem},
+        inspector::PlacementCommands,
         vertical::VerticalLayout,
     },
     primitives::{
@@ -61,6 +62,15 @@ fn place_sensor(ctx: &mut DrawContext, sensor: NodeUid, center: ScreenPos, size:
             should_clip: false,
         },
     );
+}
+
+/// Copy, Mirror and the two backpack commands for an editor's own canvas item.
+fn placement_commands(ws: &Workspace, target: NodeUid) -> NodeUid<PlacementCommands> {
+    let size = ws
+        .send_request(target, CanvasItemBounds)
+        .map(|bounds| bounds.size())
+        .unwrap_or(Vector::splat(80.0));
+    PlacementCommands::build(ws.action_handle(), target, size)
 }
 
 fn place_region(ctx: &mut DrawContext, sensor: NodeUid, region: ScreenRegion) {
@@ -244,7 +254,7 @@ impl Node for CircleEditor {
     }
 
     fn build_inspector(&self, ctx: NodeContext) -> Option<NodeUid> {
-        Some(CircleEditorMenu::build(ctx.workspace.action_handle(), ctx.id, self.child).erase())
+        Some(CircleEditorMenu::build(ctx.workspace, ctx.id, self.child).erase())
     }
 
     fn deref_target(&self) -> Option<NodeUid> {
@@ -288,27 +298,31 @@ pub struct CircleEditorMenu {
     target: NodeUid<CircleEditor>,
     child: NodeUid,
     column: NodeUid<VerticalLayout>,
+    placement: NodeUid<PlacementCommands>,
     convert_button: NodeUid<Button>,
     delete_button: NodeUid<Button>,
 }
 
 impl CircleEditorMenu {
-    fn build(
-        ws: WorkspaceActionHandle,
-        target: NodeUid,
-        child: NodeUid,
-    ) -> NodeUid<CircleEditorMenu> {
-        let convert_button = Button::build(ws.clone(), Label::new("Convert to polygon".to_owned()));
-        let delete_button = Button::build(ws.clone(), Label::new("Delete".to_owned()));
+    fn build(ws: &Workspace, target: NodeUid, child: NodeUid) -> NodeUid<CircleEditorMenu> {
+        let h = ws.action_handle();
+        let placement = placement_commands(ws, target);
+        let convert_button = Button::build(h.clone(), Label::new("Convert to polygon".to_owned()));
+        let delete_button = Button::build(h.clone(), Label::new("Delete".to_owned()));
         let column = VerticalLayout::build(
-            ws.clone(),
-            vec![convert_button.erase(), delete_button.erase()],
+            h,
+            vec![
+                placement.erase(),
+                convert_button.erase(),
+                delete_button.erase(),
+            ],
             2.0,
         );
         ws.insert_node(Self {
             target: target.cast(),
             child,
             column,
+            placement,
             convert_button,
             delete_button,
         })
@@ -370,6 +384,7 @@ impl Node for CircleEditorMenu {
 
     fn on_delete(&self, ctx: NodeContext) {
         ctx.workspace.delete_node(self.column.erase());
+        ctx.workspace.delete_node(self.placement.erase());
         ctx.workspace.delete_node(self.convert_button.erase());
         ctx.workspace.delete_node(self.delete_button.erase());
     }
@@ -545,7 +560,7 @@ fn nearest_edge(
 /// What a path drag is manipulating, decided on the first drag frame.
 #[derive(Clone, Copy, Serialize, Deserialize)]
 enum Grab {
-    Whole,
+    Nothing,
     Anchor(usize),
     In(usize),
     Out(usize),
@@ -696,15 +711,15 @@ impl Node for PathEditor {
                                     }
                                 }
                             }
-                            Grab::Whole
+                            Grab::Nothing
                         })
-                        .unwrap_or(Grab::Whole);
+                        .unwrap_or(Grab::Nothing);
                     self.grab.set(g);
                     g
                 }
             };
             match grab {
-                Grab::Whole => self.pending_pos.set(display_pos + delta),
+                Grab::Nothing => {}
                 Grab::Anchor(i) if i < working.len() => {
                     working[i].pos = working[i].pos + delta;
                     self.pending_anchors.set(working.clone());
@@ -945,6 +960,7 @@ pub struct PathEditorMenu {
     child: NodeUid,
     is_line: bool,
     column: NodeUid<VerticalLayout>,
+    placement: NodeUid<PlacementCommands>,
     delete_button: NodeUid<Button>,
     border_picker: NodeUid<ColorPicker>,
     /// Arrowheads are drawn only on an open path, but offered on any path: a
@@ -968,6 +984,7 @@ impl PathEditorMenu {
         is_line: bool,
     ) -> NodeUid<PathEditorMenu> {
         let h = ws.action_handle();
+        let placement = placement_commands(ws, target);
         let stroke = ws
             .send_request(child, GetStroke)
             .unwrap_or(Stroke::new(2.0, Color::BLACK));
@@ -979,7 +996,7 @@ impl PathEditorMenu {
         let start_arrow_check = Checkbox::build(h.clone(), "Start arrow".to_owned(), start);
         let end_arrow_check = Checkbox::build(h.clone(), "End arrow".to_owned(), end);
 
-        let mut rows: Vec<NodeUid> = Vec::new();
+        let mut rows: Vec<NodeUid> = vec![placement.erase()];
         let mut editable_check = None;
         let mut closed_check = None;
         let mut filled_check = None;
@@ -1022,6 +1039,7 @@ impl PathEditorMenu {
             child,
             is_line,
             column,
+            placement,
             delete_button,
             border_picker,
             editable_check,
@@ -1162,6 +1180,7 @@ impl Node for PathEditorMenu {
         }
         ctx.workspace.delete_node(self.column.erase());
         for c in [
+            Some(self.placement.erase()),
             Some(self.delete_button.erase()),
             Some(self.border_picker.erase()),
             Some(self.start_arrow_check.erase()),

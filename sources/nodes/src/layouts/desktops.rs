@@ -434,6 +434,18 @@ defhandlers! { Desktops {
         SetSidebarWidth { width: f32 } => (this, s) {
             this.sidebar_width = s.width;
         },
+        // Keep `node` in the sidebar's backpack.
+        AddToBackpack { node: NodeUid, size: Vector, mirror: bool } => (this, s, ctx) {
+            ctx.workspace.submit_action(
+                this.sidebar,
+                "Added to the backpack",
+                canvas::sidebar::StoreInBackpack {
+                    node: s.node,
+                    size: s.size,
+                    mirror: s.mirror,
+                },
+            );
+        },
         // Open `node` fullscreen in place of the tabs/canvas.
         PushOverride { node: NodeUid } => (this, s) {
             this.override_stack.push(s.node);

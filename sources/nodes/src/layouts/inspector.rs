@@ -2,20 +2,21 @@ use dex_core::prelude::*;
 use egui::{Id, Popup, PopupCloseBehavior, PopupKind, RectAlign, Sense};
 use utils::Transient;
 
-use crate::composites::button::Button;
-use crate::layouts::LayoutChild;
-use crate::layouts::canvas::layout::PlaceOnCanvas;
-use crate::layouts::mirror::Mirror;
-use crate::layouts::vertical::VerticalLayout;
-use crate::primitives::interaction::TakeClicked;
-use crate::primitives::shapes::Rect;
-use crate::primitives::text::Label;
+use crate::{
+    composites::button::Button,
+    layouts::{
+        LayoutChild, canvas::layout::PlaceOnCanvas, desktops::AddToBackpack, mirror::Mirror,
+        vertical::VerticalLayout,
+    },
+    primitives::{interaction::TakeClicked, shapes::Rect, text::Label},
+};
 
+static VAR_NAME: f32 = 8.0;
 /// Where the lens sits relative to the node it belongs to.
-const HANDLE_OFFSET: f32 = 8.0;
+const HANDLE_OFFSET: f32 = VAR_NAME;
 const HANDLE_SIZE: Vector = Vector { x: 14.0, y: 22.0 };
 /// The menu's width. Fixed, as the popup sizes itself to its contents.
-const MENU_WIDTH: f32 = 160.0;
+const MENU_WIDTH: f32 = 180.0;
 /// How far the pointer may stray from the menu before it closes.
 const MENU_SLACK: f32 = 36.0;
 /// A stable egui id: there is only ever one handle.
@@ -236,7 +237,7 @@ impl Node for Inspector {
     }
 }
 
-/// Copy and Mirror, for a node that can belong on a canvas.
+/// Copy and Mirror, onto the canvas or into the backpack, for a node that can belong on a canvas.
 #[utils::dynamic_type]
 #[utils::portable]
 pub struct PlacementCommands {
@@ -247,6 +248,8 @@ pub struct PlacementCommands {
     size: Vector,
     copy_button: NodeUid<Button>,
     mirror_button: NodeUid<Button>,
+    keep_copy_button: NodeUid<Button>,
+    keep_mirror_button: NodeUid<Button>,
     column: NodeUid<VerticalLayout>,
 }
 
@@ -268,9 +271,16 @@ impl PlacementCommands {
         };
         let copy_button = command("Copy");
         let mirror_button = command("Mirror");
+        let keep_copy_button = command("Copy to Backpack");
+        let keep_mirror_button = command("Mirror to Backpack");
         let column = VerticalLayout::build(
             ws.clone(),
-            vec![copy_button.erase(), mirror_button.erase()],
+            vec![
+                copy_button.erase(),
+                mirror_button.erase(),
+                keep_copy_button.erase(),
+                keep_mirror_button.erase(),
+            ],
             2.0,
         );
         ws.insert_node(Self {
@@ -278,6 +288,8 @@ impl PlacementCommands {
             size,
             copy_button,
             mirror_button,
+            keep_copy_button,
+            keep_mirror_button,
             column,
         })
     }
@@ -322,6 +334,26 @@ impl Node for PlacementCommands {
                     size: self.size,
                 },
             );
+        } else if taken(self.keep_copy_button) {
+            ws.submit_action(
+                root,
+                "Kept a copy in the backpack",
+                AddToBackpack {
+                    node: self.target,
+                    size: self.size,
+                    mirror: false,
+                },
+            );
+        } else if taken(self.keep_mirror_button) {
+            ws.submit_action(
+                root,
+                "Kept a mirror in the backpack",
+                AddToBackpack {
+                    node: self.target,
+                    size: self.size,
+                    mirror: true,
+                },
+            );
         }
 
         drawn.unwrap_or(DrawResult::Complete { region: None })
@@ -329,8 +361,14 @@ impl Node for PlacementCommands {
 
     fn on_delete(&self, ctx: NodeContext) {
         ctx.workspace.delete_node(self.column.erase());
-        ctx.workspace.delete_node(self.copy_button.erase());
-        ctx.workspace.delete_node(self.mirror_button.erase());
+        for button in [
+            self.copy_button,
+            self.mirror_button,
+            self.keep_copy_button,
+            self.keep_mirror_button,
+        ] {
+            ctx.workspace.delete_node(button.erase());
+        }
     }
 }
 

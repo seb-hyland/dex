@@ -10,6 +10,7 @@ pub mod mirror;
 pub mod pending;
 pub mod scroll;
 pub mod vertical;
+pub mod vertical_dnd;
 
 pub use bordered::Bordered;
 pub use child::LayoutChild;
@@ -17,3 +18,4 @@ pub use horizontal::HorizontalLayout;
 pub use mirror::Mirror;
 pub use scroll::ScrollLayout;
 pub use vertical::VerticalLayout;
+pub use vertical_dnd::VerticalDnD;

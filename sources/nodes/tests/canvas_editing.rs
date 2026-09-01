@@ -4,7 +4,9 @@
 
 use dex_core::prelude::*;
 use dex_nodes::layouts::canvas::layout::{AddCanvasItem, CanvasChildren, NodeScreenRect};
-use dex_nodes::layouts::canvas::nodes::{CanvasItemBounds, CanvasNodeChild, editors::PathAnchorOrigin};
+use dex_nodes::layouts::canvas::nodes::{
+    CanvasItemBounds, CanvasNodeChild, editors::PathAnchorOrigin,
+};
 use dex_nodes::layouts::desktops::{ActiveCanvas, Desktops};
 use dex_nodes::primitives::shapes::{Anchor, GetAnchors, Path, SetAnchors};
 
@@ -43,20 +45,18 @@ impl Harness {
         h.move_to(egui::pos2(-100.0, -100.0));
         h.move_to(egui::pos2(-100.0, -100.0));
 
-        let canvas = h
-            .ws
-            .send_request(root.cast::<Desktops>(), ActiveCanvas)
-            .expect("a canvas is active");
+        let canvas =
+            h.ws.send_request(root.cast::<Desktops>(), ActiveCanvas)
+                .expect("a canvas is active");
         let item = *h
             .ws
             .send_request(canvas, CanvasChildren)
             .unwrap_or_default()
             .first()
             .expect("the line was added");
-        let child = h
-            .ws
-            .send_request(item, CanvasNodeChild)
-            .expect("the editor wraps the path");
+        let child =
+            h.ws.send_request(item, CanvasNodeChild)
+                .expect("the editor wraps the path");
         (h, item, child)
     }
 
@@ -173,12 +173,16 @@ fn a_control_point_outside_the_vertex_bounds_is_still_grabbable() {
 
     // Curve the first vertex, its handle reaching 80px above every vertex.
     let handle = Vector::new(0.0, -80.0);
-    h.ws.submit_action(child, "curve", SetAnchors {
-        anchors: vec![
-            Anchor::smooth(Vector::new(0.0, 0.0), handle),
-            Anchor::corner(Vector::new(140.0, 60.0)),
-        ],
-    });
+    h.ws.submit_action(
+        child,
+        "curve",
+        SetAnchors {
+            anchors: vec![
+                Anchor::smooth(Vector::new(0.0, 0.0), handle),
+                Anchor::corner(Vector::new(140.0, 60.0)),
+            ],
+        },
+    );
     h.ws.process_pending();
     h.move_to(egui::pos2(-100.0, -100.0));
     h.move_to(egui::pos2(-100.0, -100.0));
@@ -187,13 +191,12 @@ fn a_control_point_outside_the_vertex_bounds_is_still_grabbable() {
     let origin_before = h.canvas_origin(item);
     h.drag(grip, egui::pos2(grip.x + 40.0, grip.y), 2);
 
-    let out = h
-        .ws
-        .send_request(child, GetAnchors)
-        .unwrap_or_default()
-        .first()
-        .and_then(|a: &Anchor| a.out_handle)
-        .expect("the vertex is still smooth");
+    let out =
+        h.ws.send_request(child, GetAnchors)
+            .unwrap_or_default()
+            .first()
+            .and_then(|a: &Anchor| a.out_handle)
+            .expect("the vertex is still smooth");
     assert_eq!((out.x, out.y), (40.0, -80.0), "the control point moved");
     assert_eq!(
         points(&h.ws, child),
@@ -205,5 +208,58 @@ fn a_control_point_outside_the_vertex_bounds_is_still_grabbable() {
         (origin_before.x, origin_before.y),
         (origin_after.x, origin_after.y),
         "and the canvas did not pan"
+    );
+}
+
+/// The shape moves by its handle, not by its body: a drag that lands on the
+/// line itself used to carry the whole shape off, which is one gesture too many
+/// on something whose body is also where its points are edited.
+#[test]
+fn dragging_the_body_leaves_the_shape_where_it_is() {
+    let (mut h, item, child) = Harness::with_a_line();
+    let before =
+        h.ws.send_request(item, PathAnchorOrigin)
+            .expect("the editor reports where it sits");
+
+    // The midpoint of the line: on the shape, and 76px clear of either vertex.
+    let middle = h.screen_of(item, Vector::new(70.0, 30.0));
+    h.drag(middle, egui::pos2(middle.x + 90.0, middle.y + 40.0), 3);
+
+    assert_eq!(
+        h.ws.send_request(item, PathAnchorOrigin)
+            .map(|p| (p.x, p.y)),
+        Some((before.x, before.y)),
+        "dragging the body moved nothing"
+    );
+    assert_eq!(
+        points(&h.ws, child),
+        vec![(0.0, 0.0), (140.0, 60.0)],
+        "and it edited no points either"
+    );
+}
+
+/// What the body no longer does, the handle still does.
+#[test]
+fn dragging_the_handle_moves_the_shape() {
+    let (mut h, item, child) = Harness::with_a_line();
+    let before =
+        h.ws.send_request(item, PathAnchorOrigin)
+            .expect("the editor reports where it sits");
+
+    // The handle sits off the shape's top-left corner.
+    let corner = h.screen_of(item, Vector::new(0.0, 0.0));
+    let handle = egui::pos2(corner.x - 16.0, corner.y - 16.0);
+    h.drag(handle, egui::pos2(handle.x + 90.0, handle.y + 40.0), 3);
+
+    assert_eq!(
+        h.ws.send_request(item, PathAnchorOrigin)
+            .map(|p| (p.x, p.y)),
+        Some((before.x + 90.0, before.y + 40.0)),
+        "the handle carried the shape"
+    );
+    assert_eq!(
+        points(&h.ws, child),
+        vec![(0.0, 0.0), (140.0, 60.0)],
+        "without disturbing its points"
     );
 }

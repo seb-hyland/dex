@@ -131,4 +131,12 @@ impl Node for Button {
     }
 }
 
-defhandlers! { Button {} }
+defhandlers! { Button {
+    actions: [
+        SetButtonStyle { fill_color: Color, border: Stroke, text_color: Color } => (this, s) {
+            this.fill_color = s.fill_color;
+            this.border = s.border;
+            this.label.color = s.text_color;
+        },
+    ],
+}}
