@@ -24,7 +24,7 @@ const MENU_WIDTH: f32 = 180.0;
 /// How far the pointer may stray from the menu before it closes.
 const MENU_SLACK: f32 = 36.0;
 /// A stable egui id: there is only ever one handle.
-const HANDLE_ID: &str = "dex_halo_handle";
+const HANDLE_ID: &str = "dex_inspector_handle";
 
 /// Where the lens last sat, so an open menu keeps its place.
 #[derive(Clone)]
@@ -255,8 +255,7 @@ fn result_commands(ws: &Workspace, target: NodeUid) -> Option<NodeUid<PlacementC
     if ws.send_request(owner, DataflowOutput).flatten() != Some(target) {
         return None;
     }
-    // The size it last drew at: a copy should arrive looking like what was
-    // pointed at, and the halo already records this to anchor itself.
+    // The size it last drew at.
     let size = ws
         .inspectable_rect(target)
         .map(|region| region.size())
@@ -534,7 +533,7 @@ defhandlers! { Inspector {
             if let Some(previous) = this.inspector.take() {
                 ctx.workspace.delete_node(previous);
             }
-            // The target answers for itself, so its context — not the halo's.
+
             let target_ctx = NodeContext { id: a.node, workspace: ctx.workspace };
             let extra = ctx
                 .workspace

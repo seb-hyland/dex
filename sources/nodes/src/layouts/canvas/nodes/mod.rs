@@ -544,6 +544,90 @@ impl ConstraintsTuple {
     }
 }
 
+/// A canvas item that is only a position.
+#[utils::dynamic_type]
+#[utils::portable]
+pub struct StaticCanvasItem {
+    child: NodeUid,
+    /// Top-left position of this item in canvas space, and the size its child is drawn at.
+    layout: ConstraintsTuple,
+}
+
+#[utils::dynamic_methods]
+impl StaticCanvasItem {
+    /// Place `child` at `canvas_pos`, drawn at `size`.
+    pub fn build(
+        ws: WorkspaceActionHandle,
+        child: NodeUid,
+        canvas_pos: Vector,
+        size: Vector,
+    ) -> NodeUid<StaticCanvasItem> {
+        ws.insert_node(Self {
+            child,
+            layout: ConstraintsTuple {
+                pos: canvas_pos,
+                size,
+            },
+        })
+    }
+}
+
+#[utils::dynamic_node]
+impl Node for StaticCanvasItem {
+    /// An item is named for what it holds, not for the holder.
+    fn type_name(&self, ctx: NodeContext) -> String {
+        let child_ctx = NodeContext {
+            id: self.child,
+            workspace: ctx.workspace,
+        };
+        ctx.workspace
+            .get_node(self.child)
+            .filter(|_| self.child != ctx.id)
+            .map(|child| child.type_name(child_ctx))
+            .unwrap_or_else(|| "A Placed Node".to_owned())
+    }
+
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
+        // As every canvas item is: drawn from the surface's own origin.
+        let top_left = ctx.constraints.pos + self.layout.pos;
+        ctx.draw_workspace_node(
+            self.child,
+            DrawConstraints {
+                pos: top_left,
+                x: Some(AxisConstraint::Exactly(self.layout.size.x)),
+                y: Some(AxisConstraint::Exactly(self.layout.size.y)),
+                wrap: WrapConstraints::NotAllowed,
+                should_clip: true,
+            },
+        );
+        DrawResult::Complete {
+            region: Some(ScreenRegion::from_min_size(top_left, self.layout.size)),
+        }
+    }
+
+    fn on_delete(&self, ctx: NodeContext) {
+        ctx.workspace.delete_node(self.child);
+    }
+}
+
+defhandlers! { StaticCanvasItem {
+    extern_actions: [
+        NudgeCanvasItem => (this, s) { this.layout.pos = this.layout.pos + s.delta; },
+    ],
+    extern_requests: [
+        // The item's bounding region in canvas space.
+        CanvasItemBounds => (this, _q): ScreenRegion {
+            ScreenRegion::from_min_size(this.layout.pos.to_screen_pos(), this.layout.size)
+        },
+        // The workspace node this item holds.
+        CanvasNodeChild => (this, _q): NodeUid { this.child },
+        // Nothing behind a lens on a data point.
+        Inspectable => (_this, _q): bool { false },
+        // It stands for what it holds, the same as any other item.
+        ValueDelegate => (this, _q): Option<NodeUid> { Some(this.child) },
+    ],
+}}
+
 defhandlers! { CanvasNode {
     actions: [
         SetLayout { canvas_pos: Vector, size: Vector } => (this, s) {

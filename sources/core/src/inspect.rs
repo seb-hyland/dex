@@ -5,6 +5,11 @@ use crate::{pool::NodeUid, region::ScreenPos, region::ScreenRegion};
 /// How far outside a node still counts as pointing at it.
 const HOVER_MARGIN: f32 = 30.0;
 
+crate::defrequest!(
+    /// Whether this node has an inspector to offer.
+    Inspectable: bool
+);
+
 /// The addressable node under the pointer.
 #[derive(Clone)]
 pub struct InspectTarget {

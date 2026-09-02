@@ -23,7 +23,7 @@ use dex_nodes::primitives::text::{IsInteractive, Label};
 const SCREEN: egui::Vec2 = egui::vec2(1200.0, 900.0);
 
 fn popup_id() -> egui::Id {
-    egui::Id::new("dex_halo_handle").with("popup")
+    egui::Id::new("dex_inspector_handle").with("popup")
 }
 
 fn frame(ws: &mut Workspace, ctx: &egui::Context, events: Vec<egui::Event>) {

@@ -26,7 +26,7 @@ pub mod prelude {
     pub use crate::{
         compute::ComputeTask,
         constraints::*,
-        inspect::{InspectProbe, InspectTarget},
+        inspect::{InspectProbe, InspectTarget, Inspectable},
         messages::*,
         pool::NodeUid,
         pycontext::{PyDrawContext, PyNodeContext, PyWorkspace},

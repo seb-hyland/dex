@@ -846,7 +846,7 @@ impl<'ctx> DrawContext<'ctx> {
         self.draw_node_with(node, id, constraints)
     }
 
-    /// Draw a workspace node and offer it to the halo as an addressable element.
+    /// Draw a workspace node and offer it to the inspector as an addressable element.
     pub fn draw_inspectable_node(
         &mut self,
         id: NodeUid,
@@ -857,6 +857,14 @@ impl<'ctx> DrawContext<'ctx> {
         let depth = self.depth;
 
         let result = self.draw_workspace_node(id, constraints);
+
+        // A node that declines an inspector is not addressable.
+        if !workspace
+            .send_request(id, crate::inspect::Inspectable)
+            .unwrap_or(true)
+        {
+            return result;
+        }
 
         let clip = ScreenRegion::from(self.ui.clip_rect());
         // A node that draws nothing is still addressable over the space it was given.

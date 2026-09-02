@@ -25,7 +25,7 @@ const TALL_SCREEN: egui::Vec2 = egui::vec2(1200.0, 900.0);
 const HANDLE_OFFSET: f32 = 8.0;
 
 fn popup_id() -> egui::Id {
-    egui::Id::new("dex_halo_handle").with("popup")
+    egui::Id::new("dex_inspector_handle").with("popup")
 }
 
 fn frame(ws: &mut Workspace, ctx: &egui::Context, size: egui::Vec2, events: Vec<egui::Event>) {

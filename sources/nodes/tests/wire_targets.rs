@@ -1,4 +1,4 @@
-//! A wire is drawn between the regions the halo recorded, so a target it never
+//! A wire is drawn between the regions the inspector recorded, so a target it never
 //! recorded gets no wire. A lambda's output holds `Nothing` until it computes,
 //! and `Nothing` draws no region — which left freshly built graphs with no
 //! visible connections at all.
@@ -69,7 +69,7 @@ fn an_output_that_has_not_computed_can_still_be_wired_to() {
         "the output has not computed yet"
     );
 
-    // A wire is only drawn where the halo recorded a region, so this is what
+    // A wire is only drawn where the inspector recorded a region, so this is what
     // decides whether the connection is visible.
     let rect = ws.inspectable_rect(output);
     assert!(

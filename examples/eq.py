@@ -39,7 +39,7 @@ BY_AST = {
 # An operator is a `Lambda`, and a lambda's column needs room for its editor,
 # its buttons and its output row. Laid out shorter than this the column runs out
 # of height and stops before the output draws — which leaves it unrecorded, and
-# a wire can only be drawn to something the halo recorded. Matches the size the
+# a wire can only be drawn to something the inspector recorded. Matches the size the
 # sidebar builds a lambda at.
 OP_SIZE = (420.0, 340.0)
 CONST_SIZE = (60.0, 30.0)
@@ -149,7 +149,7 @@ class Builder:
             dex.Vector.new(step * COLUMN_W, row * ROW_H + step * STEP_DOWN),
             dex.Vector.new(size[0], size[1]),
         )
-        self.ws.submit_action(self.canvas, dex.AdoptCanvasNode(item))
+        self.ws.submit_action(self.canvas, dex.AdoptCanvasNode(item, dex.Layer.midground()))
         return item
 
     def emit(self, node):

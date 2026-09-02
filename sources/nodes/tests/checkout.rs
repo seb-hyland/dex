@@ -290,8 +290,8 @@ fn every_injected_global_type_resolves() {
     let _ = std::fs::remove_dir_all(&out.dir);
 }
 
-/// The worked example must typecheck against the real bindings, so the stubs
-/// and the example cannot drift apart.
+/// The worked examples must typecheck against the real bindings, so the stubs
+/// and the examples cannot drift apart.
 #[test]
 fn the_example_typechecks_against_the_stubs() {
     no_editor();
@@ -300,28 +300,31 @@ fn the_example_typechecks_against_the_stubs() {
         return;
     };
 
-    let example =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/tiled_layout.py");
-    let source = std::fs::read_to_string(&example).expect("example exists");
+    for name in ["tiled_layout.py", "shape_gallery.py", "scatterplot.py"] {
+        let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples")
+            .join(name);
+        let source = std::fs::read_to_string(&example).expect("example exists");
 
-    let out = checkout::write("example-check", &source, &[]).expect("written");
-    let run = std::process::Command::new(&checker)
-        .arg("--outputjson")
-        .arg("main.py")
-        .current_dir(&out.dir)
-        .output()
-        .expect("language server runs");
-    let stdout = String::from_utf8_lossy(&run.stdout);
-    let errors = stdout
-        .split("\"severity\": \"error\"")
-        .count()
-        .saturating_sub(1);
-    assert_eq!(
-        errors,
-        0,
-        "examples/tiled_layout.py does not typecheck against the stubs:\n{}",
-        &stdout[..stdout.len().min(1500)]
-    );
+        let out = checkout::write("example-check", &source, &[]).expect("written");
+        let run = std::process::Command::new(&checker)
+            .arg("--outputjson")
+            .arg("main.py")
+            .current_dir(&out.dir)
+            .output()
+            .expect("language server runs");
+        let stdout = String::from_utf8_lossy(&run.stdout);
+        let errors = stdout
+            .split("\"severity\": \"error\"")
+            .count()
+            .saturating_sub(1);
+        assert_eq!(
+            errors,
+            0,
+            "examples/{name} does not typecheck against the stubs:\n{}",
+            &stdout[..stdout.len().min(1500)]
+        );
 
-    let _ = std::fs::remove_dir_all(&out.dir);
+        let _ = std::fs::remove_dir_all(&out.dir);
+    }
 }

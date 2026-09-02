@@ -42,11 +42,38 @@ fn with_wire_clip<R>(ctx: &egui::Context, clip: egui::Rect, draw: impl FnOnce() 
     out
 }
 
+/// Which pass of a canvas a node is drawn in.
+#[derive(Copy)]
+#[utils::dynamic_type]
+#[utils::portable(noop_reset)]
+pub enum Layer {
+    Background,
+    Midground,
+    Foreground,
+}
+
+#[utils::dynamic_methods]
+impl Layer {
+    pub fn background() -> Self {
+        Self::Background
+    }
+    pub fn midground() -> Self {
+        Self::Midground
+    }
+    pub fn foreground() -> Self {
+        Self::Foreground
+    }
+}
+
 #[utils::dynamic_type]
 #[utils::portable]
 pub struct Canvas {
-    /// The items on this surface, in draw order.
+    /// The items on this surface ([`Layer::Midground`] members), in draw order.
     children: Vec<NodeUid>,
+    /// [`Layer::Background`] members, painted before the items.
+    background: Vec<NodeUid>,
+    /// [`Layer::Foreground`] members, painted after them.
+    foreground: Vec<NodeUid>,
     /// Background drag sensor (a registered child) used for panning.
     drag_interaction: NodeUid<InteractionBox>,
     screen_offset: Transient<Vector>,
@@ -63,6 +90,8 @@ impl Canvas {
         let drag_interaction = ws.insert_node(InteractionBox::sensing(false, false, true));
         ws.insert_node(Self {
             children: Vec::new(),
+            background: Vec::new(),
+            foreground: Vec::new(),
             drag_interaction,
             screen_offset: Transient::default(),
             viewport: Transient::default(),
@@ -81,11 +110,30 @@ impl Canvas {
     /// The topmost item whose on-screen region contains `pos`.
     fn item_at(&self, ws: &Workspace, pos: ScreenPos) -> Option<NodeUid> {
         self.children.iter().rev().copied().find(|&child| {
-            ws.send_request(child, CanvasItemBounds)
-                .is_some_and(|bounds| {
-                    Rect::from(self.map_to_screen(bounds)).contains(Pos2::from(pos))
-                })
+            ws.send_request(child, Inspectable).unwrap_or(true)
+                && ws
+                    .send_request(child, CanvasItemBounds)
+                    .is_some_and(|bounds| {
+                        Rect::from(self.map_to_screen(bounds)).contains(Pos2::from(pos))
+                    })
         })
+    }
+
+    /// The members of `layer`, in draw order.
+    fn layer(&self, layer: Layer) -> &Vec<NodeUid> {
+        match layer {
+            Layer::Background => &self.background,
+            Layer::Midground => &self.children,
+            Layer::Foreground => &self.foreground,
+        }
+    }
+
+    fn layer_mut(&mut self, layer: Layer) -> &mut Vec<NodeUid> {
+        match layer {
+            Layer::Background => &mut self.background,
+            Layer::Midground => &mut self.children,
+            Layer::Foreground => &mut self.foreground,
+        }
     }
 
     /// Screen position corresponding to canvas-space origin `(0, 0)`.
@@ -156,26 +204,41 @@ impl Node for Canvas {
             *self.panning.val_mut() = None;
         }
 
+        // A layer paints across the whole viewport and is clipped to it.
+        let layer = DrawConstraints {
+            pos: origin,
+            x: Some(AxisConstraint::Exactly(avail_x)),
+            y: Some(AxisConstraint::Exactly(avail_y)),
+            wrap: WrapConstraints::NotAllowed,
+            should_clip: true,
+        };
+        for &member in &self.background {
+            ctx.draw_workspace_node(member, layer);
+        }
+
         let canvas_origin = origin - self.screen_offset();
         // This surface is what bounds the wires its items draw between them.
         let surface_clip = ctx.ui.clip_rect();
         let egui_ctx = ctx.ui.ctx().clone();
         with_wire_clip(&egui_ctx, surface_clip, || {
             for &child in &self.children {
-                // Canvas items are content the user points at, so they get an inspector.
-                ctx.draw_inspectable_node(
-                    child.erase(),
-                    DrawConstraints {
-                        // `CanvasNode` children will draw relative to the origin
-                        pos: canvas_origin,
-                        x: None,
-                        y: None,
-                        wrap: WrapConstraints::NotAllowed,
-                        should_clip: false,
-                    },
-                );
+                let constraints = DrawConstraints {
+                    // `CanvasNode` children will draw relative to the origin
+                    pos: canvas_origin,
+                    x: None,
+                    y: None,
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip: false,
+                };
+                // Canvas items are content the user points at, so they are offered to the inspector.
+                ctx.draw_inspectable_node(child.erase(), constraints);
             }
         });
+
+        // Over everything, so chrome is never lost under the content.
+        for &member in &self.foreground {
+            ctx.draw_workspace_node(member, layer);
+        }
 
         DrawResult::Complete {
             region: Some(region),
@@ -184,7 +247,12 @@ impl Node for Canvas {
 
     fn on_delete(&self, ctx: NodeContext) {
         ctx.workspace.delete_node(self.drag_interaction.erase());
-        for child in &self.children {
+        for child in self
+            .children
+            .iter()
+            .chain(&self.background)
+            .chain(&self.foreground)
+        {
             ctx.workspace.delete_node(child.erase());
         }
     }
@@ -272,10 +340,10 @@ defhandlers! { Canvas {
                 this.children.push(item);
             }
         },
-        // Take an already-built canvas item onto this surface.
-        AdoptCanvasNode { node: NodeUid } => (this, a) {
-            if !this.children.contains(&a.node) {
-                this.children.push(a.node);
+        // Take an already-built node onto this surface, in `layer`.
+        AdoptCanvasNode { node: NodeUid, layer: Layer } => (this, a) {
+            if !this.layer(a.layer).contains(&a.node) {
+                this.layer_mut(a.layer).push(a.node);
             }
         },
         // Draw `node` last, so it sits over everything else on this surface.
@@ -292,10 +360,13 @@ defhandlers! { Canvas {
                 this.children.insert(0, item);
             }
         },
-        // Drop an item from the canvas; deleting it cascades to what it wraps.
+        // Drop a node from the canvas, whichever layer holds it.
         RemoveCanvasItem { node: NodeUid } => (this, a, ctx) {
-            if let Some(pos) = this.children.iter().position(|c| *c == a.node) {
-                this.children.remove(pos);
+            for layer in [Layer::Background, Layer::Midground, Layer::Foreground] {
+                if let Some(pos) = this.layer(layer).iter().position(|c| *c == a.node) {
+                    this.layer_mut(layer).remove(pos);
+                    break;
+                }
             }
             ctx.workspace.delete_node(a.node);
         },
@@ -314,6 +385,12 @@ defhandlers! { Canvas {
     requests: [
         // The items on this surface, in draw order.
         CanvasChildren => (this, _q): Vec<NodeUid> { this.children.clone() },
+        // The members of one layer, in draw order.
+        CanvasLayerNodes { layer: Layer } => (this, s): Vec<NodeUid> {
+            this.layer(s.layer).clone()
+        },
+        // The canvas-space point at the top-left of what is currently visible.
+        CanvasViewOrigin => (this, _q): Vector { this.screen_offset() },
         // The top-most connectable item whose on-screen region contains `pos`.
         ConnectableAt { pos: ScreenPos } => (this, s, ctx): Option<NodeUid> {
             this.item_at(ctx.workspace, s.pos)

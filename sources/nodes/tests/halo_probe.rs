@@ -1,4 +1,4 @@
-//! The halo can only find what the draw pass offers it, so check the hit-test
+//! The inspector can only find what the draw pass offers it, so check the hit-test
 //! end to end: a real frame, a real pointer position.
 
 use dex_core::prelude::*;
@@ -6,7 +6,7 @@ use dex_nodes::layouts::canvas::layout::AddCanvasItem;
 use dex_nodes::layouts::desktops::Desktops;
 use dex_nodes::primitives::text::Label;
 
-/// Run one frame with the pointer at `pointer`, and report what the halo found.
+/// Run one frame with the pointer at `pointer`, and report what the inspector found.
 fn target_under(ws: &mut Workspace, pointer: egui::Pos2) -> Option<NodeUid> {
     let egui_ctx = egui::Context::default();
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1200.0, 900.0));

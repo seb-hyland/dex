@@ -81,14 +81,7 @@ impl TypedRequestBody for ValueDelegate {
 }
 
 dex_core::defrequest!(
-    /**
-        The uid standing for this node's value: what a wire should point at to
-        consume it.
-
-        The output half of the dataflow protocol. Declared here rather than on
-        any one node because it is a protocol several kinds answer, and because
-        anything may want to ask — the halo uses it to recognise a result.
-    */
+    /// The uid standing for this node's value: what a wire should point at to consume it.
     DataflowOutput: Option<NodeUid>
 );
 

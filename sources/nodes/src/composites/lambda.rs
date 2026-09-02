@@ -15,7 +15,7 @@ use crate::{
     layouts::{
         Bordered, HorizontalLayout, LayoutChild, VerticalLayout,
         canvas::{
-            layout::{AdoptCanvasNode, Canvas, RemoveCanvasItem},
+            layout::{AdoptCanvasNode, Canvas, Layer, RemoveCanvasItem},
             nodes::{CanvasItemDeletable, CanvasNode, shapes::SectionDivider},
         },
         error::ErrorLayout,
@@ -1042,7 +1042,10 @@ fn place_param_item(
     ws.submit_action(
         canvas,
         "Show a parameter pin",
-        AdoptCanvasNode { node: item },
+        AdoptCanvasNode {
+            node: item,
+            layer: Layer::Midground,
+        },
     );
 }
 

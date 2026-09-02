@@ -7,7 +7,7 @@ use crate::{
     layouts::{
         canvas::{
             self,
-            layout::{AdoptCanvasNode, Canvas, CanvasChildren},
+            layout::{AdoptCanvasNode, Canvas, CanvasChildren, Layer},
             nodes::{CanvasItemBounds, CanvasNode, CanvasNodeChild},
             sidebar::CanvasSidebar,
         },
@@ -409,6 +409,7 @@ defhandlers! { Desktops {
                             "Mirrored canvas item",
                             AdoptCanvasNode {
                                 node: framed.erase(),
+                                layer: Layer::Midground,
                             },
                         );
                     }

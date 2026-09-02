@@ -477,7 +477,7 @@ fn closing_the_last_tab_opens_an_empty_desktop() {
 #[test]
 fn canvas_node_menu_commands_act_on_the_canvas() {
     use dex_nodes::layouts::canvas::layout::{
-        AdoptCanvasNode, Canvas, CanvasChildren, PlaceOnCanvas, RemoveCanvasItem,
+        AdoptCanvasNode, Canvas, CanvasChildren, Layer, PlaceOnCanvas, RemoveCanvasItem,
     };
     use dex_nodes::layouts::canvas::nodes::{CanvasNode, CanvasNodeChild};
     use dex_nodes::layouts::mirror::{Mirror, MirrorTarget};
@@ -492,7 +492,14 @@ fn canvas_node_menu_commands_act_on_the_canvas() {
         Vector::splat(100.0),
     );
     ws.process_pending();
-    ws.submit_action(canvas, "seed", AdoptCanvasNode { node: node.erase() });
+    ws.submit_action(
+        canvas,
+        "seed",
+        AdoptCanvasNode {
+            node: node.erase(),
+            layer: Layer::Midground,
+        },
+    );
     ws.process_pending();
     assert_eq!(
         ws.send_request(canvas, CanvasChildren).unwrap_or_default(),
@@ -535,6 +542,7 @@ fn canvas_node_menu_commands_act_on_the_canvas() {
         canvas,
         "mirror",
         AdoptCanvasNode {
+            layer: Layer::Midground,
             node: mirror_node.erase(),
         },
     );

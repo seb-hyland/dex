@@ -234,16 +234,19 @@ macro_rules! defrequest {
                 name: ::core::stringify!($name),
                 path: ::core::module_path!(),
                 matches: |__obj| {
+                    #[allow(unused_imports)]
                     use ::pyo3::prelude::*;
                     __obj.is_instance_of::<$name>()
                 },
                 build: |__obj| {
+                    #[allow(unused_imports)]
                     use ::pyo3::prelude::*;
                     ::core::result::Result::Ok(
                         ::std::boxed::Box::new(__obj.extract::<$name>()?),
                     )
                 },
                 to_python: |__body, __py| {
+                    #[allow(unused_imports)]
                     use ::pyo3::prelude::*;
                     ::utils::AsAny::as_any_ref(__body)
                         .downcast_ref::<$name>()
@@ -321,17 +324,20 @@ macro_rules! defhandlers {
                     name: ::core::stringify!($a_name),
                     path: ::core::module_path!(),
                     matches: |__obj| {
-                        use ::pyo3::prelude::*;
+                        #[allow(unused_imports)]
+                    use ::pyo3::prelude::*;
                         __obj.is_instance_of::<$a_name>()
                     },
                     build: |__obj| {
-                        use ::pyo3::prelude::*;
+                        #[allow(unused_imports)]
+                    use ::pyo3::prelude::*;
                         ::core::result::Result::Ok(
                             ::std::boxed::Box::new(__obj.extract::<$a_name>()?),
                         )
                     },
                     to_python: |__body, __py| {
-                        use ::pyo3::prelude::*;
+                        #[allow(unused_imports)]
+                    use ::pyo3::prelude::*;
                         ::utils::AsAny::as_any_ref(__body)
                             .downcast_ref::<$a_name>()
                             .map(|__v| {
@@ -551,6 +557,7 @@ macro_rules! defhandlers {
             $crate::scripting::DynamicRebuild {
                 name: ::core::stringify!($name),
                 from_bytes: |__data, __py| {
+                    #[allow(unused_imports)]
                     use ::pyo3::prelude::*;
                     let __v: $name = $crate::scripting::reduce_from_bytes(__data)?;
                     ::core::result::Result::Ok(::pyo3::Py::new(__py, __v)?.into_any())
