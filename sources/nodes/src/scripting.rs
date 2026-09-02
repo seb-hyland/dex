@@ -11,7 +11,7 @@ use crate::{
         dynamic::DynamicNode,
         nothing::Nothing,
         number::{Float, Integer},
-        table::Table,
+        table::{ArrowData, Table},
         text::{Label, LabelEditable},
     },
 };
@@ -177,12 +177,37 @@ pub fn to_dyn_node_py(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> Arc<dyn Node> {
     if let Ok(v) = obj.extract::<String>() {
         return Arc::new(Label::new(v));
     }
+    // Columnar data is a table.
+    if let Some(batch) = record_batch_from_python(obj) {
+        return Arc::new(Table::new(ArrowData(batch)));
+    }
     for extractor in dex_dynamic::__rt::inventory::iter::<NodeExtractor> {
         if let Some(node) = (extractor.from_python)(obj) {
             return node;
         }
     }
     Arc::new(DynamicNode::from_python(obj))
+}
+
+/// A `RecordBatch` from anything holding Arrow columns, or `None`.
+fn record_batch_from_python(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> Option<RecordBatch> {
+    use arrow::pyarrow::FromPyArrow;
+    use pyo3::prelude::*;
+
+    if let Ok(batch) = RecordBatch::from_pyarrow_bound(obj) {
+        return Some(batch);
+    }
+    // Chunked: one batch per chunk until they are combined.
+    let combined = obj.call_method0("combine_chunks").ok()?;
+    let batches = combined.call_method0("to_batches").ok()?;
+    match batches.len().ok()? {
+        0 => {
+            let schema =
+                arrow::datatypes::Schema::from_pyarrow_bound(&obj.getattr("schema").ok()?).ok()?;
+            Some(RecordBatch::new_empty(Arc::new(schema)))
+        }
+        _ => RecordBatch::from_pyarrow_bound(&batches.get_item(0).ok()?).ok(),
+    }
 }
 
 /// The result of asking a dynamic object to draw itself.

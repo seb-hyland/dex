@@ -300,7 +300,12 @@ fn the_example_typechecks_against_the_stubs() {
         return;
     };
 
-    for name in ["tiled_layout.py", "shape_gallery.py", "scatterplot.py"] {
+    for name in [
+        "tiled_layout.py",
+        "shape_gallery.py",
+        "scatterplot.py",
+        "phylo_tree.py",
+    ] {
         let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../examples")
             .join(name);
