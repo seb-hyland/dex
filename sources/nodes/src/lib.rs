@@ -6,3 +6,4 @@ pub mod fonts;
 pub mod layouts;
 pub mod primitives;
 pub mod scripting;
+pub mod settings;

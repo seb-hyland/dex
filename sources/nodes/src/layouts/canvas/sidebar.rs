@@ -3,11 +3,11 @@ use utils::Transient;
 
 use crate::{
     composites::{
-        button::{Button, SetButtonStyle},
+        button::{Button, SetButtonLabel, SetButtonStyle},
         lambda::{CanvasLambda, Lambda},
     },
     layouts::{
-        HorizontalLayout, LayoutChild, ScrollLayout,
+        Bordered, HorizontalLayout, LayoutChild, ScrollLayout,
         canvas::{
             backpack::BackpackItem,
             layout::AddCanvasItem,
@@ -19,11 +19,11 @@ use crate::{
     },
     primitives::{
         checkout,
-        file_browser::FileBrowser,
+        file_browser::{BrowseFor, FileBrowser, TakePickedPath},
         interaction::TakeClicked,
         number::{Float, Integer},
         shapes::{Circle, Path},
-        text::{CodeEditor, GetCommittedText, Label, LabelEditable, SetText},
+        text::{CodeEditor, GetCommittedText, GetText, Label, LabelEditable, SetText},
         typst::TypstEditor,
     },
 };
@@ -74,6 +74,20 @@ pub struct CanvasSidebar {
     /// Where the prelude is checked out for external editing.
     #[dynamic(skip)]
     prelude_checkout: Transient<checkout::Checkout>,
+
+    /// The global virtual environment.
+    venv: String,
+    venv_button: NodeUid<Button>,
+    venv_clear_button: NodeUid<Button>,
+    /// The browser opened to choose one, while it is open.
+    venv_browser: Option<NodeUid<FileBrowser>>,
+    /// Why the last chosen folder was refused, if it was.
+    venv_error: Option<String>,
+
+    /// The command an external editor is launched with.
+    editor_field: NodeUid<LabelEditable>,
+    /// Last-seen version of `editor_field`, to catch a committed edit in `tick`.
+    seen_editor_version: Transient<u64>,
 }
 
 #[utils::dynamic_methods]
@@ -120,6 +134,23 @@ impl CanvasSidebar {
             })
             .collect();
         let backpack = VerticalDnD::build(ws.clone(), Vec::new(), 4.0);
+        let venv_button =
+            Button::build_with(ws.clone(), Label::new(venv_button_label(false)), |b| {
+                b.corner_radius = 4.0;
+                b.padding = 4.0;
+            });
+        let venv_clear_button =
+            Button::build_with(ws.clone(), Label::new("Clear".to_owned()), |b| {
+                b.corner_radius = 4.0;
+                b.padding = 4.0;
+            });
+        // Starts on the default, so the field always shows what will run rather
+        // than an empty box that means "whatever the default happens to be".
+        let mut editor = LabelEditable::new(crate::settings::DEFAULT_EDITOR.to_owned());
+        editor.font = Font::monospaced(12.0);
+
+        editor.shrink_to_text = false;
+        let editor_field = ws.insert_node(editor);
         let mut prelude = CodeEditor::new(String::new(), "python".to_owned());
         prelude.fill = true;
         prelude.font_size = 12.0;
@@ -138,6 +169,13 @@ impl CanvasSidebar {
             python_prelude,
             prelude_ide_button,
             prelude_checkout: Transient::default(),
+            venv: String::new(),
+            venv_button,
+            venv_clear_button,
+            venv_browser: None,
+            venv_error: None,
+            editor_field,
+            seen_editor_version: Transient::default(),
         })
     }
 
@@ -251,6 +289,11 @@ fn heading(text: &str) -> Label {
 }
 
 /// Muted body text, for a hint or an empty tab.
+/// What the environment button says, given whether the browser is showing.
+fn venv_button_label(browsing: bool) -> String {
+    if browsing { "Cancel" } else { "Choose…" }.to_owned()
+}
+
 fn muted(text: &str) -> Label {
     let mut label = Label::new(text.to_owned());
     label.font = Font::proportional(12.0);
@@ -439,6 +482,146 @@ impl CanvasSidebar {
         size.y
     }
 
+    /// Draw the settings tab.
+    fn draw_settings(&self, ctx: &mut DrawContext, origin: ScreenPos, size: Vector) -> f32 {
+        const GAP: f32 = 6.0;
+        const ROW_GAP: f32 = 4.0;
+        let mut y = 0.0;
+
+        let row = |ctx: &mut DrawContext, y: &mut f32, node: &dyn Node, fill: bool| {
+            let drawn = ctx.draw_node(
+                node,
+                DrawConstraints {
+                    pos: origin + Vector { x: 0.0, y: *y },
+                    x: Some(if fill {
+                        AxisConstraint::Exactly(size.x)
+                    } else {
+                        AxisConstraint::AtMost(size.x)
+                    }),
+                    y: None,
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip: true,
+                },
+            );
+            *y += drawn.region().map(|r| r.size().y).unwrap_or(14.0) + ROW_GAP;
+        };
+
+        row(ctx, &mut y, &heading("Global environment"), false);
+        let shown = if self.venv.is_empty() {
+            "None — scripts import from the interpreter dex was built against.".to_owned()
+        } else {
+            self.venv.clone()
+        };
+        row(ctx, &mut y, &muted(&shown), false);
+        if let Some(error) = &self.venv_error {
+            let mut label = muted(error);
+            label.color = Color::rgb(180, 70, 60);
+            row(ctx, &mut y, &label, false);
+        }
+
+        // Choose, and — only when there is one to clear — Clear.
+        let controls = HorizontalLayout {
+            children: [
+                Some(LayoutChild::from(self.venv_button)),
+                (!self.venv.is_empty()).then(|| LayoutChild::from(self.venv_clear_button)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            spacing: ROW_GAP,
+            allow_wrap: false,
+        };
+        row(ctx, &mut y, &controls, false);
+        y += GAP;
+
+        // The browser takes the rest of the tab while it is open, except the bottom button.
+        if let Some(browser) = self.venv_browser {
+            ctx.draw_workspace_node(
+                browser.erase(),
+                DrawConstraints {
+                    pos: origin + Vector { x: 0.0, y },
+                    x: Some(AxisConstraint::Exactly(size.x)),
+                    y: Some(AxisConstraint::Exactly((size.y - y).max(0.0))),
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip: true,
+                },
+            );
+            return size.y;
+        }
+
+        row(ctx, &mut y, &heading("External editor"), false);
+        row(
+            ctx,
+            &mut y,
+            &muted("$1 is the folder and $2 the file. Either one left out is appended."),
+            false,
+        );
+        // Bordered, so it reads as somewhere to type.
+        let field = Bordered {
+            child: LayoutChild::from(self.editor_field),
+            padding: 4.0,
+            corner_radius: 4.0,
+            fill_color: Color::WHITE,
+            border_width: 1.0,
+            border_color: Color::gray(190),
+        };
+        row(ctx, &mut y, &field, true);
+
+        y
+    }
+
+    /// Poll the settings controls. Off the draw, so a click lands whichever
+    /// tab was showing when it happened.
+    fn poll_settings(&self, ctx: NodeContext) {
+        let ws = ctx.workspace;
+        let taken = |button: NodeUid<Button>| {
+            ws.send_request(button.erase(), TakeClicked)
+                .unwrap_or(false)
+        };
+
+        if taken(self.venv_button) {
+            let start = (!self.venv.is_empty()).then(|| self.venv.clone());
+            ws.submit_action(
+                ctx.id.cast::<Self>(),
+                "Choose an environment",
+                ToggleVenvBrowser { start },
+            );
+        }
+        if taken(self.venv_clear_button) {
+            ws.submit_action(
+                ctx.id.cast::<Self>(),
+                "Cleared the environment",
+                SetVenv {
+                    path: String::new(),
+                },
+            );
+        }
+
+        // An open browser is asked whether it has an answer yet.
+        if let Some(browser) = self.venv_browser
+            && let Some(path) = ws.send_request(browser, TakePickedPath).flatten()
+        {
+            ws.submit_action(
+                ctx.id.cast::<Self>(),
+                "Chose an environment",
+                SetVenv { path },
+            );
+        }
+
+        // The editor command, when the field commits an edit.
+        let version = ws.version_of(self.editor_field.erase());
+        let seen = *self.seen_editor_version.val();
+        self.seen_editor_version.set(version);
+        if let Some(previous) = seen
+            && previous != version
+        {
+            let typed = ws
+                .send_request(self.editor_field, GetText)
+                .unwrap_or_default();
+            crate::settings::set_editor_command(typed);
+        }
+    }
+
     /// Draw a tab that has nothing in it yet.
     fn draw_placeholder(
         &self,
@@ -515,12 +698,7 @@ impl Node for CanvasSidebar {
                 content_size,
                 "History will live here.",
             ),
-            TAB_SETTINGS => self.draw_placeholder(
-                &mut ctx,
-                content_origin,
-                content_size,
-                "Settings will live here.",
-            ),
+            TAB_SETTINGS => self.draw_settings(&mut ctx, content_origin, content_size),
             _ => 0.0,
         };
 
@@ -538,6 +716,7 @@ impl Node for CanvasSidebar {
     fn tick(&self, ctx: NodeContext) {
         // Polled off the draw, so an external edit lands whichever tab is open.
         self.poll_prelude_checkout(ctx);
+        self.poll_settings(ctx);
     }
 
     fn on_delete(&self, ctx: NodeContext) {
@@ -550,6 +729,12 @@ impl Node for CanvasSidebar {
         ctx.workspace.delete_node(self.backpack.erase());
         ctx.workspace.delete_node(self.python_prelude.erase());
         ctx.workspace.delete_node(self.prelude_ide_button.erase());
+        ctx.workspace.delete_node(self.venv_button.erase());
+        ctx.workspace.delete_node(self.venv_clear_button.erase());
+        ctx.workspace.delete_node(self.editor_field.erase());
+        if let Some(browser) = self.venv_browser {
+            ctx.workspace.delete_node(browser.erase());
+        }
     }
 }
 
@@ -565,6 +750,49 @@ fn short_name(type_name: &str) -> String {
 defhandlers! {
     CanvasSidebar {
         actions: [
+            // Show or hide the browser used to choose an environment.
+            ToggleVenvBrowser { start: Option<String> } => (this, a, ctx) {
+                let ws = ctx.workspace.action_handle();
+                match this.venv_browser.take() {
+                    Some(open) => ctx.workspace.delete_node(open.erase()),
+                    None => {
+                        let dir = a.start.clone().unwrap_or_else(FileBrowser::default_dir_string);
+                        this.venv_browser = Some(ws.insert_node(FileBrowser::picker(
+                            ws.clone(),
+                            dir,
+                            BrowseFor::PickedDirectory,
+                        )));
+                    }
+                }
+                this.venv_error = None;
+                ctx.workspace.submit_action(
+                    this.venv_button,
+                    "Retitled the environment button",
+                    SetButtonLabel { text: venv_button_label(this.venv_browser.is_some()) },
+                );
+            },
+            // Take `path` as the global environment, or say why it cannot be.
+            SetVenv { path: String } => (this, a, ctx) {
+                let chosen = a.path.trim();
+                let wanted = (!chosen.is_empty()).then(|| ::std::path::PathBuf::from(chosen));
+                match crate::settings::set_venv(wanted) {
+                    Ok(()) => {
+                        this.venv = chosen.to_owned();
+                        this.venv_error = None;
+                        // Answered, so the browser has nothing left to do.
+                        if let Some(open) = this.venv_browser.take() {
+                            ctx.workspace.delete_node(open.erase());
+                            ctx.workspace.submit_action(
+                                this.venv_button,
+                                "Retitled the environment button",
+                                SetButtonLabel { text: venv_button_label(false) },
+                            );
+                        }
+                    }
+                    // Left open on a refusal.
+                    Err(why) => this.venv_error = Some(why),
+                }
+            },
             // Show one of the sidebar's tabs, and mark it in the strip.
             OpenSidebarTab { tab: usize } => (this, a, ctx) {
                 if a.tab < TABS.len() {

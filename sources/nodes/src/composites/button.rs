@@ -138,5 +138,9 @@ defhandlers! { Button {
             this.border = s.border;
             this.label.color = s.text_color;
         },
+        // Retitle the button, for one that stands for a thing it can undo.
+        SetButtonLabel { text: String } => (this, s) {
+            this.label.text = s.text;
+        },
     ],
 }}

@@ -465,13 +465,21 @@ impl Node for LabelEditable {
         let mut buf_mut = self.buf.val_mut_or_else(|| self.value.clone());
         let editor_id = egui::Id::new(ctx.node.id);
 
+        // Text too long for the field is laid out from the left, not centred, so it scrolls to be visible.
+        let overflowing = self.singleline && content_w > block_w;
+        let halign = if overflowing {
+            Align::LEFT
+        } else {
+            Align::Center
+        };
+
         let format = self.font.text_format(ctx.ui.ctx(), self.shown_color());
         let multiline = !self.singleline;
         let mut layouter = move |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
             let mut job = LayoutJob::single_section(text.as_str().to_owned(), format.clone());
             job.break_on_newline = multiline;
             job.wrap.max_width = if multiline { wrap_width } else { f32::INFINITY };
-            job.halign = Align::Center;
+            job.halign = halign;
             // Hiding trailing whitespace feels wrong while typing.
             job.keep_trailing_whitespace = true;
             ui.ctx().fonts_mut(|fonts| fonts.layout_job(job))
@@ -487,7 +495,7 @@ impl Node for LabelEditable {
         .font(self.font.font_id_in(ctx.ui.ctx()))
         .text_color(self.shown_color().into())
         .layouter(&mut layouter)
-        .horizontal_align(Align::Center)
+        .horizontal_align(halign)
         .vertical_align(Align::Center)
         .desired_width(block_w);
 

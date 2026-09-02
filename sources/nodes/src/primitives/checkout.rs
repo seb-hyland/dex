@@ -12,32 +12,52 @@ pub const MARKER: &str = "# DEX INJECTION. Do not edit or remove this comment.";
 const HEADER_MODULES: &[&str] = &["typing"];
 
 /// A language server config scoped to the checkout directory.
-const PYRIGHT_CONFIG: &str = r#"{
-  "include": ["."],
-  "extraPaths": ["."],
-  "typeCheckingMode": "basic",
-  "reportMissingModuleSource": "none"
+fn pyright_config() -> String {
+    let env = match crate::settings::venv() {
+        // `venvPath` is the folder the environment sits *in*, and `venv` its
+        // name — pyright joins them itself.
+        Some(venv) => match (venv.parent(), venv.file_name()) {
+            (Some(parent), Some(name)) => format!(
+                ",\n  \"venvPath\": {},\n  \"venv\": {}",
+                json_string(&parent.to_string_lossy()),
+                json_string(&name.to_string_lossy())
+            ),
+            _ => String::new(),
+        },
+        None => String::new(),
+    };
+    format!(
+        "{{\n  \"include\": [\".\"],\n  \"extraPaths\": [\".\"],\n  \
+         \"typeCheckingMode\": \"basic\",\n  \
+         \"reportMissingModuleSource\": \"none\"{env}\n}}\n"
+    )
 }
-"#;
+
+/// A JSON string literal. Paths are the only thing quoted here, and a path may
+/// contain a backslash or a quote.
+fn json_string(value: &str) -> String {
+    let escaped: String = value
+        .chars()
+        .flat_map(|c| match c {
+            '"' => vec!['\\', '"'],
+            '\\' => vec!['\\', '\\'],
+            other => vec![other],
+        })
+        .collect();
+    format!("\"{escaped}\"")
+}
 
 /**
-    The editor used to open a checkout.
+    The editor command used when the setting has not been touched.
 
-    Hardcoded for now; a user-configurable setting will replace it. `$DEX_EDITOR`
-    overrides the program so tests do not launch anything.
+    `$DEX_EDITOR` overrides it so tests do not launch anything.
 */
-const EDITOR_PROGRAM: &str = "zed";
-
-/**
-    Flags that make the checkout the editor's project root.
-
-    This is the whole point rather than a nicety: a language server resolves
-    imports from its *workspace root*, so a file opened into a project that is
-    already open resolves nothing in the checkout — no completions and no
-    errors, which looks exactly like the bindings being missing. `-n` opens the
-    directory in a new window, making it the root.
-*/
-const EDITOR_ARGS: &[&str] = &["-n"];
+fn editor_template() -> String {
+    std::env::var("DEX_EDITOR")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(crate::settings::editor_command)
+}
 
 /// Where a buffer is checked out to, and what was last seen there.
 #[derive(Clone, Debug)]
@@ -77,7 +97,7 @@ pub fn write(key: &str, source: &str, globals: &[(String, String)]) -> std::io::
     // Rendered from the live bindings, so a checkout can never describe a stale
     // API and there is no generated file to keep in step.
     std::fs::write(dir.join("dex.pyi"), dex_core::stubs_gen::render())?;
-    std::fs::write(dir.join("pyrightconfig.json"), PYRIGHT_CONFIG)?;
+    std::fs::write(dir.join("pyrightconfig.json"), pyright_config())?;
 
     let file = dir.join("main.py");
     let contents = with_injected(source, globals);
@@ -190,19 +210,17 @@ fn is_injected(line: &str) -> bool {
 
 /// Open the checkout containing `path` as its own project, with `path` open.
 pub fn open_in_editor(path: &Path) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
     use std::process::Command;
 
     let dir = path.parent().unwrap_or(path);
-    let program = std::env::var("DEX_EDITOR")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| EDITOR_PROGRAM.to_owned());
+    let argv = crate::settings::editor_argv(&editor_template(), dir, path);
+    let (program, args) = argv
+        .split_first()
+        .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "the editor command is empty"))?;
 
-    // The directory first so it becomes the worktree, then the file to open.
-    Command::new(&program)
-        .args(EDITOR_ARGS)
-        .arg(dir)
-        .arg(path)
+    Command::new(program)
+        .args(args)
         .current_dir(dir)
         .spawn()
         .map(|_| ())
