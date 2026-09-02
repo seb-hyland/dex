@@ -41,6 +41,12 @@ impl<T: ?Sized> NodeUid<T> {
         }
     }
 
+    /// The id's bits folded to a `u64`, for hashing it into a digest.
+    pub(crate) fn bits(self) -> u64 {
+        let (high, low) = self.id.as_u64_pair();
+        high ^ low
+    }
+
     /// A stable, filesystem-safe key for this id.
     pub fn key(self) -> String {
         self.id.to_string()

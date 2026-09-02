@@ -60,7 +60,7 @@ impl Node for Mirror {
     }
 
     fn tick(&self, ctx: NodeContext) {
-        let version = ctx.workspace.node_version(self.target);
+        let version = ctx.workspace.version_of(self.target);
         let seen_version = *self.seen_version.val_or_else(|| 0);
 
         if seen_version == 0 || version != seen_version || self.copy.is_none() {

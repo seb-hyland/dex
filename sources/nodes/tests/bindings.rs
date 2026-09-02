@@ -87,7 +87,7 @@ fn contexts_expose_their_rust_apis() {
 
         let ws = bound_names(py, "Workspace");
         println!("Workspace -> {ws:?}");
-        for expected in ["root", "get_node", "node_version", "delete_node"] {
+        for expected in ["root", "get_node", "version_of", "delete_node"] {
             assert!(ws.contains(&expected.to_string()), "missing {expected}");
         }
         // Host lifecycle must stay out of reach.

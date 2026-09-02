@@ -460,8 +460,47 @@ impl Workspace {
         self.probe.region_of(node)
     }
 
-    pub fn node_version(&self, uid: NodeUid) -> u64 {
-        self.registry.version(uid)
+    /// [`Node::version`] for the node at `uid`, or `0` if there is none.
+    pub fn version_of(&self, uid: NodeUid) -> u64 {
+        self.get_node(uid)
+            .map(|node| {
+                node.version(NodeContext {
+                    id: uid,
+                    workspace: self,
+                })
+            })
+            .unwrap_or(0)
+    }
+
+    /// `uid`'s own version folded with every version beneath it.
+    pub fn subtree_version(&self, uid: NodeUid) -> u64 {
+        let mut hash: u64 = 0;
+        let mut seen: std::collections::HashSet<NodeUid> = std::collections::HashSet::new();
+        let mut queue = vec![uid];
+
+        /// Spread a `u64` out over its whole range using SplitMix64's finalizer.
+        fn scramble(mut z: u64) -> u64 {
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        while let Some(current) = queue.pop() {
+            if !seen.insert(current) {
+                continue;
+            }
+
+            // Combined by XOR and scrambled to avoid version collisions.
+            hash ^= scramble(current.bits() ^ self.registry.version(current));
+            if let Some(node) = self.registry.get(current) {
+                node.owned_refs(&mut |child| {
+                    if child != NodeUid::nil() {
+                        queue.push(child);
+                    }
+                });
+            }
+        }
+        hash
     }
 
     pub fn cancel_all_tasks_for(&self, uid: NodeUid) {

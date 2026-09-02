@@ -158,3 +158,48 @@ fn every_connection_in_a_generated_equation_can_be_drawn() {
         unreachable.len()
     );
 }
+
+/// A container's version follows its contents.
+///
+/// The registry bumps only the uid an action was addressed to, so a consumer
+/// holding a canvas lambda by reference never noticed anything inside it
+/// change. `Node::version` folds the whole owned subtree.
+#[test]
+fn a_containers_version_moves_when_something_inside_it_does() {
+    use dex_nodes::composites::lambda::{CanvasLambda, LambdaName, LambdaNameNode};
+    use dex_nodes::primitives::text::SetText;
+
+    dex_nodes::scripting::init_python();
+    let mut ws = Workspace::new_empty();
+    let lambda = ws
+        .action_handle()
+        .insert_node(CanvasLambda::new(ws.action_handle()));
+    ws.process_pending();
+    ws.set_root(lambda.erase());
+
+    let before = ws.version_of(lambda.erase());
+
+    // Rename something *inside* it: its own registry entry is untouched.
+    let name_node = ws
+        .send_request(lambda, LambdaNameNode)
+        .expect("the lambda has a name node");
+    ws.submit_action(
+        name_node.cast::<dex_nodes::primitives::text::LabelEditable>(),
+        "rename",
+        SetText {
+            value: "Renamed".to_owned(),
+        },
+    );
+    ws.process_pending();
+
+    assert_eq!(
+        ws.send_request(lambda, LambdaName).as_deref(),
+        Some("Renamed"),
+        "the change landed"
+    );
+    assert_ne!(
+        ws.version_of(lambda.erase()),
+        before,
+        "and the container's version moved with it"
+    );
+}

@@ -48,13 +48,13 @@ use utils::Reset;
 pub trait Node:
     RequestableDyn + ActionHandler + Reset + NodeRefs + 'static + DynClone + Send + Sync + utils::AsAny
 {
-    /**
-        The node's name, as shown to the user.
-
-        Takes a context so a node can name itself from its surroundings — what
-        it wraps, or what it points at — rather than only from a literal.
-    */
+    /// The node's name, as shown to the user.
     fn type_name(&self, ctx: NodeContext) -> String;
+
+    /// A token for version identity. No invariants (e.g., ordering) must be upheld, except version uniqueness.
+    fn version(&self, ctx: NodeContext) -> u64 {
+        ctx.workspace.subtree_version(ctx.id)
+    }
 
     /// Given some context, draw the node on screen
     #[deprecated = "This should never be called directly. Use `DrawContext::draw_workspace_node` instead."]

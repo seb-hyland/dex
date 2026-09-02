@@ -279,7 +279,7 @@ impl Node for FileBrowser {
 
     fn tick(&self, ctx: NodeContext) {
         // Navigate when the path field commits a new value.
-        let version = ctx.workspace.node_version(self.path_field.erase());
+        let version = ctx.workspace.version_of(self.path_field.erase());
         let seen = *self.seen_path_version.val();
         self.seen_path_version.set(version);
         let Some(prev) = seen else {

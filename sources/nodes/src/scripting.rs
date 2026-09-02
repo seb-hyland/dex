@@ -134,7 +134,7 @@ pub fn resolve_arg(ws: &Workspace, start: NodeUid) -> ResolvedArg {
         .unwrap_or(ScriptValue::Nothing);
     ResolvedArg {
         value: if pending { ScriptValue::Nothing } else { value },
-        version: ws.node_version(cur),
+        version: ws.version_of(cur),
         pending,
     }
 }
