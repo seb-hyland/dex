@@ -13,15 +13,25 @@ use dex_nodes::layouts::desktops::Desktops;
 
 const SCREEN: egui::Vec2 = egui::vec2(1200.0, 900.0);
 
-fn frame(ws: &mut Workspace, ctx: &egui::Context) {
+fn frame(ws: &mut Workspace, ctx: &egui::Context) -> egui::FullOutput {
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN);
     let input = egui::RawInput {
         screen_rect: Some(screen),
         ..Default::default()
     };
-    let _ = ctx.run_ui(input, |c| {
+    ctx.run_ui(input, |c| {
         egui::CentralPanel::default().show(c, |ui| ws.draw_frame(ui, screen));
-    });
+    })
+}
+
+/// Whether `text` was painted in the last frame. A tab whose chrome is a
+/// heading rather than a button has no sensor to ask, so the paint list is
+/// what says whether it drew.
+fn shows_text(ws: &mut Workspace, ctx: &egui::Context, text: &str) -> bool {
+    frame(ws, ctx).shapes.iter().any(|c| match &c.shape {
+        egui::Shape::Text(t) => t.galley.text().contains(text),
+        _ => false,
+    })
 }
 
 /// Every node reachable from the root, so a test can find one by type.
@@ -137,14 +147,14 @@ fn only_the_open_tab_draws() {
         "Prototypes is the tab the sidebar opens on"
     );
     assert!(
-        !drew(&ws, &ctx, "Open in IDE"),
+        !shows_text(&mut ws, &ctx, "Python prelude"),
         "and the prelude's chrome stays out of it"
     );
 
     open_tab(&mut ws, &ctx, 1);
     assert!(
-        drew(&ws, &ctx, "Open in IDE"),
-        "the Prelude tab brings its editor and IDE button"
+        shows_text(&mut ws, &ctx, "Python prelude"),
+        "the Prelude tab brings its heading and editor"
     );
     assert!(
         !drew(&ws, &ctx, "Text"),
@@ -155,7 +165,7 @@ fn only_the_open_tab_draws() {
     for tab in [2, 3] {
         open_tab(&mut ws, &ctx, tab);
         assert!(
-            !drew(&ws, &ctx, "Open in IDE") && !drew(&ws, &ctx, "Text"),
+            !shows_text(&mut ws, &ctx, "Python prelude") && !drew(&ws, &ctx, "Text"),
             "tab {tab} is empty for now"
         );
     }

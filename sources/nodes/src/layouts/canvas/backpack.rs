@@ -1,6 +1,7 @@
 //! What the sidebar's backpack keeps, and what a kept thing does when clicked.
 
 use dex_core::prelude::*;
+use dex_core::theme;
 use utils::Transient;
 
 use crate::{
@@ -82,7 +83,7 @@ impl BackpackItem {
         size: Vector,
     ) -> NodeUid<BackpackItem> {
         let mut label = LabelEditable::click_to_edit(name);
-        label.font = Font::proportional(13.0);
+        label.font = theme::text();
         let name = ws.insert_node(label);
         let sensor = ws.insert_node(InteractionBox::sensing(false, true, false));
         ws.insert_node(Self {
@@ -106,7 +107,7 @@ impl BackpackItem {
         let ink = if live {
             Color::rgb(126, 92, 166)
         } else {
-            Color::gray(170)
+            theme::LINE
         };
         let painter = ctx.ui.painter();
         Rect {
@@ -122,7 +123,7 @@ impl BackpackItem {
         .paint(painter, at);
         Rect {
             size: Vector::splat(MARK_SIZE),
-            corner_radius: 2.0,
+            corner_radius: theme::RADIUS_SM,
             fill_color: Color::TRANSPARENT,
             border: Stroke::new(1.0, ink),
             stroke_kind: StrokeKind::Inside,
@@ -221,8 +222,8 @@ impl Node for BackpackItem {
         // A mirror with nothing left to reflect says so rather than placing a blank.
         if !live {
             let mut gone = Label::new("gone".to_owned());
-            gone.font = Font::proportional(10.0);
-            gone.color = Color::gray(150);
+            gone.font = theme::text_heading();
+            gone.color = theme::INK_FAINT;
             ctx.draw_node(
                 &gone,
                 DrawConstraints {
@@ -256,9 +257,9 @@ impl Node for BackpackItem {
         // Unfilled, so the chrome goes down after the name without covering it.
         Rect {
             size,
-            corner_radius: 4.0,
+            corner_radius: theme::RADIUS_MD,
             fill_color: Color::TRANSPARENT,
-            border: Stroke::new(1.0, Color::gray(215)),
+            border: Stroke::new(1.0, theme::LINE),
             stroke_kind: StrokeKind::Inside,
         }
         .paint(ctx.ui.painter(), origin);

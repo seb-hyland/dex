@@ -1,12 +1,14 @@
 use dex_core::prelude::*;
+use dex_core::theme;
 use egui::{Pos2, text::LayoutJob};
 use utils::Transient;
 
+use crate::primitives::icon::{Glyph, Icon};
 use crate::primitives::interaction::{InteractionBox, TakeClicked, WasHovered};
 use crate::primitives::shapes::Rect;
 
 /// Space between the tick box and its label.
-const GAP: f32 = 6.0;
+const GAP: f32 = theme::SPACE_MD;
 /// How much shorter than a text row the box is, so it sits inside the line.
 const BOX_INSET: f32 = 2.0;
 const MIN_SIDE: f32 = 10.0;
@@ -48,8 +50,8 @@ impl Checkbox {
         let mut tick = Self {
             label,
             checked,
-            font: Font::proportional(13.0),
-            color: Color::BLACK,
+            font: theme::text(),
+            color: theme::INK,
             toggled: Transient::default(),
             interaction,
         };
@@ -133,31 +135,29 @@ impl Node for Checkbox {
             };
         Rect {
             size: Vector::splat(side),
-            corner_radius: 3.0,
+            corner_radius: theme::RADIUS_SM,
             fill_color: match (checked, hovered) {
-                (true, _) => Color::rgb(64, 108, 196),
-                (false, true) => Color::gray(232),
+                (true, _) => theme::ACCENT,
+                (false, true) => theme::SURFACE_SUNKEN,
                 (false, false) => Color::TRANSPARENT,
             },
-            border: Stroke::new(1.0, Color::gray(if hovered { 120 } else { 160 })),
+            border: Stroke::new(
+                theme::HAIRLINE,
+                if hovered {
+                    theme::INK_MUTED
+                } else {
+                    theme::LINE_STRONG
+                },
+            ),
             stroke_kind: StrokeKind::Inside,
         }
         .paint(ctx.ui.painter(), box_tl);
 
         if checked {
-            let tick = egui::Stroke::new(1.6, egui::Color32::WHITE);
-            let at = |x: f32, y: f32| {
-                Pos2::from(
-                    box_tl
-                        + Vector {
-                            x: side * x,
-                            y: side * y,
-                        },
-                )
-            };
-            let painter = ctx.ui.painter();
-            painter.line_segment([at(0.22, 0.52), at(0.44, 0.74)], tick);
-            painter.line_segment([at(0.44, 0.74), at(0.78, 0.28)], tick);
+            Icon::new(Glyph::Check, side, Color::WHITE).paint(ctx.ui.painter(), box_tl);
+        }
+        if hovered {
+            ctx.set_cursor(CursorIcon::PointingHand);
         }
 
         let text_pos = Pos2 {

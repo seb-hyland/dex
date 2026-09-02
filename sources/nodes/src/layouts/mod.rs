@@ -2,6 +2,7 @@ pub mod bordered;
 pub mod canvas;
 pub mod child;
 pub mod desktops;
+pub(crate) mod dnd;
 pub mod error;
 pub mod horizontal;
 pub mod horizontal_dnd;

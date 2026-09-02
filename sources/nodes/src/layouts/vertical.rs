@@ -46,23 +46,14 @@ impl Node for VerticalLayout {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        let avail_w = ctx
-            .constraints
-            .x
-            .map(|x_ax| x_ax.provided_value())
-            .unwrap_or(f32::INFINITY);
-        let avail_h = ctx
-            .constraints
-            .y
-            .map(|y_ax| y_ax.provided_value())
-            .unwrap_or(f32::INFINITY);
+        let avail = ctx.constraints.available();
 
         let mut consumed_height = 0.0;
         let mut max_width = 0.0_f32;
         let mut is_first = true;
 
         // Filling the last child only makes sense with a bounded height to fill.
-        let fill_last = self.fill_last && avail_h.is_finite();
+        let fill_last = self.fill_last && avail.y.is_finite();
         let last_index = self.children.len().saturating_sub(1);
 
         for (i, child) in self.children.iter().enumerate() {
@@ -73,12 +64,12 @@ impl Node for VerticalLayout {
                 consumed_height + self.spacing
             };
 
-            if y_offset >= avail_h {
+            if y_offset >= avail.y {
                 // No vertical space left
                 break;
             }
 
-            let remaining = avail_h - y_offset;
+            let remaining = avail.y - y_offset;
             let is_last = i == last_index;
             let y_constraint = if is_last && fill_last {
                 // Hand the last child every remaining pixel.
@@ -93,7 +84,7 @@ impl Node for VerticalLayout {
                         x: 0.0,
                         y: y_offset,
                     },
-                x: Some(AxisConstraint::AtMost(avail_w)),
+                x: Some(AxisConstraint::AtMost(avail.x)),
                 y: Some(y_constraint),
                 wrap: WrapConstraints::NotAllowed,
                 should_clip: ctx.constraints.should_clip,
@@ -109,7 +100,7 @@ impl Node for VerticalLayout {
 
         // Reserve the whole height when filling.
         if fill_last {
-            consumed_height = avail_h;
+            consumed_height = avail.y;
         }
 
         DrawResult::Complete {

@@ -1,4 +1,5 @@
 use dex_core::prelude::*;
+use dex_core::theme;
 use egui::{Id, Popup, PopupCloseBehavior, PopupKind, RectAlign, Sense};
 use utils::Transient;
 
@@ -15,9 +16,8 @@ use crate::{
     scripting::DataflowOutput,
 };
 
-static VAR_NAME: f32 = 8.0;
-/// Where the lens sits relative to the node it belongs to.
-const HANDLE_OFFSET: f32 = VAR_NAME;
+/// How far up and left of its node the lens sits.
+const HANDLE_OFFSET: f32 = 8.0;
 const HANDLE_SIZE: Vector = Vector { x: 14.0, y: 22.0 };
 /// The menu's width. Fixed, as the popup sizes itself to its contents.
 const MENU_WIDTH: f32 = 180.0;
@@ -25,6 +25,24 @@ const MENU_WIDTH: f32 = 180.0;
 const MENU_SLACK: f32 = 36.0;
 /// A stable egui id: there is only ever one handle.
 const HANDLE_ID: &str = "dex_inspector_handle";
+
+/**
+    A row in an inspector menu.
+
+    Menu rows carry no outline of their own: a column of eight bordered
+    buttons reads as eight separate controls rather than one list. The row
+    only shows a ground when the pointer is on it, which is also what tells
+    you which one you are about to press.
+*/
+pub fn menu_button(ws: WorkspaceActionHandle, label: &str) -> NodeUid<Button> {
+    Button::build_with(ws, Label::new(label.to_owned()), |b| {
+        b.padding = theme::SPACE_SM;
+        b.padding_x = theme::SPACE_SM;
+        b.corner_radius = theme::RADIUS_SM;
+        b.border = Stroke::NONE;
+        b.fill_width = true;
+    })
+}
 
 /// Where the lens last sat, so an open menu keeps its place.
 #[derive(Clone)]
@@ -121,14 +139,14 @@ impl Node for Inspector {
 
         Rect {
             size: HANDLE_SIZE,
-            corner_radius: 4.0,
+            corner_radius: theme::RADIUS_MD,
             fill_color: if engaged {
-                Color::gray(228)
+                theme::SURFACE_SUNKEN
             } else {
                 Color::rgba(0, 0, 0, 12)
             },
             border: if engaged {
-                Stroke::new(1.0, Color::gray(160))
+                theme::border_hover()
             } else {
                 Stroke::NONE
             },
@@ -137,11 +155,11 @@ impl Node for Inspector {
         .paint(ctx.ui.painter(), handle_region.min);
 
         // A magnifying glass: this inspects, it does not move anything.
-        let ink = if engaged {
-            egui::Color32::from_gray(70)
+        let ink = egui::Color32::from(if engaged {
+            theme::INK
         } else {
-            egui::Color32::from_gray(140)
-        };
+            theme::INK_FAINT
+        });
         let lens_radius = 3.6;
         let lens_centre = handle_region.min
             + Vector {
@@ -323,14 +341,7 @@ impl PlacementCommands {
         size: Vector,
         restackable: bool,
     ) -> NodeUid<PlacementCommands> {
-        let command = |label: &str| {
-            Button::build_with(ws.clone(), Label::new(label.to_owned()), |b| {
-                b.padding = 4.0;
-                b.corner_radius = 3.0;
-                b.border = Stroke::NONE;
-                b.fill_width = true;
-            })
-        };
+        let command = |label: &str| menu_button(ws.clone(), label);
         let copy_button = command("Copy");
         let mirror_button = command("Mirror");
         let keep_copy_button = command("Copy to Backpack");

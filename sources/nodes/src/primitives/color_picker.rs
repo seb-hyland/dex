@@ -1,4 +1,5 @@
 use dex_core::prelude::*;
+use dex_core::theme;
 use egui::{
     Color32, Mesh, Painter, Pos2, Sense, Shape, ecolor::HsvaGamma, lerp, pos2, text::LayoutJob,
 };
@@ -8,7 +9,7 @@ use utils::Transient;
 /// The swatch at the right of the collapsed row.
 const SWATCH_W: f32 = 36.0;
 /// Space between the stacked parts of the open picker.
-const GAP: f32 = 4.0;
+const GAP: f32 = theme::SPACE_SM;
 /// The saturation/value square's height, as a fraction of the width.
 const SQUARE_ASPECT: f32 = 0.62;
 const BAR_H: f32 = 12.0;
@@ -54,8 +55,8 @@ impl ColorPicker {
             label,
             expanded: false,
             alpha: true,
-            font: Font::proportional(13.0),
-            text_color: Color::BLACK,
+            font: theme::text(),
+            text_color: theme::INK,
             live: Transient::default(),
             coords: Transient::default(),
         }

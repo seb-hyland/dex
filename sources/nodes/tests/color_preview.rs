@@ -3,6 +3,7 @@
 //! polling, so nothing is lost to a frame that does not look.
 
 use dex_core::prelude::*;
+use dex_core::theme;
 use dex_nodes::primitives::color_picker::{
     ColorPicker, ColorSlot, IsPicking, PickedColor, repicked,
 };
@@ -102,13 +103,13 @@ fn the_colour_on_show_follows_the_pointer_before_it_is_let_go() {
         "polling it twice reads the same colour"
     );
     assert!(
-        repicked(&ws, picker, label, ColorSlot::Fill, Color::BLACK).is_none(),
+        repicked(&ws, picker, label, ColorSlot::Fill, theme::INK).is_none(),
         "a caller holds off committing while the gesture is still going"
     );
     let (committed, on_show) = label_colours(&ws, label);
     assert_eq!(
         committed,
-        rgba(Color::BLACK),
+        rgba(theme::INK),
         "the label has not taken the colour for real"
     );
     assert_eq!(

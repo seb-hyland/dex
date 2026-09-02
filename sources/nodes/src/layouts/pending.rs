@@ -1,4 +1,5 @@
 use dex_core::prelude::*;
+use dex_core::theme;
 
 use crate::layouts::child::LayoutChild;
 use crate::layouts::vertical::VerticalLayout;
@@ -29,7 +30,7 @@ impl Node for PendingLayout {
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
         let mut label = Label::new("Pending…".to_owned());
-        label.color = Color::gray(120);
+        label.color = theme::INK_MUTED;
         let body = VerticalLayout {
             children: vec![LayoutChild::Node(Arc::new(label)), self.child.clone()],
             spacing: 4.0,

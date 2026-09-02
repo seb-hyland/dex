@@ -62,7 +62,7 @@ fn a_copy_reaches_the_whole_owned_subtree() {
     let node = CanvasNode::build(
         ws.action_handle(),
         label.erase(),
-        Vector { x: 0.0, y: 0.0 },
+        Vector::ZERO,
         Vector { x: 10.0, y: 10.0 },
     );
     ws.process_pending();

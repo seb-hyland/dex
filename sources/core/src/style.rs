@@ -12,55 +12,25 @@ pub struct Color {
 }
 
 impl Color {
-    pub const TRANSPARENT: Self = Self {
-        r: 0,
-        g: 0,
-        b: 0,
-        a: 0,
-    };
-    pub const BLACK: Self = Self {
-        r: 0,
-        g: 0,
-        b: 0,
-        a: 255,
-    };
-    pub const WHITE: Self = Self {
-        r: 255,
-        g: 255,
-        b: 255,
-        a: 255,
-    };
-    pub const GRAY: Self = Self {
-        r: 160,
-        g: 160,
-        b: 160,
-        a: 255,
-    };
+    pub const TRANSPARENT: Self = Self::rgba(0, 0, 0, 0);
+    pub const BLACK: Self = Self::gray(0);
+    pub const WHITE: Self = Self::gray(255);
+    pub const GRAY: Self = Self::gray(160);
 }
 
 #[utils::dynamic_methods]
 impl Color {
-    pub fn rgb(r: u8, g: u8, b: u8) -> Self {
+    pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b, a: 255 }
     }
-    pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+    pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self { r, g, b, a }
     }
-    pub fn gray(level: u8) -> Self {
-        Self {
-            r: level,
-            g: level,
-            b: level,
-            a: 255,
-        }
+    pub const fn gray(level: u8) -> Self {
+        Self::rgb(level, level, level)
     }
-    pub fn transparent() -> Self {
-        Self {
-            r: 0,
-            g: 0,
-            b: 0,
-            a: 0,
-        }
+    pub const fn transparent() -> Self {
+        Self::TRANSPARENT
     }
 }
 
@@ -87,22 +57,16 @@ pub struct Stroke {
 }
 
 impl Stroke {
-    pub const NONE: Self = Self {
-        width: 0.0,
-        color: Color::TRANSPARENT,
-    };
+    pub const NONE: Self = Self::new(0.0, Color::TRANSPARENT);
 }
 
 #[utils::dynamic_methods]
 impl Stroke {
-    pub fn new(width: f32, color: Color) -> Self {
+    pub const fn new(width: f32, color: Color) -> Self {
         Self { width, color }
     }
-    pub fn none() -> Self {
-        Self {
-            width: 0.0,
-            color: Color::transparent(),
-        }
+    pub const fn none() -> Self {
+        Self::NONE
     }
 }
 
@@ -182,27 +146,26 @@ pub struct Font {
 
 #[utils::dynamic_methods]
 impl Font {
-    pub fn proportional(size: f32) -> Self {
-        Self {
-            size,
-            monospace: false,
-            bold: false,
-            italic: false,
-            underline: false,
-        }
+    pub const fn proportional(size: f32) -> Self {
+        Self::plain(size, false)
     }
-    pub fn monospaced(size: f32) -> Self {
-        Self {
-            size,
-            monospace: true,
-            bold: false,
-            italic: false,
-            underline: false,
-        }
+    pub const fn monospaced(size: f32) -> Self {
+        Self::plain(size, true)
     }
 }
 
 impl Font {
+    /// An unstyled face at `size`, proportional or monospaced.
+    const fn plain(size: f32, monospace: bool) -> Self {
+        Self {
+            size,
+            monospace,
+            bold: false,
+            italic: false,
+            underline: false,
+        }
+    }
+
     fn styled_family(self) -> Option<&'static str> {
         // Only the proportional family ships styled faces.
         match (self.monospace, self.bold, self.italic) {
@@ -263,4 +226,57 @@ impl From<FontId> for Font {
             underline: false,
         }
     }
+}
+
+/// Declare [`CursorIcon`] and its two-way mapping onto egui's, from one list.
+macro_rules! cursor_icons {
+    ($($variant:ident $(as $egui:ident)?),* $(,)?) => {
+        /**
+            The pointer shape a node asks for while it is hovered.
+
+            Set it from a `draw` with `ctx.set_cursor(...)`; it lasts for the
+            frame, so a node that wants a cursor asks for it every frame.
+
+            ```python
+            if hovered:
+                ctx.set_cursor(dex.CursorIcon.PointingHand)
+            ```
+        */
+        #[derive(Copy, Default)]
+        #[utils::dynamic_type]
+        #[utils::portable(noop_reset)]
+        pub enum CursorIcon {
+            #[default]
+            $($variant),*
+        }
+
+        impl From<CursorIcon> for egui::CursorIcon {
+            fn from(c: CursorIcon) -> Self {
+                match c {
+                    $(CursorIcon::$variant => cursor_icons!(@egui $variant $($egui)?)),*
+                }
+            }
+        }
+
+        impl From<egui::CursorIcon> for CursorIcon {
+            fn from(c: egui::CursorIcon) -> Self {
+                match c {
+                    $(cursor_icons!(@egui $variant $($egui)?) => Self::$variant),*
+                }
+            }
+        }
+    };
+    // The egui variant a name maps onto: the same name unless renamed.
+    (@egui $variant:ident) => { egui::CursorIcon::$variant };
+    (@egui $variant:ident $egui:ident) => { egui::CursorIcon::$egui };
+}
+
+cursor_icons! {
+    // `None` is a Python keyword, so the hidden cursor is named for what it does.
+    Default, Hidden as None, ContextMenu, Help, PointingHand, Progress, Wait, Cell,
+    Crosshair, Text, VerticalText, Alias, Copy, Move, NoDrop, NotAllowed,
+    Grab, Grabbing, AllScroll, ResizeHorizontal, ResizeNeSw, ResizeNwSe,
+    ResizeVertical, ResizeEast, ResizeSouthEast, ResizeSouth, ResizeSouthWest,
+    ResizeWest, ResizeNorthWest, ResizeNorth, ResizeNorthEast, ResizeColumn,
+    ResizeRow, ZoomIn, ZoomOut,
 }

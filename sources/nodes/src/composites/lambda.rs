@@ -1,4 +1,5 @@
 use dex_core::prelude::*;
+use dex_core::theme;
 
 use egui::{Id, LayerId, Order};
 use utils::Transient;
@@ -22,10 +23,11 @@ use crate::{
         pending::PendingLayout,
     },
     primitives::{
+        icon::Glyph,
         interaction::{DragPointerPos, InteractionBox, WasClicked, WasDragReleased},
         nothing::Nothing,
-        shapes::{Circle, Path},
-        text::{CodeEditor, GetText, Label, LabelEditable, SetText},
+        shapes::{Circle, Path, Rect},
+        text::{CodeEditor, GetText, Label, LabelEditable, SetText, TakeExternalEditRequest},
     },
 };
 
@@ -37,7 +39,6 @@ use crate::{
 #[utils::portable]
 pub struct LambdaEditor {
     python: NodeUid<CodeEditor>,
-    edit_externally: NodeUid<Button>,
 }
 
 #[utils::dynamic_methods]
@@ -51,7 +52,6 @@ impl LambdaEditor {
     pub fn holding(ws: WorkspaceActionHandle, source: String) -> LambdaEditor {
         Self {
             python: ws.insert_node(CodeEditor::new(source, "python".to_owned())),
-            edit_externally: Button::build(ws.clone(), Label::new("Edit in IDE".to_owned())),
         }
     }
 }
@@ -64,7 +64,8 @@ impl Node for LambdaEditor {
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
         let constraints = ctx.constraints;
-        ctx.draw_workspace_node(self.python.erase(), constraints)
+        // Inspectable, so the lens can reach the editor's own commands.
+        ctx.draw_inspectable_node(self.python.erase(), constraints)
             .unwrap_or(DrawResult::Complete { region: None })
     }
 
@@ -154,7 +155,7 @@ impl Node for ConnectionPort {
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
         let wire_color = Color::rgba(176, 202, 224, 150);
-        let port_color = Color::rgb(50, 110, 160);
+        let port_color = theme::ACCENT_STRONG;
 
         let outer_radius = 4.0;
         let port_center = ctx.constraints.pos
@@ -230,10 +231,8 @@ impl Node for ConnectionPort {
         } else if let Some(target) = self.connected
             && let Some(rect) = ws.inspectable_rect(target)
         {
-            let target_anchor = ScreenPos {
-                x: (rect.min.x + rect.max.x) * 0.5,
-                y: (rect.min.y + rect.max.y) * 0.5,
-            };
+            // Stop at the target's edge rather than its middle.
+            let target_anchor = rect.edge_towards(port_center);
             Path::span((target_anchor - port_center).to_vector(), wire_stroke)
                 .paint(&wire_painter, port_center);
 
@@ -329,8 +328,8 @@ impl Node for LambdaArg {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        const ARG_LABEL_GAP: f32 = 4.0;
-        const PORT_GAP: f32 = 10.0;
+        const ARG_LABEL_GAP: f32 = theme::SPACE_SM;
+        const PORT_GAP: f32 = theme::SPACE_LG;
 
         let fields = HorizontalLayout {
             children: vec![
@@ -383,14 +382,25 @@ defhandlers! { LambdaArg {
     ],
 }}
 
+/// The lambda's run control: a play glyph and the word for it.
+fn run_button(ws: WorkspaceActionHandle) -> NodeUid<Button> {
+    Button::build_with(ws, Label::new("Run".to_owned()), |b| {
+        b.icon = Some(Glyph::Play);
+        b.icon_gap = theme::SPACE_SM;
+    })
+}
+
 /// The little × an argument row is polled against.
 fn delete_arg_button(ws: WorkspaceActionHandle) -> NodeUid<Button> {
-    let mut label = Label::new("×".to_owned());
-    label.font = Font::proportional(11.0);
-    label.color = Color::gray(120);
+    let mut label = Label::new(String::new());
+    label.font = Font::proportional(theme::TEXT_XS);
+    label.color = theme::INK_MUTED;
     Button::build_with(ws, label, |b| {
-        b.padding = 1.0;
-        b.border = dex_core::Stroke::NONE;
+        b.icon = Some(Glyph::Cross);
+        b.padding = theme::SPACE_XS;
+        b.padding_x = 0.0;
+        b.corner_radius = theme::RADIUS_SM;
+        b.border = Stroke::NONE;
     })
 }
 
@@ -414,7 +424,7 @@ impl LambdaArgs {
         Self {
             args: Vec::new(),
             delete_buttons: Vec::new(),
-            add_button: Button::build(ws.clone(), Label::new("+".to_owned())),
+            add_button: Button::build_icon(ws.clone(), Glyph::Plus),
         }
     }
 }
@@ -426,8 +436,8 @@ impl Node for LambdaArgs {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        const V_ROW_GAP: f32 = 2.0;
-        const ARG_DELETE_GAP: f32 = 4.0;
+        const V_ROW_GAP: f32 = theme::SPACE_XS;
+        const ARG_DELETE_GAP: f32 = theme::SPACE_SM;
 
         let constraints = ctx.constraints;
 
@@ -454,9 +464,7 @@ impl Node for LambdaArgs {
         let region = ctx
             .draw_node(&layout, constraints)
             .region()
-            .unwrap_or_else(|| {
-                ScreenRegion::from_min_size(constraints.pos, Vector { x: 0.0, y: 0.0 })
-            });
+            .unwrap_or_else(|| ScreenRegion::from_min_size(constraints.pos, Vector::ZERO));
 
         // Poll the (now-drawn) buttons and dispatch add/delete.
         for i in 0..self.delete_buttons.len() {
@@ -563,9 +571,6 @@ pub struct Lambda {
     /// Where the script is checked out for external editing.
     #[dynamic(skip)]
     checkout: Transient<checkout::Checkout>,
-
-    /// Opens the script in the user's editor.
-    edit_externally: NodeUid<Button>,
 }
 
 #[utils::dynamic_methods]
@@ -590,8 +595,7 @@ impl Lambda {
             name: ws.insert_node(LabelEditable::new(name)),
             args,
             editor: ws.insert_node(LambdaEditor::holding(ws.clone(), source)),
-            update_button: Button::build(ws.clone(), Label::new("Update".to_owned())),
-            edit_externally: Button::build(ws.clone(), Label::new("Edit in IDE".to_owned())),
+            update_button: run_button(ws.clone()),
             output,
             seen_deps: Transient::default(),
             checkout: Transient::default(),
@@ -603,15 +607,13 @@ impl Lambda {
         let name = ws.insert_node(LabelEditable::new("Lambda".to_owned()));
         let editor = LambdaEditor::build(ws.clone());
         let args = LambdaArgs::build(ws.clone());
-        let update_button = Button::build(ws.clone(), Label::new("Update".to_owned()));
-        let edit_externally = Button::build(ws.clone(), Label::new("Edit in IDE".to_owned()));
+        let update_button = run_button(ws.clone());
         let output = ws.insert_node(Nothing).erase();
         Self {
             name,
             args,
             editor,
             update_button,
-            edit_externally,
             output,
             seen_deps: Transient::default(),
             checkout: Transient::default(),
@@ -780,8 +782,8 @@ impl Node for Lambda {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        const V_SECTIONS_GAP: f32 = 6.0;
-        const OUTER_PADDING: f32 = 8.0;
+        const V_SECTIONS_GAP: f32 = theme::SPACE_MD;
+        const OUTER_PADDING: f32 = theme::SPACE_LG;
         const FALLBACK_SIZE: Vector = Vector { x: 400.0, y: 240.0 };
 
         let constraints = ctx.constraints;
@@ -804,7 +806,6 @@ impl Node for Lambda {
                 LayoutChild::Node(Arc::new(SectionDivider)),
                 LayoutChild::from(self.editor),
                 LayoutChild::from(self.update_button),
-                LayoutChild::from(self.edit_externally),
                 LayoutChild::Node(Arc::new(SectionDivider)),
                 LayoutChild::Inspectable(self.output),
             ],
@@ -815,10 +816,10 @@ impl Node for Lambda {
         let bordered = Bordered {
             child: LayoutChild::Node(Arc::new(body)),
             padding: OUTER_PADDING,
-            corner_radius: 4.0,
-            fill_color: Color::WHITE,
-            border_width: 1.0,
-            border_color: Color::gray(170),
+            corner_radius: theme::RADIUS_LG,
+            fill_color: theme::SURFACE,
+            border_width: theme::HAIRLINE,
+            border_color: theme::LINE,
         };
         ctx.draw_node(
             &bordered,
@@ -842,15 +843,6 @@ impl Node for Lambda {
             self.run_update(ctx.node);
         }
 
-        if ctx
-            .node
-            .workspace
-            .send_request(self.edit_externally.erase(), WasClicked)
-            .unwrap_or(false)
-        {
-            self.edit_externally(ctx.node);
-        }
-
         DrawResult::Complete {
             region: Some(ScreenRegion::from_min_size(origin, node_size)),
         }
@@ -858,6 +850,16 @@ impl Node for Lambda {
 
     fn tick(&self, ctx: NodeContext) {
         self.poll_checkout(ctx);
+        // The command sits in the code editor's own inspector; only its owner
+        // can honour it, so the request is taken here.
+        if let Some(editor) = ctx.workspace.send_request(self.editor, ActiveEditor)
+            && ctx
+                .workspace
+                .send_request(editor, TakeExternalEditRequest)
+                .unwrap_or(false)
+        {
+            self.edit_externally(ctx);
+        }
         // Re-fire when a wired dependency's value changed.
         if self.poll_dependencies(ctx) {
             self.run_update(ctx);
@@ -869,7 +871,6 @@ impl Node for Lambda {
         ctx.workspace.delete_node(self.args.erase());
         ctx.workspace.delete_node(self.editor.erase());
         ctx.workspace.delete_node(self.update_button.erase());
-        ctx.workspace.delete_node(self.edit_externally.erase());
         ctx.workspace.delete_node(self.output);
     }
 }
@@ -913,19 +914,10 @@ defhandlers! { Lambda {
 // LAMBDA CANVAS
 // ================================================================================
 
-/// The tint that marks a parameter apart from the nodes it feeds.
-const PARAM_FILL: Color = Color {
-    r: 227,
-    g: 238,
-    b: 250,
-    a: 255,
-};
-const PARAM_BORDER: Color = Color {
-    r: 90,
-    g: 140,
-    b: 195,
-    a: 255,
-};
+/// The tint that marks a parameter apart from the nodes it feeds. Pale on
+/// both counts: a pin is a label, not a control asking to be pressed.
+const PARAM_FILL: Color = Color::rgb(237, 244, 251);
+const PARAM_BORDER: Color = theme::ACCENT_MUTED;
 
 /**
     One input parameter of a [`ComputeCanvas`].
@@ -972,10 +964,10 @@ impl Node for ComputeParam {
         };
         let pill = Bordered {
             child: LayoutChild::Node(Arc::new(Label::new(text))),
-            padding: 5.0,
-            corner_radius: 4.0,
+            padding: theme::SPACE_MD,
+            corner_radius: theme::RADIUS_MD,
             fill_color: PARAM_FILL,
-            border_width: 1.5,
+            border_width: theme::HAIRLINE,
             border_color: PARAM_BORDER,
         };
         let constraints = ctx.constraints;
@@ -1135,10 +1127,33 @@ impl Node for ComputeCanvas {
             },
         );
 
-        // Output pin along the bottom: a label plus the outgoing port.
-        let out_y = origin.y + avail_h - CC_OUT_H + CC_GAP;
-        let label = Label::new("output →".to_owned());
-        ctx.draw_node(
+        // A rule divides the surface from the strip below it, so the output
+        // reads as this canvas's own footer rather than as something adrift on
+        // it.
+        let rule_y = origin.y + avail_h - CC_OUT_H;
+        Rect {
+            size: Vector {
+                x: avail_w,
+                y: theme::HAIRLINE,
+            },
+            corner_radius: 0.0,
+            fill_color: theme::LINE,
+            border: Stroke::NONE,
+            stroke_kind: StrokeKind::Inside,
+        }
+        .paint(
+            ctx.ui.painter(),
+            ScreenPos {
+                x: origin.x,
+                y: rule_y,
+            },
+        );
+
+        // Output pin along the bottom.
+        let out_y = rule_y + CC_GAP;
+        let mut label = Label::new("output".to_owned());
+        label.color = theme::INK_MUTED;
+        let label_res = ctx.draw_node(
             &label,
             DrawConstraints {
                 pos: ScreenPos {
@@ -1151,15 +1166,18 @@ impl Node for ComputeCanvas {
                 should_clip: false,
             },
         );
+        let label_size = label_res.region().map(|r| r.size()).unwrap_or_default();
+        const PORT: f32 = 8.0;
         ctx.draw_workspace_node(
             self.output_port.erase(),
             DrawConstraints {
                 pos: ScreenPos {
-                    x: origin.x + CC_GAP + 90.0,
-                    y: out_y,
+                    x: origin.x + CC_GAP + label_size.x + theme::SPACE_LG,
+                    // Centred against the label's line.
+                    y: out_y + (label_size.y - PORT) * 0.5,
                 },
-                x: Some(AxisConstraint::Exactly(8.0)),
-                y: Some(AxisConstraint::Exactly(8.0)),
+                x: Some(AxisConstraint::Exactly(PORT)),
+                y: Some(AxisConstraint::Exactly(PORT)),
                 wrap: WrapConstraints::NotAllowed,
                 should_clip: false,
             },
@@ -1416,8 +1434,8 @@ impl Node for CanvasLambda {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        const V_SECTIONS_GAP: f32 = 6.0;
-        const OUTER_PADDING: f32 = 8.0;
+        const V_SECTIONS_GAP: f32 = theme::SPACE_MD;
+        const OUTER_PADDING: f32 = theme::SPACE_LG;
         const FALLBACK_SIZE: Vector = Vector { x: 260.0, y: 200.0 };
 
         let constraints = ctx.constraints;
@@ -1448,10 +1466,10 @@ impl Node for CanvasLambda {
         let bordered = Bordered {
             child: LayoutChild::Node(Arc::new(body)),
             padding: OUTER_PADDING,
-            corner_radius: 4.0,
-            fill_color: Color::WHITE,
-            border_width: 1.0,
-            border_color: Color::gray(170),
+            corner_radius: theme::RADIUS_LG,
+            fill_color: theme::SURFACE,
+            border_width: theme::HAIRLINE,
+            border_color: theme::LINE,
         };
         ctx.draw_node(
             &bordered,

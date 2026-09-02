@@ -1,4 +1,5 @@
 use dex_core::prelude::*;
+use dex_core::theme;
 
 use crate::layouts::child::LayoutChild;
 use crate::primitives::shapes::Rect;
@@ -23,11 +24,11 @@ impl Bordered {
     pub fn new(child: LayoutChild) -> Bordered {
         Bordered {
             child,
-            padding: 8.0,
-            corner_radius: 4.0,
+            padding: theme::SPACE_LG,
+            corner_radius: theme::RADIUS_MD,
             fill_color: Color::TRANSPARENT,
-            border_width: 1.0,
-            border_color: Color::gray(170),
+            border_width: theme::HAIRLINE,
+            border_color: theme::LINE,
         }
     }
 }
@@ -60,42 +61,26 @@ impl Node for Bordered {
         } = child_res
             && let Some(region) = maybe_region
         {
-            let avail_x = ctx
-                .constraints
-                .x
-                .map(|x_ax| x_ax.provided_value())
-                .unwrap_or(f32::INFINITY);
-            let avail_y = ctx
-                .constraints
-                .y
-                .map(|y_ax| y_ax.provided_value())
-                .unwrap_or(f32::INFINITY);
+            let avail = ctx.constraints.available();
 
             let child_size_with_padding = region
                 .size()
                 .map(|d| d + 2.0 * (self.padding + self.border_width));
             let box_size = Vector {
-                x: child_size_with_padding.x.min(avail_x),
-                y: child_size_with_padding.y.min(avail_y),
+                x: child_size_with_padding.x.min(avail.x),
+                y: child_size_with_padding.y.min(avail.y),
             };
-            let rect = egui::Rect::from_min_size(
-                ctx.constraints.pos.into(),
-                egui::vec2(box_size.x, box_size.y),
-            );
-
-            // Fill occupies the reserved slot (behind the child).
-            ctx.ui.painter().set(
-                bg_idx,
-                egui::Shape::rect_filled(rect, self.corner_radius, self.fill_color),
-            );
-            Rect {
+            // Fill and border occupy the reserved slot, behind the child.
+            let frame = Rect {
                 size: box_size,
                 corner_radius: self.corner_radius,
-                fill_color: Color::TRANSPARENT,
+                fill_color: self.fill_color,
                 border: Stroke::new(self.border_width, self.border_color),
                 stroke_kind: StrokeKind::Inside,
-            }
-            .paint(ctx.ui.painter(), ctx.constraints.pos);
+            };
+            ctx.ui
+                .painter()
+                .set(bg_idx, frame.shape(ctx.constraints.pos));
 
             DrawResult::Complete {
                 region: Some(ScreenRegion::from_min_size(ctx.constraints.pos, box_size)),

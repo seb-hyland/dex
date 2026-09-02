@@ -53,14 +53,7 @@ impl Node for HorizontalLayout {
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
         let constraints = ctx.constraints;
 
-        let avail_w = constraints
-            .x
-            .map(|x_ax| x_ax.provided_value())
-            .unwrap_or(f32::INFINITY);
-        let avail_h = constraints
-            .y
-            .map(|y_ax| y_ax.provided_value())
-            .unwrap_or(f32::INFINITY);
+        let avail = constraints.available();
         let should_clip = constraints.should_clip;
 
         let origin = constraints.pos;
@@ -130,7 +123,7 @@ impl Node for HorizontalLayout {
         }
 
         for child in &self.children {
-            if avail_w - cur_line_width <= 0.0 {
+            if avail.x - cur_line_width <= 0.0 {
                 // No space left in line
                 if start_newline_still_has_space(
                     &mut cur_line_width,
@@ -138,7 +131,7 @@ impl Node for HorizontalLayout {
                     &mut consumed_height,
                     &mut max_line_width,
                     self.spacing,
-                    avail_h,
+                    avail.y,
                     self.allow_wrap,
                 ) {
                     // No space left at all
@@ -157,8 +150,8 @@ impl Node for HorizontalLayout {
                         x: cur_line_width,
                         y: consumed_height,
                     },
-                x: Some(AxisConstraint::AtMost(avail_w - cur_line_width)),
-                y: Some(AxisConstraint::AtMost(avail_h - consumed_height)),
+                x: Some(AxisConstraint::AtMost(avail.x - cur_line_width)),
+                y: Some(AxisConstraint::AtMost(avail.y - consumed_height)),
                 wrap: if self.allow_wrap {
                     WrapConstraints::CanRequest {
                         at_start_of_line: cur_line_width == 0.0,
@@ -189,7 +182,7 @@ impl Node for HorizontalLayout {
                     &mut consumed_height,
                     &mut max_line_width,
                     self.spacing,
-                    avail_h,
+                    avail.y,
                     true,
                 ) {
                     // No space left at all
@@ -202,8 +195,8 @@ impl Node for HorizontalLayout {
                             x: cur_line_width,
                             y: consumed_height,
                         },
-                    x: Some(AxisConstraint::AtMost(avail_w - cur_line_width)),
-                    y: Some(AxisConstraint::AtMost(avail_h - consumed_height)),
+                    x: Some(AxisConstraint::AtMost(avail.x - cur_line_width)),
+                    y: Some(AxisConstraint::AtMost(avail.y - consumed_height)),
                     wrap: WrapConstraints::CanRequest {
                         at_start_of_line: true,
                         continuation: Some(continuation),

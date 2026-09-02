@@ -1,4 +1,5 @@
 use dex_core::prelude::*;
+use dex_core::theme;
 use utils::Transient;
 
 use crate::primitives::text::Label;
@@ -52,7 +53,7 @@ impl Node for Mirror {
         let Some(copy) = self.copy else {
             // No copy yet: the first tick has not run.
             let mut placeholder = Label::new("Nothing to mirror".to_owned());
-            placeholder.color = Color::gray(140);
+            placeholder.color = theme::INK_FAINT;
             return ctx.draw_node(&placeholder, constraints);
         };
         ctx.draw_workspace_node(copy, constraints)

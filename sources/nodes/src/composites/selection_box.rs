@@ -1,4 +1,5 @@
 use dex_core::prelude::*;
+use dex_core::theme;
 use utils::Transient;
 
 use crate::primitives::interaction::{InteractionBox, WasClicked};
@@ -33,8 +34,8 @@ impl SelectionBox {
     }
 }
 
-const ROW_H: f32 = 28.0;
-const PAD: f32 = 6.0;
+const ROW_H: f32 = 26.0;
+const PAD: f32 = theme::SPACE_MD;
 
 #[utils::dynamic_node(skip)]
 impl Node for SelectionBox {

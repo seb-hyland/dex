@@ -6,7 +6,7 @@ use std::{
 };
 
 use dyn_clone::clone_box;
-use egui::{Align, Id, Layout, Order, Rect, Ui, UiBuilder};
+use egui::{Align, Id, LayerId, Layout, Order, Rect, Ui, UiBuilder};
 use serde::{Deserialize, Serialize};
 use utils::match_dyn;
 
@@ -865,17 +865,10 @@ impl<'ctx> DrawContext<'ctx> {
     ) -> DrawResult {
         let workspace = self.node.workspace;
 
-        let clip_x = constraints
-            .x
-            .map(|x_ax| x_ax.provided_value())
-            .unwrap_or(f32::INFINITY);
-        let clip_y = constraints
-            .y
-            .map(|y_ax| y_ax.provided_value())
-            .unwrap_or(f32::INFINITY);
+        let clip = constraints.available();
         let clip_size = Vector {
-            x: clip_x,
-            y: clip_y,
+            x: clip.x,
+            y: clip.y,
         };
         let clip_region = ScreenRegion::from_min_size(constraints.pos, clip_size);
 
@@ -914,6 +907,37 @@ impl<'ctx> DrawContext<'ctx> {
 
     pub fn draw_node(&mut self, node: &dyn Node, constraints: DrawConstraints) -> DrawResult {
         self.draw_node_with(node, NodeUid::nil(), constraints)
+    }
+
+    /// Draw outside this node's bounds, over everything else in the frame.
+    #[dynamic(skip)] // takes a closure, which cannot cross into Python
+    pub fn overlay<R>(&mut self, f: impl FnOnce(&mut DrawContext<'_>) -> R) -> R {
+        let layer = LayerId::new(Order::Foreground, Id::new(("dex_overlay", self.node.id)));
+        let screen = self.ui.ctx().viewport_rect();
+        let mut ui = self.ui.new_child(UiBuilder::new().layer_id(layer));
+        ui.set_clip_rect(screen);
+
+        let mut ctx = DrawContext {
+            node: self.node,
+            constraints: self.constraints,
+            depth: self.depth,
+            ui: &mut ui,
+        };
+        f(&mut ctx)
+    }
+
+    /// Draw one node on this node's overlay layer. The single-node case of [`DrawContext::overlay`], and the shape a script can reach.
+    pub fn overlay_node(&mut self, node: &dyn Node, constraints: DrawConstraints) -> DrawResult {
+        self.overlay(|ctx| ctx.draw_node(node, constraints))
+    }
+
+    /// Draw a workspace node on this node's overlay layer.
+    pub fn overlay_workspace_node(
+        &mut self,
+        id: NodeUid,
+        constraints: DrawConstraints,
+    ) -> Option<DrawResult> {
+        self.overlay(|ctx| ctx.draw_workspace_node(id, constraints))
     }
 
     /// Draw `node` under this node's own id, so anything it addresses to itself comes back here.

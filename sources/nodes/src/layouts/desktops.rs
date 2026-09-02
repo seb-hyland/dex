@@ -1,5 +1,6 @@
 use dex_core::prelude::*;
-use egui::{Color32, LayerId};
+use dex_core::theme;
+use egui::LayerId;
 use utils::Transient;
 
 use crate::{
@@ -14,10 +15,11 @@ use crate::{
         child::LayoutChild,
         horizontal::HorizontalLayout,
         horizontal_dnd::{AddChild, Children, HorizontalDnD, RemoveChild, Reorder},
-        inspector::Inspector,
+        inspector::{Inspector, menu_button},
         mirror::Mirror,
         vertical::VerticalLayout,
     },
+    primitives::icon::Glyph,
     primitives::{
         interaction::{
             InteractionBox, TakeClicked, WasClicked, WasDoubleClicked, WasDragged, WasHovered,
@@ -89,23 +91,31 @@ impl Desktops {
         let tab = DesktopTabView::build(ws.clone(), canvas, id, "Canvas 1".to_owned());
         let tab_bar = HorizontalDnD::build(ws.clone(), vec![tab.erase()], TAB_SPACING);
         let sidebar = CanvasSidebar::build(ws.clone(), id);
-        let add_button = Button::build(ws.clone(), Label::new("+".to_owned()));
+        let add_button = Button::build_with(ws.clone(), Label::new(String::new()), |b| {
+            b.icon = Some(Glyph::Plus);
+            // Padded to stand as tall as a tab, so the row has one baseline.
+            b.padding = theme::SPACE_MD;
+            b.padding_x = 0.0;
+        });
         let divider = ws.insert_node(InteractionBox::sensing(true, false, true));
-        let close_override_button = Button::build(ws.clone(), Label::new("← Close".to_owned()));
-        let chrome = |glyph: &str| {
-            Button::build_with(ws.clone(), Label::new(glyph.to_owned()), |b| {
-                b.label.font = Font::proportional(12.0);
-                b.label.color = Color::gray(110);
-                b.padding = 2.0;
-                b.corner_radius = 3.0;
-                b.fill_color = Color::WHITE;
-                b.border = Stroke::new(1.0, Color::gray(205));
+        let close_override_button = Button::build(ws.clone(), Label::new("Close".to_owned()));
+        // A fold control sits on the line it folds.
+        let chrome = |glyph: Glyph| {
+            Button::build_with(ws.clone(), Label::new(String::new()), |b| {
+                b.icon = Some(glyph);
+                b.label.font = Font::proportional(CHROME_GLYPH);
+                b.label.color = theme::INK_MUTED;
+                b.padding = (CHROME_SIZE - CHROME_GLYPH) * 0.5;
+                b.padding_x = 0.0;
+                b.corner_radius = theme::RADIUS_SM;
+                b.fill_color = theme::SURFACE;
+                b.hover_fill = theme::SURFACE_ALT;
             })
         };
-        let collapse_sidebar_button = chrome("<");
-        let reveal_sidebar_button = chrome(">");
-        let collapse_tabs_button = chrome("^");
-        let reveal_tabs_button = chrome("v");
+        let collapse_sidebar_button = chrome(Glyph::ChevronLeft);
+        let reveal_sidebar_button = chrome(Glyph::ChevronRight);
+        let collapse_tabs_button = chrome(Glyph::ChevronUp);
+        let reveal_tabs_button = chrome(Glyph::ChevronDown);
         let inspector = ws.insert_node(Inspector::new());
 
         ws.insert_node_at(
@@ -133,15 +143,28 @@ impl Desktops {
     }
 }
 
-const DIVIDER_W: f32 = 6.0;
+const DIVIDER_W: f32 = theme::SPACE_MD;
 /// How close the pointer must come to a folded panel's edge to be offered a way back.
 const REVEAL_REACH: f32 = 48.0;
 /// The little square a collapse or reveal button is drawn into.
-const CHROME_SIZE: f32 = 16.0;
+const CHROME_SIZE: f32 = 18.0;
+/// The glyph inside it, leaving a ring of padding either side.
+const CHROME_GLYPH: f32 = 10.0;
 const SIDEBAR_MIN: f32 = 120.0;
 const SIDEBAR_MAX: f32 = 500.0;
-const TAB_BAR_H: f32 = 42.0;
-const TAB_SPACING: f32 = 6.0;
+/// The tab row's height, including the inset above and below the tabs.
+const TAB_BAR_H: f32 = TAB_ROW_INSET * 2.0 + TAB_H;
+/// A tab's own height, and the room the row offers one. A tab sizes itself to
+/// its title (a `TEXT_SM` line, plus `PAD_Y` either side, which comes to this)
+/// but is capped here, so changing the title's font cannot push a tab through
+/// the rule beneath it.
+const TAB_H: f32 = 26.0;
+/// Space above and below the tabs, between them and the row's edges. Smaller
+/// than the gap between tabs: a tab that reaches the rule below it looks like
+/// it is cutting through it.
+const TAB_ROW_INSET: f32 = theme::SPACE_SM;
+/// The gap between one tab and the next.
+const TAB_SPACING: f32 = theme::SPACE_MD;
 
 impl Desktops {
     /// Build a fresh canvas and its tab into the workspace, returning the canvas.
@@ -181,7 +204,7 @@ impl Node for Desktops {
             )
             .into(),
             0.0,
-            Color32::WHITE,
+            egui::Color32::from(theme::SURFACE),
         );
 
         let pointer: Option<ScreenPos> = ctx.ui.input(|i| i.pointer.latest_pos().map(Into::into));
@@ -254,23 +277,56 @@ impl Node for Desktops {
         };
 
         if let Some(&opened) = self.override_stack.last() {
-            // An override is open; draw a close button in the tab row and the override filling the content area.
-            ctx.draw_workspace_node(
+            // An override is open: the tab row becomes a title bar for it, and
+            // the thing itself sits on a card, so it reads as something opened
+            // over the canvas rather than as the canvas having gone blank.
+            let close_res = ctx.draw_workspace_node(
                 self.close_override_button.erase(),
                 DrawConstraints {
                     pos: right_origin
                         + Vector {
                             x: TAB_SPACING,
-                            y: TAB_SPACING,
+                            y: TAB_ROW_INSET,
                         },
                     x: Some(AxisConstraint::AtMost(
                         (right_w - 2.0 * TAB_SPACING).max(0.0),
                     )),
-                    y: Some(AxisConstraint::AtMost((TAB_BAR_H - TAB_SPACING).max(0.0))),
+                    y: Some(AxisConstraint::AtMost(TAB_H)),
                     wrap: WrapConstraints::NotAllowed,
                     should_clip: false,
                 },
             );
+
+            // Name what is open, beside the way out of it.
+            let close_w = close_res
+                .and_then(|r| r.region())
+                .map(|r| r.size().x)
+                .unwrap_or(0.0);
+            if let Some(node) = ctx.node.workspace.get_node(opened) {
+                let mut title = Label::new(node.type_name(NodeContext {
+                    id: opened,
+                    workspace: ctx.node.workspace,
+                }));
+                title.font = theme::text_small();
+                title.color = theme::INK_MUTED;
+                let title_pos = right_origin
+                    + Vector {
+                        x: TAB_SPACING + close_w + theme::SPACE_LG,
+                        y: TAB_ROW_INSET + (TAB_H - theme::TEXT_SM) * 0.5,
+                    };
+                ctx.draw_node(
+                    &title,
+                    DrawConstraints {
+                        pos: title_pos,
+                        x: Some(AxisConstraint::AtMost(
+                            (right_w - (title_pos.x - right_origin.x) - TAB_SPACING).max(0.0),
+                        )),
+                        y: None,
+                        wrap: WrapConstraints::NotAllowed,
+                        should_clip: true,
+                    },
+                );
+            }
             if ctx
                 .node
                 .workspace
@@ -279,7 +335,33 @@ impl Node for Desktops {
             {
                 ctx.submit_action_for_self::<Self, _>(PopOverride, "Close override");
             }
-            ctx.draw_workspace_node(opened, content_constraints);
+            // The card: inset from the panel, so the override has an edge.
+            let inset = theme::SPACE_LG;
+            let card_pos = content_pos + Vector::splat(inset);
+            let card_size = Vector {
+                x: (right_w - 2.0 * inset).max(0.0),
+                y: ((avail_h - tab_bar_h) - 2.0 * inset).max(0.0),
+            };
+            Rect {
+                size: card_size,
+                corner_radius: theme::RADIUS_LG,
+                fill_color: theme::SURFACE,
+                border: theme::border(),
+                stroke_kind: StrokeKind::Inside,
+            }
+            .paint(ctx.ui.painter(), card_pos);
+
+            let pad = theme::SPACE_MD;
+            ctx.draw_workspace_node(
+                opened,
+                DrawConstraints {
+                    pos: card_pos + Vector::splat(pad),
+                    x: Some(AxisConstraint::Exactly((card_size.x - 2.0 * pad).max(0.0))),
+                    y: Some(AxisConstraint::Exactly((card_size.y - 2.0 * pad).max(0.0))),
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip: true,
+                },
+            );
         } else if self.tabs_collapsed {
             ctx.draw_workspace_node(self.active.erase(), content_constraints);
         } else {
@@ -298,12 +380,12 @@ impl Node for Desktops {
                     pos: right_origin
                         + Vector {
                             x: TAB_SPACING,
-                            y: TAB_SPACING,
+                            y: TAB_ROW_INSET,
                         },
                     x: Some(AxisConstraint::AtMost(
                         (right_w - 2.0 * TAB_SPACING).max(0.0),
                     )),
-                    y: Some(AxisConstraint::AtMost((TAB_BAR_H - TAB_SPACING).max(0.0))),
+                    y: Some(AxisConstraint::AtMost(TAB_H)),
                     wrap: WrapConstraints::NotAllowed,
                     should_clip: false,
                 },
@@ -344,11 +426,11 @@ impl Node for Desktops {
                     .workspace
                     .send_request(self.divider, WasHovered)
                     .unwrap_or(false);
-            let divider_color = if divider_active {
-                Color32::from_gray(150)
+            let divider_color = egui::Color32::from(if divider_active {
+                theme::LINE_STRONG
             } else {
-                Color32::from_gray(220)
-            };
+                theme::LINE
+            });
             ctx.ui.painter().rect_filled(
                 ScreenRegion::from_min_size(
                     ScreenPos {
@@ -395,7 +477,7 @@ impl Node for Desktops {
                 )
                 .into(),
                 0.0,
-                Color32::from_gray(220),
+                egui::Color32::from(theme::LINE),
             );
         }
 
@@ -685,11 +767,19 @@ impl DesktopTabView {
         parent: NodeUid<Desktops>,
         name_text: String,
     ) -> NodeUid<DesktopTabView> {
-        let name = ws.insert_node(LabelEditable::click_to_edit(name_text));
+        let mut name_label = LabelEditable::click_to_edit(name_text);
+        // A tab title is chrome, not content.
+        name_label.font = theme::text_small();
+        name_label.color = theme::INK;
+        let name = ws.insert_node(name_label);
         let sensor = ws.insert_node(InteractionBox::sensing(false, true, false));
-        let delete_button = Button::build_with(ws.clone(), Label::new("×".to_owned()), |b| {
-            b.padding = 2.0;
-            b.corner_radius = 3.0;
+        let delete_button = Button::build_with(ws.clone(), Label::new(String::new()), |b| {
+            b.icon = Some(Glyph::Cross);
+            b.label.font = Font::proportional(theme::TEXT_XS);
+            b.label.color = theme::INK_FAINT;
+            b.padding = theme::SPACE_XS;
+            b.padding_x = 0.0;
+            b.corner_radius = theme::RADIUS_SM;
             b.border = Stroke::NONE;
         });
         ws.insert_node(Self {
@@ -721,7 +811,7 @@ pub struct TabInspector {
 impl TabInspector {
     fn build(ctx: NodeContext, tab: NodeUid<DesktopTabView>) -> NodeUid<TabInspector> {
         let ws = ctx.workspace.action_handle();
-        let command = |label: &str| Button::build(ws.clone(), Label::new(label.to_owned()));
+        let command = |label: &str| menu_button(ws.clone(), label);
         let clone_button = command("Clone desktop");
         let mirror_button = command("Mirror desktop");
         let delete_button = command("Delete");
@@ -836,21 +926,12 @@ impl Node for DesktopTabView {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        const PAD_X: f32 = 10.0;
-        const PAD_Y: f32 = 5.0;
+        const PAD_X: f32 = theme::SPACE_LG;
+        const PAD_Y: f32 = theme::SPACE_SM;
         /// Space between the name and the close button.
-        const GAP: f32 = 6.0;
+        const GAP: f32 = theme::SPACE_SM;
 
-        let avail_w = ctx
-            .constraints
-            .x
-            .map(|a| a.provided_value())
-            .unwrap_or(f32::INFINITY);
-        let avail_h = ctx
-            .constraints
-            .y
-            .map(|a| a.provided_value())
-            .unwrap_or(f32::INFINITY);
+        let avail = ctx.constraints.available();
         let origin = ctx.constraints.pos;
 
         let editing = ctx
@@ -866,8 +947,8 @@ impl Node for DesktopTabView {
             self.name.erase(),
             DrawConstraints {
                 pos: origin + Vector { x: PAD_X, y: PAD_Y },
-                x: Some(AxisConstraint::AtMost((avail_w - 2.0 * PAD_X).max(0.0))),
-                y: Some(AxisConstraint::AtMost((avail_h - 2.0 * PAD_Y).max(0.0))),
+                x: Some(AxisConstraint::AtMost((avail.x - 2.0 * PAD_X).max(0.0))),
+                y: Some(AxisConstraint::AtMost((avail.y - 2.0 * PAD_Y).max(0.0))),
                 wrap: WrapConstraints::NotAllowed,
                 should_clip: true,
             },
@@ -902,19 +983,25 @@ impl Node for DesktopTabView {
         let name_area_w = PAD_X + name_size.x + GAP;
         let tab_size = Vector {
             x: name_area_w + button_size.x + PAD_X,
-            y: name_size.y.max(button_size.y) + 2.0 * PAD_Y,
+            // Never taller than the row offers: the tab row's rule sits just
+            // below, and a tab that grows past its allowance cuts through it.
+            y: (name_size.y.max(button_size.y) + 2.0 * PAD_Y).min(avail.y),
         };
 
-        // Outline; the active tab gets a stronger accent.
-        let border = if active {
-            Stroke::new(1.5, Color::rgb(70, 130, 180))
+        // The active tab is the one with weight: a tinted ground and an accent
+        // edge. The rest are outlines, so the row reads as one strip.
+        let (fill_color, border) = if active {
+            (
+                theme::ACCENT_SOFT,
+                Stroke::new(theme::HAIRLINE, theme::ACCENT_MUTED),
+            )
         } else {
-            Stroke::new(1.0, Color::gray(210))
+            (Color::TRANSPARENT, theme::border())
         };
         let outline = Rect {
             size: tab_size,
-            corner_radius: 4.0,
-            fill_color: Color::TRANSPARENT,
+            corner_radius: theme::RADIUS_MD,
+            fill_color,
             border,
             stroke_kind: StrokeKind::Middle,
         };

@@ -2,18 +2,18 @@ pub mod editors;
 pub mod shapes;
 
 use dex_core::prelude::*;
+use dex_core::theme;
 use egui::{Color32, Stroke};
 use utils::Transient;
 
 use crate::composites::button::Button;
 use crate::layouts::canvas::layout::RemoveCanvasItem;
 
-use crate::layouts::inspector::PlacementCommands;
+use crate::layouts::inspector::{PlacementCommands, menu_button};
 use crate::layouts::vertical::VerticalLayout;
 use crate::primitives::{
     interaction::{ContainsPointer, InteractionBox, TakeClicked, WasDragged, WasHovered},
     shapes::Rect,
-    text::Label,
 };
 use crate::scripting::ValueDelegate;
 
@@ -101,10 +101,7 @@ impl CanvasNodeInspector {
             .workspace
             .send_request(child, CanvasItemDeletable)
             .unwrap_or(true);
-        let delete_button = Button::build(
-            ctx.workspace.action_handle(),
-            Label::new("Delete".to_owned()),
-        );
+        let delete_button = menu_button(ctx.workspace.action_handle(), "Delete");
         let placement = PlacementCommands::build_for_canvas_item(
             ctx.workspace.action_handle(),
             target.erase(),
@@ -222,7 +219,7 @@ impl Node for CanvasNode {
         let grip_fill = Color32::WHITE;
         let grip_stroke = Stroke::new(1.0, Color32::from_gray(165));
         let ghost_fill = Color32::from_rgba_unmultiplied(130, 130, 130, 26);
-        let ghost_stroke = Stroke::new(1.0, Color32::from_gray(150));
+        let ghost_stroke = Stroke::new(1.0, egui::Color32::from(theme::INK_FAINT));
 
         let canvas_origin = ctx.constraints.pos;
 
@@ -450,9 +447,9 @@ impl Node for CanvasNode {
             let handle_tl = display_tl - handle_offset;
             Rect {
                 size: HANDLE_SIZE,
-                corner_radius: 3.0,
+                corner_radius: theme::RADIUS_SM,
                 fill_color: if handle_hovered {
-                    Color32::from_gray(224)
+                    egui::Color32::from(theme::SURFACE_SUNKEN)
                 } else {
                     Color32::from_rgba_unmultiplied(0, 0, 0, 12)
                 }
@@ -463,9 +460,9 @@ impl Node for CanvasNode {
             .paint(ctx.ui.painter(), handle_tl);
 
             let dot_color = if handle_hovered {
-                Color32::from_gray(100)
+                egui::Color32::from(theme::INK_MUTED)
             } else {
-                Color32::from_gray(150)
+                egui::Color32::from(theme::INK_FAINT)
             };
             for cx in [HANDLE_SIZE.x * 0.34, HANDLE_SIZE.x * 0.66] {
                 for cy in [

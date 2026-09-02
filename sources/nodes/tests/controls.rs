@@ -120,6 +120,33 @@ impl App {
             _ => false,
         })
     }
+
+    /// Where every fold control was painted this frame.
+    fn fold_controls(&mut self) -> Vec<egui::Pos2> {
+        const CHROME_SIZE: f32 = 18.0;
+        let output = self.frame(vec![]);
+        output
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Rect(r)
+                    if (r.rect.width() - CHROME_SIZE).abs() < 0.5
+                        && (r.rect.height() - CHROME_SIZE).abs() < 0.5 =>
+                {
+                    Some(r.rect.min)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether the sidebar's own fold control was painted.
+    fn shows_sidebar_fold(&mut self) -> bool {
+        const SIDEBAR_EDGE_REACH: f32 = 300.0;
+        self.fold_controls()
+            .iter()
+            .any(|p| p.x < SIDEBAR_EDGE_REACH)
+    }
 }
 
 /// The tab is called Controls, and carries the environment, the editor and the
@@ -432,14 +459,14 @@ fn a_folded_panel_offers_its_way_back_near_the_edge() {
     // Pointer far from the left edge: nothing offered.
     app.frame(vec![egui::Event::PointerMoved(egui::pos2(900.0, 400.0))]);
     assert!(
-        !app.shows_text(">"),
+        !app.shows_sidebar_fold(),
         "no reveal button while the pointer is elsewhere"
     );
 
     // Near it, and the way back appears.
     app.frame(vec![egui::Event::PointerMoved(egui::pos2(10.0, 400.0))]);
     assert!(
-        app.shows_text(">"),
+        app.shows_sidebar_fold(),
         "the reveal button appears once the pointer is near the edge"
     );
 
@@ -448,7 +475,7 @@ fn a_folded_panel_offers_its_way_back_near_the_edge() {
     app.ws.process_pending();
     app.frame(vec![egui::Event::PointerMoved(egui::pos2(900.0, 400.0))]);
     assert!(
-        app.shows_text("<"),
+        app.shows_sidebar_fold(),
         "a showing panel always says how to fold it"
     );
 }

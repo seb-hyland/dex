@@ -1,4 +1,5 @@
 use dex_core::prelude::*;
+use dex_core::theme;
 use utils::Transient;
 
 use crate::{
@@ -23,7 +24,10 @@ use crate::{
         interaction::TakeClicked,
         number::{Float, Integer},
         shapes::{Circle, Path},
-        text::{CodeEditor, GetCommittedText, GetText, Label, LabelEditable, SetText},
+        text::{
+            CodeEditor, GetCommittedText, GetText, Label, LabelEditable, SetText,
+            TakeExternalEditRequest,
+        },
         typst::TypstEditor,
     },
 };
@@ -36,21 +40,21 @@ const TAB_HISTORY: usize = 2;
 const TAB_CONTROLS: usize = 3;
 
 /// The gap between tabs.
-const TAB_GAP: f32 = 4.0;
+const TAB_GAP: f32 = theme::SPACE_SM;
 
 /// How a tab looks: filled and outlined when it is the one showing, plain when it is not.
 fn tab_style(open: bool) -> SetButtonStyle {
     if open {
         SetButtonStyle {
-            fill_color: Color::rgba(70, 130, 180, 30),
-            border: Stroke::new(1.0, Color::rgb(70, 130, 180)),
-            text_color: Color::rgb(40, 80, 120),
+            fill_color: theme::ACCENT_SOFT,
+            border: Stroke::new(theme::HAIRLINE, theme::ACCENT_MUTED),
+            text_color: theme::ACCENT_STRONG,
         }
     } else {
         SetButtonStyle {
             fill_color: Color::TRANSPARENT,
             border: Stroke::NONE,
-            text_color: Color::gray(110),
+            text_color: theme::INK_MUTED,
         }
     }
 }
@@ -70,7 +74,6 @@ pub struct CanvasSidebar {
     backpack: NodeUid<VerticalDnD>,
 
     python_prelude: NodeUid<CodeEditor>,
-    prelude_ide_button: NodeUid<Button>,
     /// Where the prelude is checked out for external editing.
     #[dynamic(skip)]
     prelude_checkout: Transient<checkout::Checkout>,
@@ -125,11 +128,7 @@ impl CanvasSidebar {
     pub fn build(ws: WorkspaceActionHandle, desktops: NodeUid<Desktops>) -> NodeUid<CanvasSidebar> {
         let buttons = Self::OPTIONS
             .iter()
-            .map(|label| {
-                Button::build_with(ws.clone(), Label::new((*label).to_owned()), |b| {
-                    b.corner_radius = 5.0
-                })
-            })
+            .map(|label| Button::build(ws.clone(), Label::new((*label).to_owned())))
             .collect();
         let tab_buttons = TABS
             .iter()
@@ -137,56 +136,37 @@ impl CanvasSidebar {
             .map(|(i, name)| {
                 let style = tab_style(i == TAB_PROTOTYPES);
                 Button::build_with(ws.clone(), Label::new((*name).to_owned()), |b| {
-                    b.label.font = Font::proportional(13.0);
+                    b.label.font = theme::text_small();
                     b.label.color = style.text_color;
-                    b.padding = 5.0;
-                    b.corner_radius = 4.0;
+                    b.padding = theme::SPACE_SM;
                     b.fill_color = style.fill_color;
                     b.border = style.border;
                 })
             })
             .collect();
-        let backpack = VerticalDnD::build(ws.clone(), Vec::new(), 4.0);
-        let venv_button =
-            Button::build_with(ws.clone(), Label::new(venv_button_label(false)), |b| {
-                b.corner_radius = 4.0;
-                b.padding = 4.0;
-            });
-        let venv_clear_button =
-            Button::build_with(ws.clone(), Label::new("Clear".to_owned()), |b| {
-                b.corner_radius = 4.0;
-                b.padding = 4.0;
-            });
+        let backpack = VerticalDnD::build(ws.clone(), Vec::new(), theme::SPACE_SM);
+        let venv_button = Button::build(ws.clone(), Label::new(venv_button_label(false)));
+        let venv_clear_button = Button::build(ws.clone(), Label::new("Clear".to_owned()));
         // Starts on the default, so the field always shows what will run rather
         // than an empty box that means "whatever the default happens to be".
         let mut save_name_field = LabelEditable::new("workspace.dex".to_owned());
-        save_name_field.font = Font::monospaced(12.0);
+        save_name_field.font = Font::monospaced(theme::TEXT_SM);
         save_name_field.shrink_to_text = false;
         let save_name = ws.insert_node(save_name_field);
-        let small = |label: &str| {
-            Button::build_with(ws.clone(), Label::new(label.to_owned()), |b| {
-                b.corner_radius = 4.0;
-                b.padding = 4.0;
-            })
-        };
+        let small = |label: &str| Button::build(ws.clone(), Label::new(label.to_owned()));
         let save_dir_button = small(&save_dir_button_label(false));
         let save_button = small("Save");
         let load_button = small("Load");
 
         let mut editor = LabelEditable::new(crate::settings::DEFAULT_EDITOR.to_owned());
-        editor.font = Font::monospaced(12.0);
+        editor.font = Font::monospaced(theme::TEXT_SM);
 
         editor.shrink_to_text = false;
         let editor_field = ws.insert_node(editor);
         let mut prelude = CodeEditor::new(String::new(), "python".to_owned());
         prelude.fill = true;
-        prelude.font_size = 12.0;
+        prelude.font_size = theme::TEXT_SM;
         let python_prelude = ws.insert_node(prelude);
-        let prelude_ide_button =
-            Button::build_with(ws.clone(), Label::new("Open in IDE".to_owned()), |b| {
-                b.corner_radius = 5.0;
-                b.fill_width = true;
-            });
         ws.insert_node(Self {
             desktops,
             tab: TAB_PROTOTYPES,
@@ -194,7 +174,6 @@ impl CanvasSidebar {
             buttons,
             backpack,
             python_prelude,
-            prelude_ide_button,
             prelude_checkout: Transient::default(),
             venv: String::new(),
             venv_button,
@@ -318,12 +297,20 @@ impl CanvasSidebar {
 /// A section heading inside a tab.
 fn heading(text: &str) -> Label {
     let mut label = Label::new(text.to_owned());
-    label.font = Font::proportional(11.0);
-    label.color = Color::gray(120);
+    label.font = theme::text_heading();
+    label.color = theme::INK_MUTED;
     label
 }
 
 /// Muted body text, for a hint or an empty tab.
+fn muted(text: &str) -> Label {
+    let mut label = Label::new(text.to_owned());
+    label.font = theme::text_small();
+    label.color = theme::INK_FAINT;
+    label.singleline = false;
+    label
+}
+
 /// What the environment button says, given whether the browser is showing.
 fn venv_button_label(browsing: bool) -> String {
     if browsing { "Cancel" } else { "Choose…" }.to_owned()
@@ -332,14 +319,6 @@ fn venv_button_label(browsing: bool) -> String {
 /// The same, for the save folder's button.
 fn save_dir_button_label(browsing: bool) -> String {
     if browsing { "Cancel" } else { "Folder…" }.to_owned()
-}
-
-fn muted(text: &str) -> Label {
-    let mut label = Label::new(text.to_owned());
-    label.font = Font::proportional(12.0);
-    label.color = Color::gray(150);
-    label.singleline = false;
-    label
 }
 
 impl CanvasSidebar {
@@ -467,9 +446,10 @@ impl CanvasSidebar {
         y
     }
 
-    /// Draw the prelude editor and its external-editor button.
+    /// Draw the prelude editor, and honour any request it raised to be
+    /// opened in the user's own editor.
     fn draw_prelude(&self, ctx: &mut DrawContext, origin: ScreenPos, size: Vector) -> f32 {
-        const GAP: f32 = 6.0;
+        const GAP: f32 = theme::SPACE_MD;
         let mut y = 0.0;
 
         let drawn = ctx.draw_node(
@@ -484,32 +464,19 @@ impl CanvasSidebar {
         );
         y += drawn.region().map(|r| r.size().y).unwrap_or(14.0) + GAP;
 
-        let drawn = ctx.draw_workspace_node(
-            self.prelude_ide_button.erase(),
-            DrawConstraints {
-                pos: origin + Vector { x: 0.0, y },
-                x: Some(AxisConstraint::Exactly(size.x)),
-                y: None,
-                wrap: WrapConstraints::NotAllowed,
-                should_clip: true,
-            },
-        );
-        y += drawn
-            .and_then(|r| r.region())
-            .map(|r| r.size().y)
-            .unwrap_or(24.0)
-            + GAP;
-
+        // "Open in IDE" lives in the prelude editor's own inspector now, so
+        // the sidebar only has to answer the request it raises.
         if ctx
             .node
             .workspace
-            .send_request(self.prelude_ide_button.erase(), TakeClicked)
+            .send_request(self.python_prelude, TakeExternalEditRequest)
             .unwrap_or(false)
         {
             self.edit_prelude_externally(ctx.node);
         }
 
-        ctx.draw_workspace_node(
+        // Inspectable, so the lens can reach "Open in IDE" on the editor.
+        ctx.draw_inspectable_node(
             self.python_prelude.erase(),
             DrawConstraints {
                 pos: origin + Vector { x: 0.0, y },
@@ -555,7 +522,7 @@ impl CanvasSidebar {
         row(ctx, &mut y, &muted(&shown), false);
         if let Some(error) = &self.venv_error {
             let mut label = muted(error);
-            label.color = Color::rgb(180, 70, 60);
+            label.color = theme::DANGER;
             row(ctx, &mut y, &label, false);
         }
 
@@ -599,11 +566,11 @@ impl CanvasSidebar {
         // Bordered, so it reads as somewhere to type.
         let boxed = |child: LayoutChild| Bordered {
             child,
-            padding: 4.0,
-            corner_radius: 4.0,
+            padding: theme::SPACE_SM,
+            corner_radius: theme::RADIUS_MD,
             fill_color: Color::WHITE,
             border_width: 1.0,
-            border_color: Color::gray(190),
+            border_color: theme::LINE,
         };
         row(
             ctx,
@@ -639,7 +606,7 @@ impl CanvasSidebar {
         if let Some(note) = &self.save_note {
             let mut label = muted(note);
             if self.save_failed {
-                label.color = Color::rgb(180, 70, 60);
+                label.color = theme::DANGER;
             }
             row(ctx, &mut y, &label, false);
         }
@@ -805,7 +772,7 @@ impl Node for CanvasSidebar {
                 x: content_w,
                 y: 0.0,
             },
-            Stroke::new(1.0, Color::gray(225)),
+            Stroke::new(theme::HAIRLINE, theme::LINE),
         )
         .paint(ctx.ui.painter(), origin + Vector { x: PADDING, y });
         y += 8.0;
@@ -854,7 +821,6 @@ impl Node for CanvasSidebar {
         }
         ctx.workspace.delete_node(self.backpack.erase());
         ctx.workspace.delete_node(self.python_prelude.erase());
-        ctx.workspace.delete_node(self.prelude_ide_button.erase());
         ctx.workspace.delete_node(self.venv_button.erase());
         ctx.workspace.delete_node(self.venv_clear_button.erase());
         ctx.workspace.delete_node(self.editor_field.erase());

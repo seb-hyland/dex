@@ -1,4 +1,5 @@
 use dex_core::prelude::*;
+use dex_core::theme;
 
 use crate::primitives::shapes::{self, Path};
 
@@ -24,7 +25,7 @@ impl Node for CanvasRect {
         let region = shapes::Rect {
             size,
             border: Stroke::NONE,
-            corner_radius: 5.0,
+            corner_radius: theme::RADIUS_MD,
             fill_color: Color::rgb(255, 0, 0),
             stroke_kind: StrokeKind::Middle,
         }
@@ -81,13 +82,8 @@ impl Node for SectionDivider {
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {
-        const DIVIDER_HEIGHT: f32 = 2.0;
-        const DIVIDER_COLOR: Color = Color {
-            r: 96,
-            g: 96,
-            b: 96,
-            a: 255,
-        };
+        const DIVIDER_HEIGHT: f32 = theme::HAIRLINE;
+        const DIVIDER_COLOR: Color = theme::LINE;
 
         let Some(width) = ctx.constraints.x.map(|x_ax| x_ax.provided_value()) else {
             return DrawResult::Complete {

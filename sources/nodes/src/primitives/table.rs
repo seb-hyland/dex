@@ -17,6 +17,7 @@ use arrow::{
     util::display::{ArrayFormatter, FormatOptions},
 };
 use dex_core::prelude::*;
+use dex_core::theme;
 use egui::{Align, Color32, Layout, TextStyle};
 use egui_extras::{Column, TableBuilder};
 use memmap2::Mmap;
@@ -269,11 +270,11 @@ impl Node for Table {
             ScrollLayout::horizontal(LayoutChild::Node(Arc::new(widget))).with_id_salt(ctx.node.id);
         let bordered = Bordered {
             child: LayoutChild::Node(Arc::new(scroll)),
-            padding: 6.0,
-            corner_radius: 6.0,
+            padding: theme::SPACE_MD,
+            corner_radius: theme::RADIUS_LG,
             fill_color: Color::WHITE,
             border_width: 1.0,
-            border_color: Color::gray(180),
+            border_color: theme::LINE,
         };
         let constraints = ctx.constraints;
         ctx.draw_node(&bordered, constraints)

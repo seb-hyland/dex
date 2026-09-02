@@ -3,6 +3,7 @@ pub mod checkout;
 pub mod color_picker;
 pub mod dynamic;
 pub mod file_browser;
+pub mod icon;
 pub mod image;
 pub mod interaction;
 pub mod nothing;

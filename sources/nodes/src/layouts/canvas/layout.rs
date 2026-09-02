@@ -227,20 +227,11 @@ impl Node for Canvas {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        let avail_x = ctx
-            .constraints
-            .x
-            .map(|x_ax| x_ax.provided_value())
-            .unwrap_or(f32::INFINITY);
-        let avail_y = ctx
-            .constraints
-            .y
-            .map(|y_ax| y_ax.provided_value())
-            .unwrap_or(f32::INFINITY);
+        let avail = ctx.constraints.available();
 
         let size = Vector {
-            x: avail_x,
-            y: avail_y,
+            x: avail.x,
+            y: avail.y,
         };
         let origin = ctx.constraints.pos;
         let region = ScreenRegion::from_min_size(origin, size);
@@ -250,8 +241,8 @@ impl Node for Canvas {
             self.drag_interaction.erase(),
             DrawConstraints {
                 pos: origin,
-                x: Some(AxisConstraint::Exactly(avail_x)),
-                y: Some(AxisConstraint::Exactly(avail_y)),
+                x: Some(AxisConstraint::Exactly(avail.x)),
+                y: Some(AxisConstraint::Exactly(avail.y)),
                 wrap: WrapConstraints::NotAllowed,
                 should_clip: true,
             },
@@ -275,8 +266,8 @@ impl Node for Canvas {
         // A layer paints across the whole viewport and is clipped to it.
         let layer = DrawConstraints {
             pos: origin,
-            x: Some(AxisConstraint::Exactly(avail_x)),
-            y: Some(AxisConstraint::Exactly(avail_y)),
+            x: Some(AxisConstraint::Exactly(avail.x)),
+            y: Some(AxisConstraint::Exactly(avail.y)),
             wrap: WrapConstraints::NotAllowed,
             should_clip: true,
         };

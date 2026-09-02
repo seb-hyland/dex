@@ -1,4 +1,5 @@
 use dex_core::prelude::*;
+use dex_core::theme;
 use egui::UiBuilder;
 use typst::{
     Library, LibraryExt,
@@ -233,9 +234,13 @@ impl Node for TypstEditor {
 
             res
         } else {
-            const GAP: f32 = 6.0;
+            const GAP: f32 = theme::SPACE_MD;
             let preview_height = avail_h * 0.4;
-            let preview_res = ctx.draw_node(
+            // The preview hangs above the node while its code is being
+            // edited, which is outside the node's own box — so it goes on the
+            // overlay layer. Drawn normally it would be clipped away by the
+            // canvas item that owns this editor.
+            let preview_res = ctx.overlay_node(
                 &*preview,
                 DrawConstraints {
                     pos: ScreenPos {

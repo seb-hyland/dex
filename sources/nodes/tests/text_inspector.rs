@@ -5,6 +5,7 @@
 //! drive real clicks through real frames to check that round trip.
 
 use dex_core::prelude::*;
+use dex_core::theme;
 use dex_nodes::primitives::checkbox::Checkbox;
 use dex_nodes::primitives::text::{Label, LabelEditable};
 
@@ -188,8 +189,8 @@ fn the_colour_picker_recolours_the_label() {
 
     assert_eq!(
         rgba(label_of(&ws, label).color),
-        rgba(Color::BLACK),
-        "labels start black"
+        rgba(theme::INK),
+        "labels start at the theme's ink"
     );
 
     // The picker is the fifth row; clicking its swatch opens it.
@@ -314,12 +315,12 @@ fn a_pick_previews_on_the_label_and_commits_on_release() {
     let previewed = rgba(label_of(&ws, label).shown_color());
     assert_ne!(
         previewed,
-        rgba(Color::BLACK),
+        rgba(theme::INK),
         "the label draws the colour being dragged out"
     );
     assert_eq!(
         rgba(label_of(&ws, label).color),
-        rgba(Color::BLACK),
+        rgba(theme::INK),
         "but has not taken it for real, so the drag is not yet an undo step"
     );
 

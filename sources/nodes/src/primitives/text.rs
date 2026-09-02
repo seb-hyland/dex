@@ -1,4 +1,5 @@
 use dex_core::prelude::*;
+use dex_core::theme;
 use egui::{
     Align, Color32, FontId, Frame, Layout, Margin, Pos2, Rect, TextEdit, UiBuilder,
     text::{LayoutJob, TextWrapping},
@@ -6,11 +7,14 @@ use egui::{
 use egui_code_editor::{CodeEditor as CodeEditorWidget, ColorTheme, DEFAULT_THEMES, Syntax};
 use utils::Transient;
 
+use crate::composites::button::Button;
 use crate::layouts::vertical::VerticalLayout;
 use crate::primitives::checkbox::{Checkbox, IsChecked};
 use crate::primitives::color_picker::{
     ColorPicker, ColorSlot, PreviewFill, drop_preview, repicked,
 };
+use crate::primitives::icon::Glyph;
+use crate::primitives::interaction::TakeClicked;
 
 #[utils::dynamic_type]
 #[utils::portable]
@@ -110,8 +114,8 @@ impl Label {
         Self {
             text,
             singleline: true,
-            font: Font::proportional(16.0),
-            color: Color::BLACK,
+            font: theme::text(),
+            color: theme::INK,
             preview_color: Transient::default(),
         }
     }
@@ -289,8 +293,8 @@ impl LabelEditable {
             shrink_to_text: true,
             interactive: true,
             auto_lock: false,
-            font: Font::proportional(16.0),
-            color: Color::BLACK,
+            font: Font::proportional(theme::TEXT_LG),
+            color: theme::INK,
             preview_color: Transient::default(),
         }
     }
@@ -735,6 +739,13 @@ pub struct CodeEditor {
     pub theme: String,
     /// Highlighting language (e.g. "rust", "python")
     pub language: String,
+
+    /// Raised by the inspector when the user asks to edit this text in their
+    /// own editor. The editor itself cannot honour that — checking out needs
+    /// the source's globals and somewhere to write the edits back — so the
+    /// node that owns it takes the flag and does the work.
+    #[dynamic(skip)]
+    external_edit: Transient<bool>,
 }
 
 #[utils::dynamic_methods]
@@ -743,12 +754,13 @@ impl CodeEditor {
         Self {
             value,
             buf: Transient::default(),
-            font_size: 14.0,
+            font_size: theme::TEXT_SM,
             rows: 6,
             numlines: true,
             fill: false,
             theme: "Github Light".to_owned(),
             language,
+            external_edit: Transient::default(),
         }
     }
 }
@@ -757,6 +769,10 @@ impl CodeEditor {
 impl Node for CodeEditor {
     fn type_name(&self, _ctx: NodeContext) -> String {
         "A Code Editor".to_owned()
+    }
+
+    fn build_inspector(&self, ctx: NodeContext) -> Option<NodeUid> {
+        Some(CodeEditorInspector::build(ctx, ctx.id.cast()).erase())
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {
@@ -818,12 +834,21 @@ impl Node for CodeEditor {
         let origin = ctx.constraints.pos;
         let rect = Rect::from_min_size(origin.into(), size.into());
 
-        // When filling, derive the visible row count from the available height.
         let rows = if self.fill && row_h > 0.0 {
-            (block_h / row_h).floor().max(1.0) as usize
+            (((block_h - CHROME_H) / row_h).floor() - 1.0).max(1.0) as usize
         } else {
             self.rows
         };
+
+        let text = self.buf.val().clone().unwrap_or_else(|| self.value.clone());
+        let gutter = if self.numlines {
+            let lines = text.lines().count().max(rows).max(1);
+            // Matches the vendored editor's own measure: digits, half-width each.
+            lines.to_string().len() as f32 * self.font_size * 0.5
+        } else {
+            0.0
+        };
+        let text_w = (block_w - gutter - CHROME_H).max(char_w * MIN_COLS);
 
         let syntax = syntax_for(&self.language);
         let editor_id = egui::Id::new(ctx.node.id);
@@ -833,7 +858,7 @@ impl Node for CodeEditor {
             .with_rows(rows)
             .with_numlines(self.numlines)
             .with_theme(theme_for(&self.theme))
-            .desired_width(block_w);
+            .desired_width(text_w);
 
         // Update on focus loss
         if ctx
@@ -848,12 +873,19 @@ impl Node for CodeEditor {
         }
 
         let mut buf_mut = self.buf.val_mut_or_else(|| self.value.clone());
+        // The widget sizes itself to its text and scrolls internally, but a
+        // `max_rect` is only a hint — without a clip it paints its rows and
+        // line numbers straight past the box, and it is whatever contains the
+        // editor that ends up scrolling. The clip is what makes the editor a
+        // box that scrolls inside itself.
+        let clip = rect.intersect(ctx.ui.clip_rect());
         let drawn = ctx.ui.scope_builder(
             UiBuilder::new()
                 .max_rect(rect)
                 .id_salt(ctx.node.id)
                 .layout(Layout::top_down(Align::Min)),
             |ui| {
+                ui.set_clip_rect(clip);
                 editor.show(ui, &mut *buf_mut, &syntax);
             },
         );
@@ -866,6 +898,10 @@ impl Node for CodeEditor {
 }
 
 defhandlers! { CodeEditor {
+    actions: [
+        // Ask this editor's owner to check the text out to a file.
+        RequestExternalEdit => (this, _a) { this.external_edit.set(true); },
+    ],
     extern_actions: [
         SetText => (this, s) { this.value = s.value },
     ],
@@ -881,8 +917,78 @@ defhandlers! { CodeEditor {
         GetCommittedText => (this, _q): String {
             this.value.clone()
         },
+        // Taken, so the owner acts on the request once.
+        TakeExternalEditRequest => (this, _q): bool {
+            this.external_edit.val_mut().take().unwrap_or(false)
+        },
     ],
 }}
+
+/// The code editor's inspector: hand the text to the user's own editor.
+#[utils::portable]
+pub struct CodeEditorInspector {
+    /// The editor these commands act on.
+    #[uid_ref]
+    target: NodeUid<CodeEditor>,
+    open_button: NodeUid<Button>,
+    column: NodeUid<VerticalLayout>,
+}
+
+impl CodeEditorInspector {
+    fn build(ctx: NodeContext, target: NodeUid<CodeEditor>) -> NodeUid<CodeEditorInspector> {
+        let ws = ctx.workspace.action_handle();
+        let open_button =
+            Button::build_with(ws.clone(), Label::new("Open in IDE".to_owned()), |b| {
+                b.icon = Some(Glyph::External);
+                b.padding = theme::SPACE_SM;
+                b.padding_x = theme::SPACE_SM;
+                b.icon_gap = theme::SPACE_MD;
+                b.corner_radius = theme::RADIUS_SM;
+                b.border = Stroke::NONE;
+                b.fill_width = true;
+            });
+        let column = VerticalLayout::build(ws.clone(), vec![open_button.erase()], theme::SPACE_XS);
+        ws.insert_node(Self {
+            target,
+            open_button,
+            column,
+        })
+    }
+}
+
+#[utils::dynamic_node(skip)]
+impl Node for CodeEditorInspector {
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "Code".into()
+    }
+
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
+        let constraints = ctx.constraints;
+        let drawn = ctx.draw_workspace_node(self.column.erase(), constraints);
+
+        if ctx
+            .node
+            .workspace
+            .send_request(self.open_button.erase(), TakeClicked)
+            .unwrap_or(false)
+        {
+            ctx.node.workspace.submit_action(
+                self.target,
+                "Opened the script in an editor",
+                RequestExternalEdit,
+            );
+        }
+
+        drawn.unwrap_or(DrawResult::Complete { region: None })
+    }
+
+    fn on_delete(&self, ctx: NodeContext) {
+        ctx.workspace.delete_node(self.open_button.erase());
+        ctx.workspace.delete_node(self.column.erase());
+    }
+}
+
+defhandlers! { CodeEditorInspector {} }
 
 /// Resolve a theme name against the bundled themes, defaulting to Gruvbox.
 fn theme_for(name: &str) -> ColorTheme {

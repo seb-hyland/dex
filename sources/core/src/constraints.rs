@@ -16,6 +16,14 @@ pub struct DrawConstraints {
 
 #[utils::dynamic_methods]
 impl DrawConstraints {
+    /// The room on offer, on both axes at once. An unbounded axis reads as infinite.
+    pub fn available(&self) -> Vector {
+        Vector {
+            x: self.x.map_or(f32::INFINITY, |ax| ax.provided_value()),
+            y: self.y.map_or(f32::INFINITY, |ax| ax.provided_value()),
+        }
+    }
+
     pub fn fits(&self, size: Vector) -> bool {
         let x_fits = self.x.is_none_or(|x_ax| x_ax.provided_value() >= size.x);
         let y_fits = self.y.is_none_or(|y_ax| y_ax.provided_value() >= size.y);

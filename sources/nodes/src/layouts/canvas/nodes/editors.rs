@@ -1,18 +1,18 @@
 //! Bespoke on-canvas editors for nodes.
 
 use dex_core::prelude::*;
+use dex_core::theme;
 use egui::{Color32, Stroke as EguiStroke};
 use serde::{Deserialize, Serialize};
 use utils::Transient;
 
 use super::{CanvasItemBounds, CanvasNodeChild, NudgeCanvasItem};
-use crate::primitives::text::Label;
 use crate::scripting::ValueDelegate;
 use crate::{
     composites::button::Button,
     layouts::{
         canvas::layout::{RemoveCanvasItem, SwapCanvasItem},
-        inspector::PlacementCommands,
+        inspector::{PlacementCommands, menu_button},
         vertical::VerticalLayout,
     },
     primitives::{
@@ -307,8 +307,8 @@ impl CircleEditorMenu {
     fn build(ws: &Workspace, target: NodeUid, child: NodeUid) -> NodeUid<CircleEditorMenu> {
         let h = ws.action_handle();
         let placement = placement_commands(ws, target);
-        let convert_button = Button::build(h.clone(), Label::new("Convert to polygon".to_owned()));
-        let delete_button = Button::build(h.clone(), Label::new("Delete".to_owned()));
+        let convert_button = menu_button(h.clone(), "Convert to polygon");
+        let delete_button = menu_button(h.clone(), "Delete");
         let column = VerticalLayout::build(
             h,
             vec![
@@ -400,7 +400,7 @@ defhandlers! { CircleEditorMenu {} }
 fn bounds_of(points: impl IntoIterator<Item = Vector>) -> ScreenRegion {
     let mut points = points.into_iter();
     let Some(first) = points.next() else {
-        return ScreenRegion::from_min_size(ScreenPos::zero(), Vector::splat(0.0));
+        return ScreenRegion::from_min_size(ScreenPos::zero(), Vector::ZERO);
     };
     let (mut min, mut max) = (first, first);
     for p in points {
@@ -436,13 +436,12 @@ fn outline_bounds(anchors: &[Anchor]) -> ScreenRegion {
 /// when either end carries a handle so the marker sits on the drawn border
 /// rather than on the straight chord between the vertices.
 fn edge_midpoint(a: &Anchor, b: &Anchor) -> Vector {
-    let zero = Vector { x: 0.0, y: 0.0 };
     match (a.out_handle, b.in_handle) {
         (None, None) => (a.pos + b.pos) / 2.0,
         (out, inc) => {
             // A cubic Bézier at t = 0.5 is (p0 + 3c1 + 3c2 + p3) / 8.
-            let c1 = a.pos + out.unwrap_or(zero);
-            let c2 = b.pos + inc.unwrap_or(zero);
+            let c1 = a.pos + out.unwrap_or_default();
+            let c2 = b.pos + inc.unwrap_or_default();
             Vector {
                 x: (a.pos.x + 3.0 * c1.x + 3.0 * c2.x + b.pos.x) / 8.0,
                 y: (a.pos.y + 3.0 * c1.y + 3.0 * c2.y + b.pos.y) / 8.0,
@@ -461,13 +460,12 @@ fn split_edge(anchors: &[Anchor], i: usize) -> Vec<Anchor> {
     let j = (i + 1) % n;
     let mut out = anchors.to_vec();
     let (a, b) = (&anchors[i], &anchors[j]);
-    let zero = Vector { x: 0.0, y: 0.0 };
     if a.out_handle.is_none() && b.in_handle.is_none() {
         out.insert(i + 1, Anchor::corner((a.pos + b.pos) / 2.0));
         return out;
     }
-    let c1 = a.pos + a.out_handle.unwrap_or(zero);
-    let c2 = b.pos + b.in_handle.unwrap_or(zero);
+    let c1 = a.pos + a.out_handle.unwrap_or_default();
+    let c2 = b.pos + b.in_handle.unwrap_or_default();
     let m0 = (a.pos + c1) / 2.0;
     let m1 = (c1 + c2) / 2.0;
     let m2 = (c2 + b.pos) / 2.0;
@@ -725,13 +723,13 @@ impl Node for PathEditor {
                     self.pending_anchors.set(working.clone());
                 }
                 Grab::Out(i) if i < working.len() => {
-                    let nh = working[i].out_handle.unwrap_or(Vector::splat(0.0)) + delta;
+                    let nh = working[i].out_handle.unwrap_or(Vector::ZERO) + delta;
                     working[i].out_handle = Some(nh);
                     working[i].in_handle = Some(Vector { x: -nh.x, y: -nh.y });
                     self.pending_anchors.set(working.clone());
                 }
                 Grab::In(i) if i < working.len() => {
-                    let nh = working[i].in_handle.unwrap_or(Vector::splat(0.0)) + delta;
+                    let nh = working[i].in_handle.unwrap_or(Vector::ZERO) + delta;
                     working[i].in_handle = Some(nh);
                     working[i].out_handle = Some(Vector { x: -nh.x, y: -nh.y });
                     self.pending_anchors.set(working.clone());
@@ -819,7 +817,7 @@ impl Node for PathEditor {
 
         // Decorations.
         if near {
-            Path::unfilled(anchors.clone(), closed, Stroke::new(1.5, Color::gray(120)))
+            Path::unfilled(anchors.clone(), closed, Stroke::new(1.5, theme::INK_MUTED))
                 .paint(ctx.ui.painter(), shape_origin);
 
             let hover = ws.send_request(self.body, PointerPos).flatten();
@@ -989,7 +987,7 @@ impl PathEditorMenu {
             .send_request(child, GetStroke)
             .unwrap_or(Stroke::new(2.0, Color::BLACK));
         let border_picker = ColorPicker::build(h.clone(), "Border".to_owned(), stroke.color);
-        let delete_button = Button::build(h.clone(), Label::new("Delete".to_owned()));
+        let delete_button = menu_button(h.clone(), "Delete");
 
         let start = ws.send_request(child, HasStartArrow).unwrap_or(false);
         let end = ws.send_request(child, HasEndArrow).unwrap_or(false);
@@ -1004,7 +1002,7 @@ impl PathEditorMenu {
         let mut convert_button = None;
 
         if is_line {
-            let cv = Button::build(h.clone(), Label::new("Convert to polygon".to_owned()));
+            let cv = menu_button(h.clone(), "Convert to polygon");
             rows.push(start_arrow_check.erase());
             rows.push(end_arrow_check.erase());
             rows.push(border_picker.erase());
@@ -1110,7 +1108,7 @@ impl Node for PathEditorMenu {
                 .unwrap_or(Stroke::new(2.0, Color::BLACK));
             let pos = ws
                 .send_request(self.target, PathAnchorOrigin)
-                .unwrap_or(Vector::splat(0.0));
+                .unwrap_or(Vector::ZERO);
             let mut polygon = Path::open_through(split_edge(&anchors, 0), stroke);
             polygon.start_arrow = ws.send_request(child, HasStartArrow).unwrap_or(false);
             polygon.end_arrow = ws.send_request(child, HasEndArrow).unwrap_or(false);

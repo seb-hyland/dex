@@ -1,4 +1,5 @@
 use dex_core::prelude::*;
+use dex_core::theme;
 
 use crate::layouts::child::LayoutChild;
 use crate::layouts::vertical::VerticalLayout;
@@ -18,7 +19,7 @@ impl ErrorLayout {
     /// An error result displaying `message`.
     pub fn message(message: String) -> Self {
         let mut label = Label::new(message);
-        label.color = Color::rgb(200, 60, 60);
+        label.color = theme::DANGER;
         label.singleline = false; // wrap long error messages
         Self {
             child: LayoutChild::Node(Arc::new(label)),
@@ -39,7 +40,7 @@ impl Node for ErrorLayout {
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
         let mut header = Label::new("Error occurred".to_owned());
-        header.color = Color::rgb(200, 60, 60);
+        header.color = theme::DANGER;
         let body = VerticalLayout {
             children: vec![LayoutChild::Node(Arc::new(header)), self.child.clone()],
             spacing: 4.0,

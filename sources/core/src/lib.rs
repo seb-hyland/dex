@@ -19,7 +19,7 @@ pub mod snapshot;
 pub mod stubs;
 pub mod stubs_gen;
 mod style;
-mod theme;
+pub mod theme;
 mod workspace;
 
 pub mod prelude {
@@ -34,7 +34,10 @@ pub mod prelude {
         region::{ScreenPos, ScreenRegion, Vector},
         scripting::{NodeExtractor, NodeHandle},
         snapshot::GraphSnapshot,
-        style::{BOLD_FAMILY, BOLD_ITALIC_FAMILY, Color, Font, ITALIC_FAMILY, Stroke, StrokeKind},
+        style::{
+            BOLD_FAMILY, BOLD_ITALIC_FAMILY, Color, CursorIcon, Font, ITALIC_FAMILY, Stroke,
+            StrokeKind,
+        },
         workspace::{LoadWorkspace, SaveError, Workspace, WorkspaceActionHandle},
         *,
     };
@@ -140,6 +143,11 @@ impl<'ctx> DrawContext<'ctx> {
 
     pub fn request_skip_frame(&self) {
         self.ui.request_discard("need_skip");
+    }
+
+    /// Ask for `icon` as the pointer shape for the rest of this frame.
+    pub fn set_cursor(&self, icon: CursorIcon) {
+        self.ui.ctx().set_cursor_icon(icon.into());
     }
 
     pub(crate) fn reborrow<'rb>(&'rb mut self) -> DrawContext<'rb> {

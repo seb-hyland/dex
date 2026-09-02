@@ -55,15 +55,28 @@ impl Rect {
 }
 
 impl Rect {
+    /**
+        The rectangle as one shape, placed with its top-left at `top_left`.
+
+        Fill and border travel together, so a caller that has to reserve a slot
+        in the paint list — to put a frame *behind* content it must draw first
+        in order to know the frame's size — can fill that slot with this.
+    */
+    pub fn shape(&self, top_left: ScreenPos) -> egui::Shape {
+        egui::epaint::RectShape::new(
+            ScreenRegion::from_min_size(top_left, self.size).into(),
+            self.corner_radius,
+            self.fill_color,
+            self.border,
+            self.stroke_kind.into(),
+        )
+        .into()
+    }
+
     /// Paint the rectangle with its top-left corner at `top_left`.
     pub fn paint(&self, painter: &Painter, top_left: ScreenPos) -> ScreenRegion {
-        let region = ScreenRegion::from_min_size(top_left, self.size);
-        let fill: egui::Color32 = self.fill_color.into();
-        let border: egui::Stroke = self.border.into();
-        let stroke_kind: egui::StrokeKind = self.stroke_kind.into();
-
-        painter.rect(region.into(), self.corner_radius, fill, border, stroke_kind);
-        region
+        painter.add(self.shape(top_left));
+        ScreenRegion::from_min_size(top_left, self.size)
     }
 }
 
@@ -226,10 +239,7 @@ impl Path {
     /// An open, unfilled line from the origin along `span`.
     pub fn span(span: Vector, stroke: Stroke) -> Self {
         Self {
-            anchors: vec![
-                Anchor::corner(Vector { x: 0.0, y: 0.0 }),
-                Anchor::corner(span),
-            ],
+            anchors: vec![Anchor::corner(Vector::ZERO), Anchor::corner(span)],
             closed: false,
             filled: false,
             fill: Color::TRANSPARENT,
@@ -343,11 +353,10 @@ impl Path {
             match (a.out_handle, b.in_handle) {
                 (None, None) => points.push(at(b.pos)),
                 (out, inc) => {
-                    let zero = Vector { x: 0.0, y: 0.0 };
                     let control = [
                         at(a.pos),
-                        at(a.pos + out.unwrap_or(zero)),
-                        at(b.pos + inc.unwrap_or(zero)),
+                        at(a.pos + out.unwrap_or_default()),
+                        at(b.pos + inc.unwrap_or_default()),
                         at(b.pos),
                     ];
                     let bezier = egui::epaint::CubicBezierShape::from_points_stroke(
@@ -387,7 +396,7 @@ impl Path {
     pub fn paint(&self, painter: &Painter, origin: ScreenPos) -> ScreenRegion {
         let points = self.outline(origin);
         if points.is_empty() {
-            return ScreenRegion::from_min_size(origin, Vector { x: 0.0, y: 0.0 });
+            return ScreenRegion::from_min_size(origin, Vector::ZERO);
         }
         let region = egui::Rect::from_points(&points);
         let shown_stroke = self.shown_stroke();
@@ -764,7 +773,7 @@ mod tests {
     /// across the joins rather than kinked at the cardinal points.
     #[test]
     fn a_traced_circle_is_smooth_at_its_anchors() {
-        let path = Path::circle(Vector { x: 0.0, y: 0.0 }, 30.0, Color::WHITE, Stroke::NONE);
+        let path = Path::circle(Vector::ZERO, 30.0, Color::WHITE, Stroke::NONE);
         for a in &path.anchors {
             let (i, o) = (a.in_handle.expect("smooth"), a.out_handle.expect("smooth"));
             assert!((i.x + o.x).abs() < 1e-4 && (i.y + o.y).abs() < 1e-4);

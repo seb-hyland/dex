@@ -63,10 +63,10 @@ impl ScriptValue {
             ScriptValue::Int(i) => i.to_string(),
             ScriptValue::Float(f) => f.to_string(),
             ScriptValue::Bool(b) => b.to_string(),
-            ScriptValue::Node(_) => "⟨node⟩".to_owned(),
-            ScriptValue::Nothing => "⟨nothing⟩".to_owned(),
+            ScriptValue::Node(_) => "<node>".to_owned(),
+            ScriptValue::Nothing => "<nothing>".to_owned(),
             ScriptValue::Table(rb) => {
-                format!("⟨table {}×{}⟩", rb.num_rows(), rb.num_columns())
+                format!("(table {}×{})", rb.num_rows(), rb.num_columns())
             }
         }
     }

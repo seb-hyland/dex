@@ -2,6 +2,7 @@ use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 
 use dex_core::prelude::*;
+use dex_core::theme;
 use utils::Transient;
 
 use crate::{
@@ -10,6 +11,7 @@ use crate::{
         Bordered, HorizontalLayout, LayoutChild, ScrollLayout, VerticalLayout, error::ErrorLayout,
     },
     primitives::{
+        icon::Glyph,
         image::Image,
         interaction::WasClicked,
         table::Table,
@@ -95,19 +97,17 @@ impl FileBrowser {
         mode: BrowseFor,
         show_hidden: bool,
     ) -> FileBrowser {
-        let up_button = Button::build_with(ws.clone(), Label::new("⬆".to_owned()), |b| {
-            b.corner_radius = 4.0;
-            b.padding = 1.0;
-        });
+        let up_button = Button::build_icon(ws.clone(), Glyph::ArrowUp);
 
-        let path_label = LabelEditable::new(dir.clone());
+        let mut path_label = LabelEditable::new(dir.clone());
+        // A path is chrome above the list, not content.
+        path_label.font = theme::text_small();
+        path_label.color = theme::INK_MUTED;
         let path_field = ws.insert_node(path_label);
 
         let choose_button = matches!(mode, BrowseFor::PickedDirectory).then(|| {
             Button::build_with(ws.clone(), Label::new("Use this folder".to_owned()), |b| {
-                b.label.font = Font::proportional(14.0);
-                b.corner_radius = 4.0;
-                b.padding = 4.0;
+                b.label.font = theme::text();
                 b.fill_width = true;
             })
         });
@@ -170,13 +170,15 @@ impl FileBrowser {
                 .file_name()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let icon = if is_dir { "📁" } else { "📄" };
-            let mut label = Label::new(format!("{icon}  {name}"));
-            label.font = Font::proportional(14.0);
+            let mut label = Label::new(name);
+            label.font = theme::text();
             // A flat, full-width list row: no border, transparent, snug padding.
             let button = Button::build_with(ws.clone(), label, |b| {
-                b.padding = 3.0;
-                b.corner_radius = 3.0;
+                b.icon = Some(if is_dir { Glyph::Folder } else { Glyph::File });
+                b.icon_gap = theme::SPACE_MD;
+                b.padding = theme::SPACE_SM;
+                b.padding_x = theme::SPACE_XS;
+                b.corner_radius = theme::RADIUS_SM;
                 b.fill_color = Color::TRANSPARENT;
                 b.border = Stroke::NONE;
                 b.fill_width = true;
@@ -254,12 +256,12 @@ impl Node for FileBrowser {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        const HEADER_GAP: f32 = 6.0;
+        const HEADER_GAP: f32 = theme::SPACE_MD;
         const ROW_GAP: f32 = 1.0;
         /// The band kept for the "Use this folder" button.
         const FOOTER_FALLBACK: f32 = 30.0;
         /// Breathing room under the button, so it is not flush with the edge.
-        const FOOTER_PAD: f32 = 4.0;
+        const FOOTER_PAD: f32 = theme::SPACE_SM;
 
         // Header: up button and current path.
         let header = HorizontalLayout {
@@ -291,11 +293,11 @@ impl Node for FileBrowser {
         };
         let bordered = Bordered {
             child: LayoutChild::Node(Arc::new(body)),
-            padding: 6.0,
-            corner_radius: 6.0,
+            padding: theme::SPACE_MD,
+            corner_radius: theme::RADIUS_LG,
             fill_color: Color::WHITE,
             border_width: 1.0,
-            border_color: Color::gray(180),
+            border_color: theme::LINE,
         };
         let constraints = ctx.constraints;
         // The footer's band is taken out of the panel before it is drawn: a
@@ -547,11 +549,11 @@ impl Node for FileOpenError {
         };
         let bordered = Bordered {
             child: LayoutChild::Node(Arc::new(body)),
-            padding: 6.0,
-            corner_radius: 6.0,
+            padding: theme::SPACE_MD,
+            corner_radius: theme::RADIUS_LG,
             fill_color: Color::WHITE,
             border_width: 1.0,
-            border_color: Color::gray(180),
+            border_color: theme::LINE,
         };
         let constraints = ctx.constraints;
         let result = ctx.draw_node(&bordered, constraints);

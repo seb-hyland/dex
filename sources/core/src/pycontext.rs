@@ -105,19 +105,55 @@ impl PyDrawContext {
         node: Bound<'_, PyAny>,
         constraints: DrawConstraints,
     ) -> PyResult<DrawResult> {
-        let handle = node.extract::<NodeHandle>().ok();
-        let value = match handle {
-            Some(_) => None,
-            None => Some(<Arc<dyn Node> as FromDynamic>::from_dynamic(&node)?),
-        };
-
-        self.try_with(|ctx| match (&handle, &value) {
-            (Some(h), _) => ctx
-                .draw_workspace_node(h.0, constraints)
+        let child = Child::of(&node)?;
+        self.try_with(|ctx| match &child {
+            Child::Held(id) => ctx
+                .draw_workspace_node(*id, constraints)
                 .unwrap_or(DrawResult::Complete { region: None }),
-            (_, Some(arc)) => ctx.draw_node(&**arc, constraints),
-            _ => DrawResult::Complete { region: None },
+            Child::Value(arc) => ctx.draw_node(&**arc, constraints),
         })
+    }
+
+    /**
+        Draw `node` over everything else, ignoring this node's bounds.
+
+        The counterpart of `DrawContext::overlay_node`. Clip rectangles are
+        intersected down the draw tree, so this is the only way for a script
+        node to paint outside the box it was given — a preview that hangs off
+        its node, a drag ghost, a popup.
+    */
+    fn overlay_node(
+        &self,
+        node: Bound<'_, PyAny>,
+        constraints: DrawConstraints,
+    ) -> PyResult<DrawResult> {
+        let child = Child::of(&node)?;
+        self.try_with(|ctx| match &child {
+            Child::Held(id) => ctx
+                .overlay_workspace_node(*id, constraints)
+                .unwrap_or(DrawResult::Complete { region: None }),
+            Child::Value(arc) => ctx.overlay_node(&**arc, constraints),
+        })
+    }
+}
+
+/// The two forms a script may pass where a node is expected.
+enum Child {
+    /// A handle to a node the workspace already holds. Drawing it as a value
+    /// would wrap the handle object itself, so it is drawn by id instead.
+    Held(NodeUid),
+    /// Anything else, coerced into a node.
+    Value(Arc<dyn Node>),
+}
+
+impl Child {
+    fn of(node: &Bound<'_, PyAny>) -> PyResult<Self> {
+        match node.extract::<NodeHandle>() {
+            Ok(handle) => Ok(Self::Held(handle.0)),
+            Err(_) => Ok(Self::Value(<Arc<dyn Node> as FromDynamic>::from_dynamic(
+                node,
+            )?)),
+        }
     }
 }
 
@@ -355,6 +391,20 @@ dex_dynamic::__rt::inventory::submit! {
         ],
         constructible: false,
         variants: &[],
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    StubMethod {
+        owner: "DrawContext",
+        name: "overlay_node",
+        doc: "Draw `node` over everything else, ignoring this node's bounds.",
+        params: &[
+            StubField { name: "node", ty: "LayoutChild" },
+            StubField { name: "constraints", ty: "DrawConstraints" },
+        ],
+        returns: "DrawResult",
+        is_static: false,
     }
 }
 
