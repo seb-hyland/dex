@@ -17,6 +17,10 @@ use std::collections::HashSet;
 /// Short enough that the open picker does not fit below the lens, which is
 /// what used to make the menu flip away and close.
 const SHORT_SCREEN: egui::Vec2 = egui::vec2(1200.0, 640.0);
+/// Tall enough for the closed menu to hang below the lens in full: where the
+/// menu was *anchored* is only readable while the screen edge is not pushing
+/// it back up.
+const TALL_SCREEN: egui::Vec2 = egui::vec2(1200.0, 900.0);
 /// How far the lens sits outside the node's top-left corner.
 const HANDLE_OFFSET: f32 = 8.0;
 
@@ -165,7 +169,7 @@ fn menu_rect(ctx: &egui::Context) -> egui::Rect {
 
 #[test]
 fn the_menu_opens_beside_the_node_not_over_it() {
-    let open = open_the_menu(SHORT_SCREEN);
+    let open = open_the_menu(TALL_SCREEN);
     let menu = menu_rect(&open.ctx);
 
     assert!(

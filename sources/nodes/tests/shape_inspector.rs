@@ -90,12 +90,13 @@ fn row_height(ctx: &egui::Context, build: impl FnOnce(&Workspace) -> NodeUid) ->
 /**
     How far down the menu the shape's own controls start.
 
-    Copy, Mirror and the backpack commands head every canvas item's menu, this
-    one included, so the rows below them are offset by that whole block.
+    Copy, Mirror, the backpack commands and the restacking pair head every
+    canvas item's menu, this one included, so the rows below them are offset by
+    that whole block.
 */
 fn controls_top(ctx: &egui::Context) -> f32 {
     row_height(ctx, |ws| {
-        PlacementCommands::build(
+        PlacementCommands::build_for_canvas_item(
             ws.action_handle(),
             NodeUid::nil(),
             Vector { x: 90.0, y: 90.0 },

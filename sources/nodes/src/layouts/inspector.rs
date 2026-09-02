@@ -5,7 +5,10 @@ use utils::Transient;
 use crate::{
     composites::button::Button,
     layouts::{
-        LayoutChild, canvas::layout::PlaceOnCanvas, desktops::AddToBackpack, mirror::Mirror,
+        LayoutChild,
+        canvas::layout::{BringCanvasItemToFront, PlaceOnCanvas, SendCanvasItemToBack},
+        desktops::AddToBackpack,
+        mirror::Mirror,
         vertical::VerticalLayout,
     },
     primitives::{interaction::TakeClicked, shapes::Rect, text::Label},
@@ -288,6 +291,8 @@ pub struct PlacementCommands {
     mirror_button: NodeUid<Button>,
     keep_copy_button: NodeUid<Button>,
     keep_mirror_button: NodeUid<Button>,
+    front_button: Option<NodeUid<Button>>,
+    back_button: Option<NodeUid<Button>>,
     column: NodeUid<VerticalLayout>,
 }
 
@@ -298,6 +303,26 @@ impl PlacementCommands {
         ws: WorkspaceActionHandle,
         target: NodeUid,
         size: Vector,
+    ) -> NodeUid<PlacementCommands> {
+        Self::assemble(ws, target, size, false)
+    }
+
+    /// The same commands for a `target` that is a top-level canvas item.
+    pub fn build_for_canvas_item(
+        ws: WorkspaceActionHandle,
+        target: NodeUid,
+        size: Vector,
+    ) -> NodeUid<PlacementCommands> {
+        Self::assemble(ws, target, size, true)
+    }
+}
+
+impl PlacementCommands {
+    fn assemble(
+        ws: WorkspaceActionHandle,
+        target: NodeUid,
+        size: Vector,
+        restackable: bool,
     ) -> NodeUid<PlacementCommands> {
         let command = |label: &str| {
             Button::build_with(ws.clone(), Label::new(label.to_owned()), |b| {
@@ -311,14 +336,21 @@ impl PlacementCommands {
         let mirror_button = command("Mirror");
         let keep_copy_button = command("Copy to Backpack");
         let keep_mirror_button = command("Mirror to Backpack");
+        let front_button = restackable.then(|| command("Bring to Front"));
+        let back_button = restackable.then(|| command("Send to Back"));
         let column = VerticalLayout::build(
             ws.clone(),
-            vec![
-                copy_button.erase(),
-                mirror_button.erase(),
-                keep_copy_button.erase(),
-                keep_mirror_button.erase(),
-            ],
+            [
+                Some(copy_button.erase()),
+                Some(mirror_button.erase()),
+                Some(keep_copy_button.erase()),
+                Some(keep_mirror_button.erase()),
+                front_button.map(|b| b.erase()),
+                back_button.map(|b| b.erase()),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
             2.0,
         );
         ws.insert_node(Self {
@@ -328,6 +360,8 @@ impl PlacementCommands {
             mirror_button,
             keep_copy_button,
             keep_mirror_button,
+            front_button,
+            back_button,
             column,
         })
     }
@@ -392,6 +426,18 @@ impl Node for PlacementCommands {
                     mirror: true,
                 },
             );
+        } else if self.front_button.is_some_and(&taken) {
+            ws.submit_action(
+                root,
+                "Brought the item to the front",
+                BringCanvasItemToFront { node: self.target },
+            );
+        } else if self.back_button.is_some_and(taken) {
+            ws.submit_action(
+                root,
+                "Sent the item to the back",
+                SendCanvasItemToBack { node: self.target },
+            );
         }
 
         drawn.unwrap_or(DrawResult::Complete { region: None })
@@ -400,11 +446,16 @@ impl Node for PlacementCommands {
     fn on_delete(&self, ctx: NodeContext) {
         ctx.workspace.delete_node(self.column.erase());
         for button in [
-            self.copy_button,
-            self.mirror_button,
-            self.keep_copy_button,
-            self.keep_mirror_button,
-        ] {
+            Some(self.copy_button),
+            Some(self.mirror_button),
+            Some(self.keep_copy_button),
+            Some(self.keep_mirror_button),
+            self.front_button,
+            self.back_button,
+        ]
+        .into_iter()
+        .flatten()
+        {
             ctx.workspace.delete_node(button.erase());
         }
     }

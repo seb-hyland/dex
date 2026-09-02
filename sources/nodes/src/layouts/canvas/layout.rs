@@ -278,6 +278,20 @@ defhandlers! { Canvas {
                 this.children.push(a.node);
             }
         },
+        // Draw `node` last, so it sits over everything else on this surface.
+        BringCanvasItemToFront { node: NodeUid } => (this, a) {
+            if let Some(pos) = this.children.iter().position(|c| *c == a.node) {
+                let item = this.children.remove(pos);
+                this.children.push(item);
+            }
+        },
+        // Draw `node` first, so everything else on this surface sits over it.
+        SendCanvasItemToBack { node: NodeUid } => (this, a) {
+            if let Some(pos) = this.children.iter().position(|c| *c == a.node) {
+                let item = this.children.remove(pos);
+                this.children.insert(0, item);
+            }
+        },
         // Drop an item from the canvas; deleting it cascades to what it wraps.
         RemoveCanvasItem { node: NodeUid } => (this, a, ctx) {
             if let Some(pos) = this.children.iter().position(|c| *c == a.node) {

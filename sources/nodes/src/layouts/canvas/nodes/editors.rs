@@ -64,13 +64,13 @@ fn place_sensor(ctx: &mut DrawContext, sensor: NodeUid, center: ScreenPos, size:
     );
 }
 
-/// Copy, Mirror and the two backpack commands for an editor's own canvas item.
+/// Generic commands for top-level canvas elements.
 fn placement_commands(ws: &Workspace, target: NodeUid) -> NodeUid<PlacementCommands> {
     let size = ws
         .send_request(target, CanvasItemBounds)
         .map(|bounds| bounds.size())
         .unwrap_or(Vector::splat(80.0));
-    PlacementCommands::build(ws.action_handle(), target, size)
+    PlacementCommands::build_for_canvas_item(ws.action_handle(), target, size)
 }
 
 fn place_region(ctx: &mut DrawContext, sensor: NodeUid, region: ScreenRegion) {
