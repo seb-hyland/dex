@@ -3,8 +3,12 @@ use egui::{Pos2, Rect};
 use utils::Transient;
 
 use crate::{
+    composites::button::Button,
     layouts::canvas::nodes::{CanvasEditor, CanvasItemBounds, CanvasNode, NudgeCanvasItem},
-    primitives::interaction::{DragStartPos, InteractionBox, WasDragged},
+    primitives::{
+        interaction::{DragStartPos, InteractionBox, TakeClicked, WasDragged},
+        text::Label,
+    },
 };
 
 /**
@@ -152,10 +156,74 @@ impl Canvas {
     }
 }
 
+/// What a canvas adds to the inspector.
+#[utils::portable]
+pub struct CanvasInspector {
+    /// The surface to open.
+    #[uid_ref]
+    target: NodeUid,
+    fullscreen_button: NodeUid<Button>,
+}
+
+impl CanvasInspector {
+    fn build(ws: WorkspaceActionHandle, target: NodeUid) -> NodeUid<CanvasInspector> {
+        let fullscreen_button =
+            Button::build_with(ws.clone(), Label::new("Fullscreen".to_owned()), |b| {
+                b.padding = 4.0;
+                b.corner_radius = 3.0;
+                b.border = Stroke::NONE;
+                b.fill_width = true;
+            });
+        ws.insert_node(Self {
+            target,
+            fullscreen_button,
+        })
+    }
+}
+
+#[utils::dynamic_node(skip)]
+impl Node for CanvasInspector {
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Canvas Menu".into()
+    }
+
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
+        let constraints = ctx.constraints;
+        let drawn = ctx.draw_workspace_node(self.fullscreen_button.erase(), constraints);
+
+        let ws = ctx.node.workspace;
+        if ws
+            .send_request(self.fullscreen_button.erase(), TakeClicked)
+            .unwrap_or(false)
+        {
+            // Onto the root's override stack.
+            let root = ws.root();
+            ws.submit_action_dyn(Action {
+                dest: root,
+                description: "Opened a canvas fullscreen".into(),
+                body: Box::new(crate::layouts::desktops::PushOverride { node: self.target }),
+            });
+        }
+
+        drawn.unwrap_or(DrawResult::Complete { region: None })
+    }
+
+    fn on_delete(&self, ctx: NodeContext) {
+        ctx.workspace.delete_node(self.fullscreen_button.erase());
+    }
+}
+
+defhandlers! { CanvasInspector {} }
+
 #[utils::dynamic_node]
 impl Node for Canvas {
     fn type_name(&self, _ctx: NodeContext) -> String {
         "A Canvas".into()
+    }
+
+    /// A canvas offers to fill the window with itself.
+    fn build_inspector(&self, ctx: NodeContext) -> Option<NodeUid> {
+        Some(CanvasInspector::build(ctx.workspace.action_handle(), ctx.id).erase())
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {

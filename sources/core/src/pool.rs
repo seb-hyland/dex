@@ -123,7 +123,7 @@ impl<T: ?Sized> Reset for NodeUid<T> {
 /**
    A historical registry of all nodes and their changes over time.
 */
-#[derive(Serialize, Deserialize, Reset)]
+#[derive(Clone, Serialize, Deserialize, Reset)]
 pub struct Registry {
     /// An owned pool of all nodes that exist, at any time, in any place.
     pool: NodePool,
@@ -277,7 +277,7 @@ impl NodeObject {
    [`NodeRef`]s should never be used directly; the public API is [`NodeUid`]s.
    A [`NodeUid`] may point to different [`NodeRef`]s at different points in time (i.e., if it is replaced).
 */
-#[derive(Default, Serialize, Deserialize, Reset)]
+#[derive(Clone, Default, Serialize, Deserialize, Reset)]
 pub(crate) struct NodePool {
     inner: SlotMap<NodeRef, Arc<dyn Node>>,
 }

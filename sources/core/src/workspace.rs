@@ -21,6 +21,46 @@ use crate::{
     refs::{NodeRefs, remapped},
 };
 
+/// What a save file holds, borrowed on the way out.
+#[derive(Serialize)]
+struct Saved<'ws> {
+    root: NodeUid,
+    registry: &'ws Registry,
+}
+
+/// The same, owned, on the way back in.
+#[derive(Deserialize)]
+struct Restored {
+    root: NodeUid,
+    registry: Registry,
+}
+
+/// What went wrong saving or loading a workspace.
+#[derive(Debug)]
+pub enum SaveError {
+    Io(std::io::Error),
+    Encode(String),
+    Decode(String),
+}
+
+impl std::fmt::Display for SaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "{e}"),
+            Self::Encode(e) => write!(f, "could not write the workspace: {e}"),
+            Self::Decode(e) => write!(f, "not a dex workspace: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for SaveError {}
+
+impl From<std::io::Error> for SaveError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
 pub struct Workspace {
     /// The top-level display node
     root_node: NodeUid,
@@ -307,6 +347,29 @@ impl Workspace {
         self.actions_handle.submit_action_dyn(action);
     }
 
+    /// Write the workspace to `path`, in CBOR representation.
+    #[dynamic(skip)] // writes a file; not something a script should reach for
+    pub fn save_to(&self, path: &std::path::Path) -> Result<(), SaveError> {
+        let file = std::fs::File::create(path)?;
+        ciborium::into_writer(
+            &Saved {
+                root: self.root_node,
+                registry: &self.registry,
+            },
+            std::io::BufWriter::new(file),
+        )
+        .map_err(|e| SaveError::Encode(e.to_string()))
+    }
+
+    /// Read a workspace back from `path`, leaving this one untouched.
+    #[dynamic(skip)]
+    pub fn read_from(path: &std::path::Path) -> Result<(NodeUid, Registry), SaveError> {
+        let file = std::fs::File::open(path)?;
+        let saved: Restored = ciborium::from_reader(std::io::BufReader::new(file))
+            .map_err(|e| SaveError::Decode(e.to_string()))?;
+        Ok((saved.root, saved.registry))
+    }
+
     fn process_actions(&mut self) {
         while let Ok(act) = self.actions.try_recv() {
             // One epoch per queued action, so a group is a single undo step.
@@ -348,6 +411,13 @@ impl Workspace {
             },
             clone_as: CloneSubtreeAs => {
                 self.clone_subtree(clone_as.source, clone_as.ids.into_iter().collect());
+            },
+            // Swap this workspace's contents for a saved one.
+            load: LoadWorkspace => {
+                self.registry = load.registry;
+                self.root_node = load.root;
+                self.probe = InspectProbe::default();
+                while self.actions.try_recv().is_ok() {}
             },
             _ => self.apply_action(act),
         }
@@ -728,6 +798,16 @@ impl ActionBody for PushWorkspaceNode {}
 pub(crate) struct RemoveWorkspaceNode {
     pub uid: NodeUid,
 }
+
+/// Replace the whole workspace with one read from a file.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LoadWorkspace {
+    pub root: NodeUid,
+    pub registry: Registry,
+}
+
+#[typetag::serde]
+impl ActionBody for LoadWorkspace {}
 
 #[typetag::serde]
 impl ActionBody for RemoveWorkspaceNode {}

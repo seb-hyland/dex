@@ -55,6 +55,15 @@ pub struct Desktops {
     override_stack: Vec<NodeUid>,
     close_override_button: NodeUid<Button>,
 
+    /// Whether the sidebar and the tab row are folded away.
+    sidebar_collapsed: bool,
+    tabs_collapsed: bool,
+    /// The buttons that fold each away, and the ones that bring them back.
+    collapse_sidebar_button: NodeUid<Button>,
+    reveal_sidebar_button: NodeUid<Button>,
+    collapse_tabs_button: NodeUid<Button>,
+    reveal_tabs_button: NodeUid<Button>,
+
     /// The single inspector, drawn last so its handle sits over everything.
     inspector: NodeUid<Inspector>,
 }
@@ -83,6 +92,20 @@ impl Desktops {
         let add_button = Button::build(ws.clone(), Label::new("+".to_owned()));
         let divider = ws.insert_node(InteractionBox::sensing(true, false, true));
         let close_override_button = Button::build(ws.clone(), Label::new("← Close".to_owned()));
+        let chrome = |glyph: &str| {
+            Button::build_with(ws.clone(), Label::new(glyph.to_owned()), |b| {
+                b.label.font = Font::proportional(12.0);
+                b.label.color = Color::gray(110);
+                b.padding = 2.0;
+                b.corner_radius = 3.0;
+                b.fill_color = Color::WHITE;
+                b.border = Stroke::new(1.0, Color::gray(205));
+            })
+        };
+        let collapse_sidebar_button = chrome("<");
+        let reveal_sidebar_button = chrome(">");
+        let collapse_tabs_button = chrome("^");
+        let reveal_tabs_button = chrome("v");
         let inspector = ws.insert_node(Inspector::new());
 
         ws.insert_node_at(
@@ -98,6 +121,12 @@ impl Desktops {
                 sidebar_width: 200.0,
                 pending_sidebar_width: Transient::default(),
                 override_stack: Vec::new(),
+                sidebar_collapsed: false,
+                tabs_collapsed: false,
+                collapse_sidebar_button,
+                reveal_sidebar_button,
+                collapse_tabs_button,
+                reveal_tabs_button,
             },
         );
         id
@@ -105,6 +134,10 @@ impl Desktops {
 }
 
 const DIVIDER_W: f32 = 6.0;
+/// How close the pointer must come to a folded panel's edge to be offered a way back.
+const REVEAL_REACH: f32 = 48.0;
+/// The little square a collapse or reveal button is drawn into.
+const CHROME_SIZE: f32 = 16.0;
 const SIDEBAR_MIN: f32 = 120.0;
 const SIDEBAR_MAX: f32 = 500.0;
 const TAB_BAR_H: f32 = 42.0;
@@ -151,39 +184,71 @@ impl Node for Desktops {
             Color32::WHITE,
         );
 
+        let pointer: Option<ScreenPos> = ctx.ui.input(|i| i.pointer.latest_pos().map(Into::into));
+
+        // Left and right step through the tabs.
+        if self.override_stack.is_empty() && ctx.ui.memory(|m| m.focused()).is_none() {
+            let step = ctx.ui.input_mut(|i| {
+                let left = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft);
+                let right = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight);
+                match (left, right) {
+                    (true, false) => -1,
+                    (false, true) => 1,
+                    _ => 0,
+                }
+            });
+            if step != 0 {
+                ctx.submit_action_for_self::<Self, _>(StepTab { by: step }, "Stepped tabs");
+            }
+        }
+
         // Draw sidebar ----------------------------------------
         let pending = *self.pending_sidebar_width.val();
-        let sidebar_w = pending
-            .unwrap_or(self.sidebar_width)
-            .clamp(SIDEBAR_MIN, SIDEBAR_MAX);
+        // A folded sidebar takes no width at all; the divider goes with it.
+        let sidebar_w = if self.sidebar_collapsed {
+            0.0
+        } else {
+            pending
+                .unwrap_or(self.sidebar_width)
+                .clamp(SIDEBAR_MIN, SIDEBAR_MAX)
+        };
+        let divider_w = if self.sidebar_collapsed {
+            0.0
+        } else {
+            DIVIDER_W
+        };
 
         let divider_x = origin.x + sidebar_w;
-        let right_x = divider_x + DIVIDER_W;
-        let right_w = (avail_w - sidebar_w - DIVIDER_W).max(0.0);
+        let right_x = divider_x + divider_w;
+        let right_w = (avail_w - sidebar_w - divider_w).max(0.0);
         let right_origin = ScreenPos {
             x: right_x,
             y: origin.y,
         };
 
-        ctx.draw_workspace_node(
-            self.sidebar.erase(),
-            DrawConstraints {
-                pos: origin,
-                x: Some(AxisConstraint::Exactly(sidebar_w)),
-                y: Some(AxisConstraint::Exactly(avail_h)),
-                wrap: WrapConstraints::NotAllowed,
-                should_clip: true,
-            },
-        );
+        if !self.sidebar_collapsed {
+            ctx.draw_workspace_node(
+                self.sidebar.erase(),
+                DrawConstraints {
+                    pos: origin,
+                    x: Some(AxisConstraint::Exactly(sidebar_w)),
+                    y: Some(AxisConstraint::Exactly(avail_h)),
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip: true,
+                },
+            );
+        }
 
+        // A folded tab row leaves the content the whole height.
+        let tab_bar_h = if self.tabs_collapsed { 0.0 } else { TAB_BAR_H };
         let content_pos = ScreenPos {
             x: right_x,
-            y: origin.y + TAB_BAR_H,
+            y: origin.y + tab_bar_h,
         };
         let content_constraints = DrawConstraints {
             pos: content_pos,
             x: Some(AxisConstraint::Exactly(right_w)),
-            y: Some(AxisConstraint::Exactly((avail_h - TAB_BAR_H).max(0.0))),
+            y: Some(AxisConstraint::Exactly((avail_h - tab_bar_h).max(0.0))),
             wrap: WrapConstraints::NotAllowed,
             should_clip: true,
         };
@@ -215,6 +280,8 @@ impl Node for Desktops {
                 ctx.submit_action_for_self::<Self, _>(PopOverride, "Close override");
             }
             ctx.draw_workspace_node(opened, content_constraints);
+        } else if self.tabs_collapsed {
+            ctx.draw_workspace_node(self.active.erase(), content_constraints);
         } else {
             // Tab bar, then the add-canvas button, laid out in a row.
             let layout = HorizontalLayout {
@@ -254,59 +321,159 @@ impl Node for Desktops {
         }
 
         // Draw sidebar splitter ----------------------------------------
-        ctx.draw_workspace_node(
-            self.divider.erase(),
-            DrawConstraints {
-                pos: ScreenPos {
-                    x: divider_x,
-                    y: origin.y,
+        // Only while there is a sidebar to size: an edge with nothing on one
+        // side of it is not a handle.
+        if !self.sidebar_collapsed {
+            ctx.draw_workspace_node(
+                self.divider.erase(),
+                DrawConstraints {
+                    pos: ScreenPos {
+                        x: divider_x,
+                        y: origin.y,
+                    },
+                    x: Some(AxisConstraint::Exactly(DIVIDER_W)),
+                    y: Some(AxisConstraint::Exactly(avail_h)),
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip: false,
                 },
-                x: Some(AxisConstraint::Exactly(DIVIDER_W)),
-                y: Some(AxisConstraint::Exactly(avail_h)),
-                wrap: WrapConstraints::NotAllowed,
-                should_clip: false,
+            );
+
+            let divider_active = pending.is_some()
+                || ctx
+                    .node
+                    .workspace
+                    .send_request(self.divider, WasHovered)
+                    .unwrap_or(false);
+            let divider_color = if divider_active {
+                Color32::from_gray(150)
+            } else {
+                Color32::from_gray(220)
+            };
+            ctx.ui.painter().rect_filled(
+                ScreenRegion::from_min_size(
+                    ScreenPos {
+                        x: divider_x + DIVIDER_W * 0.5 - 0.5,
+                        y: origin.y,
+                    },
+                    Vector { x: 1.0, y: avail_h },
+                )
+                .into(),
+                0.0,
+                divider_color,
+            );
+
+            if let Some(delta) = ctx
+                .node
+                .workspace
+                .send_request(self.divider, WasDragged)
+                .flatten()
+            {
+                let base = pending.unwrap_or(self.sidebar_width);
+                self.pending_sidebar_width
+                    .set((base + delta.x).clamp(SIDEBAR_MIN, SIDEBAR_MAX));
+            } else if let Some(final_w) = pending {
+                *self.pending_sidebar_width.val_mut() = None;
+                ctx.submit_action_for_self::<Self, _>(
+                    SetSidebarWidth { width: final_w },
+                    "Resized sidebar",
+                );
+            }
+        }
+
+        // The rule under the tab row, matching the sidebar's own edge: the two
+        // panels are bounded the same way, so they read as the same kind of
+        // thing.
+        let tabs_line_y = origin.y + tab_bar_h;
+        if !self.tabs_collapsed {
+            ctx.ui.painter().rect_filled(
+                ScreenRegion::from_min_size(
+                    ScreenPos {
+                        x: right_origin.x,
+                        y: tabs_line_y - 0.5,
+                    },
+                    Vector { x: right_w, y: 1.0 },
+                )
+                .into(),
+                0.0,
+                Color32::from_gray(220),
+            );
+        }
+
+        // The fold controls, each sitting on the line it folds away.
+        let near = |edge: f32, vertical: bool| {
+            pointer.is_some_and(|p| {
+                let along = if vertical { p.x } else { p.y };
+                (along - edge).abs() <= REVEAL_REACH
+            })
+        };
+        // Centred on the line, then pushed back inside the window: a control
+        // half off the edge is half a control.
+        let chrome = |ctx: &mut DrawContext, button: NodeUid<Button>, centre: ScreenPos| {
+            let half = CHROME_SIZE * 0.5;
+            let at = ScreenPos {
+                x: (centre.x - half).clamp(origin.x, origin.x + avail_w - CHROME_SIZE),
+                y: (centre.y - half).clamp(origin.y, origin.y + avail_h - CHROME_SIZE),
+            };
+            ctx.draw_workspace_node(
+                button.erase(),
+                DrawConstraints {
+                    pos: at,
+                    x: Some(AxisConstraint::Exactly(CHROME_SIZE)),
+                    y: Some(AxisConstraint::Exactly(CHROME_SIZE)),
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip: false,
+                },
+            );
+        };
+
+        let (sidebar_button, tabs_button) = (
+            if self.sidebar_collapsed {
+                self.reveal_sidebar_button
+            } else {
+                self.collapse_sidebar_button
+            },
+            if self.tabs_collapsed {
+                self.reveal_tabs_button
+            } else {
+                self.collapse_tabs_button
             },
         );
 
-        let divider_active = pending.is_some()
-            || ctx
-                .node
-                .workspace
-                .send_request(self.divider, WasHovered)
-                .unwrap_or(false);
-        let divider_color = if divider_active {
-            Color32::from_gray(150)
-        } else {
-            Color32::from_gray(220)
-        };
-        ctx.ui.painter().rect_filled(
-            ScreenRegion::from_min_size(
+        // Halfway down the sidebar's edge.
+        if !self.sidebar_collapsed || near(origin.x, true) {
+            chrome(
+                &mut ctx,
+                sidebar_button,
                 ScreenPos {
-                    x: divider_x + DIVIDER_W * 0.5 - 0.5,
-                    y: origin.y,
+                    x: divider_x + divider_w * 0.5,
+                    y: origin.y + avail_h * 0.5,
                 },
-                Vector { x: 1.0, y: avail_h },
-            )
-            .into(),
-            0.0,
-            divider_color,
-        );
-
-        if let Some(delta) = ctx
-            .node
-            .workspace
-            .send_request(self.divider, WasDragged)
-            .flatten()
-        {
-            let base = pending.unwrap_or(self.sidebar_width);
-            self.pending_sidebar_width
-                .set((base + delta.x).clamp(SIDEBAR_MIN, SIDEBAR_MAX));
-        } else if let Some(final_w) = pending {
-            *self.pending_sidebar_width.val_mut() = None;
-            ctx.submit_action_for_self::<Self, _>(
-                SetSidebarWidth { width: final_w },
-                "Resized sidebar",
             );
+        }
+        // Halfway along the tab row's.
+        if !self.tabs_collapsed || near(origin.y, false) {
+            chrome(
+                &mut ctx,
+                tabs_button,
+                ScreenPos {
+                    x: right_origin.x + right_w * 0.5,
+                    y: tabs_line_y,
+                },
+            );
+        }
+
+        // Taken, so a click fires once and once only.
+        let clicked = |button: NodeUid<Button>| {
+            ctx.node
+                .workspace
+                .send_request(button.erase(), TakeClicked)
+                .unwrap_or(false)
+        };
+        if clicked(sidebar_button) {
+            ctx.submit_action_for_self::<Self, _>(ToggleSidebar, "Folded the sidebar");
+        }
+        if clicked(tabs_button) {
+            ctx.submit_action_for_self::<Self, _>(ToggleTabBar, "Folded the tab row");
         }
 
         // Last, and unclipped.
@@ -448,6 +615,25 @@ defhandlers! { Desktops {
             );
         },
         // Open `node` fullscreen in place of the tabs/canvas.
+        // Fold the sidebar away, or bring it back.
+        ToggleSidebar => (this, _a) { this.sidebar_collapsed = !this.sidebar_collapsed; },
+        // The same for the row of canvas tabs.
+        ToggleTabBar => (this, _a) { this.tabs_collapsed = !this.tabs_collapsed; },
+        // Show the tab `by` places along from the open one.
+        StepTab { by: isize } => (this, s, ctx) {
+            let ws = ctx.workspace;
+            let tabs = ws.send_request(this.tab_bar, Children).unwrap_or_default();
+            let canvases: Vec<NodeUid<Canvas>> = tabs
+                .iter()
+                .filter_map(|t| ws.send_request(t.cast::<DesktopTabView>(), TabCanvas))
+                .collect();
+            let at = canvases.iter().position(|c| *c == this.active);
+            if let Some(at) = at.filter(|_| canvases.len() > 1) {
+                let count = canvases.len() as isize;
+                let next = (at as isize + s.by).rem_euclid(count) as usize;
+                this.active = canvases[next];
+            }
+        },
         PushOverride { node: NodeUid } => (this, s) {
             this.override_stack.push(s.node);
         },
@@ -480,7 +666,7 @@ defhandlers! { Desktops {
 /// Display node for a single tab (labelled by canvas name).
 #[derive(Copy)]
 #[utils::portable]
-struct DesktopTabView {
+pub struct DesktopTabView {
     canvas: NodeUid<Canvas>,
     name: NodeUid<LabelEditable>,
     /// A back-reference to the root.

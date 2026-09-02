@@ -40,6 +40,26 @@ fn fake_venv(at: &Path) -> PathBuf {
     venv
 }
 
+/// The editable field under `root` whose value is `value`.
+///
+/// By content, not by type: the Controls tab has several editable fields, and
+/// "the only one" stopped being true the moment saving was added to it.
+fn field_showing(ws: &Workspace, root: NodeUid, value: &str) -> NodeUid {
+    owned_tree(ws, root)
+        .into_iter()
+        .find(|uid| {
+            ws.get_node(*uid)
+                .and_then(|node| {
+                    (*node)
+                        .as_any_ref()
+                        .downcast_ref::<LabelEditable>()
+                        .map(|l| l.value == value)
+                })
+                .unwrap_or(false)
+        })
+        .unwrap_or_else(|| panic!("a field showing {value:?}"))
+}
+
 /// Every node reachable from `root` by ownership.
 fn owned_tree(ws: &Workspace, root: NodeUid) -> Vec<NodeUid> {
     let mut seen = std::collections::HashSet::new();
@@ -377,14 +397,7 @@ fn the_editor_field_sets_the_command_a_checkout_is_opened_with() {
     );
     ws.process_pending();
 
-    // The tab's one editable field; the prelude is a code editor, not this.
-    let field = owned_tree(&ws, sidebar.erase())
-        .into_iter()
-        .find(|uid| {
-            ws.get_node(*uid)
-                .is_some_and(|node| (*node).as_any_ref().is::<LabelEditable>())
-        })
-        .expect("the settings tab has an editable command");
+    let field = field_showing(&ws, sidebar.erase(), settings::DEFAULT_EDITOR);
 
     // A tick first, so the poll has a baseline and does not read the initial
     // value as an edit.
@@ -562,13 +575,7 @@ fn the_editor_command_is_a_field_you_can_type_in() {
     ws.submit_action(sidebar, "settings", OpenSidebarTab { tab: 3 });
     ws.process_pending();
 
-    let field = owned_tree(&ws, sidebar.erase())
-        .into_iter()
-        .find(|uid| {
-            ws.get_node(*uid)
-                .is_some_and(|node| (*node).as_any_ref().is::<LabelEditable>())
-        })
-        .expect("the settings tab has a command field");
+    let field = field_showing(&ws, sidebar.erase(), settings::DEFAULT_EDITOR);
     let editable = ws
         .get_node(field)
         .and_then(|node| {

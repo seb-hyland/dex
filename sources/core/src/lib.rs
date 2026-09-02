@@ -35,7 +35,7 @@ pub mod prelude {
         scripting::{NodeExtractor, NodeHandle},
         snapshot::GraphSnapshot,
         style::{BOLD_FAMILY, BOLD_ITALIC_FAMILY, Color, Font, ITALIC_FAMILY, Stroke, StrokeKind},
-        workspace::{Workspace, WorkspaceActionHandle},
+        workspace::{LoadWorkspace, SaveError, Workspace, WorkspaceActionHandle},
         *,
     };
     pub use std::sync::Arc;
