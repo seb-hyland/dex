@@ -99,8 +99,13 @@ impl InspectProbe {
     }
 }
 
-/// The innermost node whose on-screen part, grown by `margin`, covers `pos`.
+/// The innermost node whose on-screen part covers `pos`, allowing `margin`.
 fn deepest_over(drawn: &[Drawn], pos: ScreenPos, margin: f32) -> Option<&Drawn> {
+    covering(drawn, pos, 0.0).or_else(|| covering(drawn, pos, margin))
+}
+
+/// The innermost node whose on-screen part, grown by `margin`, covers `pos`.
+fn covering(drawn: &[Drawn], pos: ScreenPos, margin: f32) -> Option<&Drawn> {
     drawn
         .iter()
         .filter(|entry| {

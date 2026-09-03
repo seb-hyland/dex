@@ -5,10 +5,7 @@ use utils::Transient;
 use crate::{
     composites::button::Button,
     layouts::canvas::nodes::{CanvasEditor, CanvasItemBounds, CanvasNode, NudgeCanvasItem},
-    primitives::{
-        interaction::{DragStartPos, InteractionBox, TakeClicked, WasDragged},
-        text::Label,
-    },
+    primitives::interaction::{DragStartPos, InteractionBox, TakeClicked, WasDragged},
 };
 
 /**
@@ -163,13 +160,9 @@ pub struct CanvasInspector {
 
 impl CanvasInspector {
     fn build(ws: WorkspaceActionHandle, target: NodeUid) -> NodeUid<CanvasInspector> {
+        // The same row, worded the same way, as the one every placement menu now carries.
         let fullscreen_button =
-            Button::build_with(ws.clone(), Label::new("Fullscreen".to_owned()), |b| {
-                b.padding = 4.0;
-                b.corner_radius = 3.0;
-                b.border = Stroke::NONE;
-                b.fill_width = true;
-            });
+            crate::layouts::inspector::menu_button(ws.clone(), "Open Fullscreen");
         ws.insert_node(Self {
             target,
             fullscreen_button,

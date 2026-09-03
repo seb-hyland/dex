@@ -143,13 +143,13 @@ class TiledLayout:
         runtime registers. Whatever comes back belongs to the inspector and is
         deleted when the menu closes, so do not hold on to it.
 
-        Nothing is offered by default: Copy and Mirror come from
-        `dex.PlacementCommands`, opted into here the same way a Rust node does.
+        Placement is *not* one of them. Copy, Mirror and the rest are added by
+        the inspector itself — for an item on a canvas, and for a node that is
+        some other node's result — so offering them here too puts every one of
+        those rows in the menu twice. What belongs here is whatever this node
+        alone can do.
         """
-        handle = ctx.workspace.action_handle()
-        return dex.PlacementCommands.build(
-            handle, ctx.id, dex.Vector.new(240.0, 180.0)
-        )
+        return None
 
     def on_delete(self, ctx):
         """Delete the children we own."""

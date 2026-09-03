@@ -23,6 +23,10 @@ const HANDLE_SIZE: Vector = Vector { x: 14.0, y: 22.0 };
 const MENU_WIDTH: f32 = 180.0;
 /// How far the pointer may stray from the menu before it closes.
 const MENU_SLACK: f32 = 36.0;
+/// Once the pointer is this near the lens, it holds its target outright.
+const LENS_GRACE: f32 = 24.0;
+/// How long a new node must hold the pointer before the lens moves to it.
+const LENS_DWELL: f64 = 0.18;
 /// A stable egui id: there is only ever one handle.
 const HANDLE_ID: &str = "dex_inspector_handle";
 
@@ -44,11 +48,77 @@ pub fn menu_button(ws: WorkspaceActionHandle, label: &str) -> NodeUid<Button> {
     })
 }
 
-/// Where the lens last sat, so an open menu keeps its place.
+/// Where the lens sits, and what is queued to take it over.
 #[derive(Clone)]
 pub struct HandleState {
     pub target: NodeUid,
     pub region: ScreenRegion,
+    /// What the pointer has wandered onto since, and when it got there.
+    pub candidate: Option<NodeUid>,
+    pub since: f64,
+}
+
+/// Where the lens sits for a target that drew into `region`.
+fn lens_region(region: ScreenRegion) -> ScreenRegion {
+    ScreenRegion::from_min_size(
+        ScreenPos {
+            x: region.min.x - HANDLE_OFFSET,
+            y: region.min.y - HANDLE_OFFSET,
+        },
+        HANDLE_SIZE,
+    )
+}
+
+/// Which node the lens should be offering, given what is under the pointer.
+fn settle(
+    held: Option<HandleState>,
+    found: Option<InspectTarget>,
+    pointer: Option<ScreenPos>,
+    now: f64,
+) -> Option<HandleState> {
+    let fresh = |target: InspectTarget| HandleState {
+        target: target.node,
+        region: target.region,
+        candidate: None,
+        since: now,
+    };
+    let Some(held) = held else {
+        // Nothing showing: the first thing under the pointer takes it.
+        return found.map(fresh);
+    };
+
+    // On the lens, or as good as. Whatever else the pointer is over, it is
+    // there to click this.
+    if pointer.is_some_and(|p| lens_region(held.region).distance_to(p) <= LENS_GRACE) {
+        return Some(HandleState {
+            candidate: None,
+            since: now,
+            ..held
+        });
+    }
+
+    // Still on the same node: follow it, in case it moved or resized.
+    if let Some(target) = &found
+        && target.node == held.target
+    {
+        return Some(fresh(target.clone()));
+    }
+
+    // Somewhere else — or nowhere, which is a candidate of its own, so that
+    // leaving the drawing puts the lens away rather than stranding it.
+    let candidate = found.as_ref().map(|t| t.node);
+    if held.candidate == candidate && now - held.since >= LENS_DWELL {
+        return found.map(fresh);
+    }
+    Some(HandleState {
+        candidate,
+        since: if held.candidate == candidate {
+            held.since
+        } else {
+            now
+        },
+        ..held
+    })
 }
 
 #[utils::portable]
@@ -97,6 +167,17 @@ impl Node for Inspector {
             _ => None,
         };
 
+        // Reaching for the lens means leaving the thing that offered it, so the
+        // lens waits for a new node to hold the pointer before it follows.
+        let pointer: Option<ScreenPos> = ctx.ui.ctx().pointer_latest_pos().map(Into::into);
+        let now = ctx.ui.ctx().input(|i| i.time);
+        let settled = settle(
+            held.clone().filter(|h| ws.get_node(h.target).is_some()),
+            found.clone(),
+            pointer,
+            now,
+        );
+
         let shown = match sticky {
             Some(target) if ws.get_node(target).is_some() => {
                 // Prefer this frame's region; fall back to where it last drew.
@@ -111,7 +192,7 @@ impl Node for Inspector {
                     });
                 region.map(|region| (target, region))
             }
-            _ => found.as_ref().map(|t| (t.node, t.region)),
+            _ => settled.as_ref().map(|h| (h.target, h.region)),
         };
 
         let Some((target, region)) = shown else {
@@ -123,13 +204,7 @@ impl Node for Inspector {
         };
 
         // Beside the node, in the margin, like the canvas handle it replaces.
-        let handle_region = ScreenRegion::from_min_size(
-            ScreenPos {
-                x: region.min.x - HANDLE_OFFSET,
-                y: region.min.y - HANDLE_OFFSET,
-            },
-            HANDLE_SIZE,
-        );
+        let handle_region = lens_region(region);
         // The inspector owns its chrome, so it interacts directly.
         let resp = ctx
             .ui
@@ -177,7 +252,16 @@ impl Node for Inspector {
             egui::Stroke::new(1.3, ink),
         );
 
-        self.handle.set(HandleState { target, region });
+        // What the sticky path settled on, if the menu overrode the dwell.
+        self.handle.set(match settled {
+            Some(state) if state.target == target => state,
+            _ => HandleState {
+                target,
+                region,
+                candidate: None,
+                since: now,
+            },
+        });
 
         // Opened by a click on the lens, and registered every frame.
         let inspector = self.inspector;
@@ -191,7 +275,7 @@ impl Node for Inspector {
         };
         let popup = Popup::menu(&resp)
             .kind(PopupKind::Tooltip)
-            .close_behavior(PopupCloseBehavior::IgnoreClicks)
+            .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
             .align(align)
             .align_alternatives(&[])
             .width(MENU_WIDTH);
@@ -311,6 +395,8 @@ pub struct PlacementCommands {
     keep_mirror_button: NodeUid<Button>,
     front_button: Option<NodeUid<Button>>,
     back_button: Option<NodeUid<Button>>,
+    /// Opens the target over the whole content area.
+    fullscreen_button: NodeUid<Button>,
     column: NodeUid<VerticalLayout>,
 }
 
@@ -349,6 +435,10 @@ impl PlacementCommands {
         let keep_mirror_button = command("Mirror to Backpack");
         let front_button = restackable.then(|| command("Bring to Front"));
         let back_button = restackable.then(|| command("Send to Back"));
+        // Offered to everything with these commands, not just to canvas items:
+        // a lambda's result has no place on the canvas to be restacked in, and
+        // is exactly the thing worth seeing big.
+        let fullscreen_button = command("Open Fullscreen");
         let column = VerticalLayout::build(
             ws.clone(),
             [
@@ -358,6 +448,7 @@ impl PlacementCommands {
                 Some(keep_mirror_button.erase()),
                 front_button.map(|b| b.erase()),
                 back_button.map(|b| b.erase()),
+                Some(fullscreen_button.erase()),
             ]
             .into_iter()
             .flatten()
@@ -373,6 +464,7 @@ impl PlacementCommands {
             keep_mirror_button,
             front_button,
             back_button,
+            fullscreen_button,
             column,
         })
     }
@@ -449,6 +541,12 @@ impl Node for PlacementCommands {
                 "Sent the item to the back",
                 SendCanvasItemToBack { node: self.target },
             );
+        } else if taken(self.fullscreen_button) {
+            ws.submit_action(
+                root.cast::<crate::layouts::desktops::Desktops>(),
+                "Opened fullscreen",
+                crate::layouts::desktops::PushOverride { node: self.target },
+            );
         }
 
         drawn.unwrap_or(DrawResult::Complete { region: None })
@@ -463,6 +561,7 @@ impl Node for PlacementCommands {
             Some(self.keep_mirror_button),
             self.front_button,
             self.back_button,
+            Some(self.fullscreen_button),
         ]
         .into_iter()
         .flatten()
@@ -566,5 +665,14 @@ defhandlers! { Inspector {
     requests: [
         // Whether a menu is currently up.
         InspectorOpen => (this, _q): bool { this.inspector.is_some() },
+        // The node the lens is offering, which is not always the one under the
+        // pointer: while the pointer is travelling to the lens, the lens holds.
+        LensTarget => (this, _q): Option<NodeUid> {
+            this.handle.val().as_ref().map(|held| held.target)
+        },
+        // Where the lens is drawn, for anything that has to reach it.
+        LensRegion => (this, _q): Option<ScreenRegion> {
+            this.handle.val().as_ref().map(|held| lens_region(held.region))
+        },
     ],
 }}

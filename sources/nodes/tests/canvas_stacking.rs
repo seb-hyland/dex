@@ -161,6 +161,8 @@ fn only_a_canvas_item_is_offered_the_restacking_commands() {
             "Copy to Backpack".to_owned(),
             "Mirror".to_owned(),
             "Mirror to Backpack".to_owned(),
+            // Offered to everything: a result is exactly what one wants big.
+            "Open Fullscreen".to_owned(),
         ],
         "a result has no draw order to move within"
     );
@@ -172,6 +174,7 @@ fn only_a_canvas_item_is_offered_the_restacking_commands() {
             "Copy to Backpack".to_owned(),
             "Mirror".to_owned(),
             "Mirror to Backpack".to_owned(),
+            "Open Fullscreen".to_owned(),
             "Send to Back".to_owned(),
         ],
         "an item on a surface can be raised and lowered"

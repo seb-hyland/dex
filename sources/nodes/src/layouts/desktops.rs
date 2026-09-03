@@ -742,6 +742,12 @@ defhandlers! { Desktops {
         crate::layouts::inspector::InspectorOpen => (this, s, ctx): bool {
             ctx.workspace.send_request(this.inspector, s).unwrap_or(false)
         },
+        crate::layouts::inspector::LensTarget => (this, s, ctx): Option<NodeUid> {
+            ctx.workspace.send_request(this.inspector, s).flatten()
+        },
+        crate::layouts::inspector::LensRegion => (this, s, ctx): Option<ScreenRegion> {
+            ctx.workspace.send_request(this.inspector, s).flatten()
+        },
     ],
 }}
 

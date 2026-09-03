@@ -203,6 +203,13 @@ impl ScreenRegion {
         }
     }
 
+    /// How far `point` lies outside this region, and zero if it is inside.
+    pub fn distance_to(self, point: ScreenPos) -> f32 {
+        let dx = (self.min.x - point.x).max(point.x - self.max.x).max(0.0);
+        let dy = (self.min.y - point.y).max(point.y - self.max.y).max(0.0);
+        dx.hypot(dy)
+    }
+
     pub fn expand(self, margin: f32) -> Self {
         ScreenRegion::from_min_max(
             ScreenPos {
@@ -383,5 +390,18 @@ mod tests {
         let r = region((100.0, 100.0), (200.0, 200.0));
         assert_at(r.edge_towards(at(120.0, 180.0)), at(150.0, 150.0));
         assert_at(r.edge_towards(at(150.0, 150.0)), at(150.0, 150.0));
+    }
+
+    /// Zero inside, the gap to the nearest edge outside, and the diagonal off a
+    /// corner — not the gap on one axis alone.
+    #[test]
+    fn distance_is_zero_inside_and_the_gap_outside() {
+        let r = region((0.0, 0.0), (10.0, 10.0));
+        assert_eq!(r.distance_to(at(5.0, 5.0)), 0.0);
+        assert_eq!(r.distance_to(at(0.0, 0.0)), 0.0);
+        assert_eq!(r.distance_to(at(14.0, 5.0)), 4.0);
+        assert_eq!(r.distance_to(at(5.0, -3.0)), 3.0);
+        // Off the corner: 3 across and 4 up is 5 away, not 4.
+        assert_eq!(r.distance_to(at(13.0, -4.0)), 5.0);
     }
 }

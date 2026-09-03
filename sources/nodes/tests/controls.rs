@@ -588,7 +588,7 @@ fn a_canvas_offers_to_go_fullscreen() {
     let labels = button_labels(&app.ws, inspector);
     assert_eq!(
         labels,
-        ["Fullscreen"],
+        ["Open Fullscreen"],
         "the canvas menu offers exactly one thing"
     );
 

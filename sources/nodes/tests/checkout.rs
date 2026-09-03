@@ -305,6 +305,9 @@ fn the_example_typechecks_against_the_stubs() {
         "shape_gallery.py",
         "scatterplot.py",
         "phylo_tree.py",
+        "circos.py",
+        "circos2.py",
+        "circos3.py",
     ] {
         let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../examples")

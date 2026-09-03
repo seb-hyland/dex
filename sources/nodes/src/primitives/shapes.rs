@@ -1,10 +1,14 @@
 use dex_core::prelude::*;
+use dex_core::theme;
 use egui::Painter;
 use utils::Transient;
 
 use crate::layouts::canvas::nodes::CanvasEditor;
 use crate::layouts::canvas::nodes::editors::{CircleEditor, PathEditor};
-use crate::primitives::color_picker::{PreviewFill, PreviewStroke};
+use crate::layouts::vertical::VerticalLayout;
+use crate::primitives::color_picker::{
+    ColorPicker, ColorSlot, PreviewFill, PreviewStroke, drop_preview, repicked,
+};
 
 /// A filled, optionally bordered rectangle.
 #[utils::dynamic_type]
@@ -609,6 +613,9 @@ impl Node for Path {
             region: Some(region),
         }
     }
+    fn build_inspector(&self, ctx: NodeContext) -> Option<NodeUid> {
+        Some(PathMenu::build(ctx.workspace, ctx.id, self.filled).erase())
+    }
 }
 
 defhandlers! { Path {
@@ -630,6 +637,11 @@ defhandlers! { Path {
         },
         SetPathStrokeColor { color: Color } => (this, a) {
             this.stroke.color = a.color;
+        },
+        // Line weight, so a path that scales with its container can keep its
+        // strokes in proportion.
+        SetPathStrokeWidth { width: f32 } => (this, a) {
+            this.stroke.width = a.width;
         },
         SetPathArrows { start: bool, end: bool } => (this, a) {
             this.start_arrow = a.start;
@@ -780,3 +792,88 @@ mod tests {
         }
     }
 }
+
+/// A [`Path`]'s inspector: the colours it is drawn in.
+#[utils::portable]
+pub struct PathMenu {
+    #[uid_ref]
+    target: NodeUid<Path>,
+    column: NodeUid<VerticalLayout>,
+    stroke_picker: NodeUid<ColorPicker>,
+    fill_picker: Option<NodeUid<ColorPicker>>,
+}
+
+impl PathMenu {
+    fn build(ws: &Workspace, target: NodeUid, filled: bool) -> NodeUid<PathMenu> {
+        let h = ws.action_handle();
+        // Seeded from the path as it stands, so the swatch opens showing the
+        // colour it is about to change rather than a default.
+        let stroke = ws.send_request(target, GetStroke).unwrap_or(Stroke::NONE);
+        let stroke_picker = ColorPicker::build(h.clone(), "Stroke".into(), stroke.color);
+        let fill_picker = filled.then(|| {
+            let fill = ws
+                .send_request(target, GetFill)
+                .unwrap_or(Color::TRANSPARENT);
+            ColorPicker::build(h.clone(), "Fill".into(), fill)
+        });
+
+        let mut rows = vec![stroke_picker.erase()];
+        rows.extend(fill_picker.map(NodeUid::erase));
+        let column = VerticalLayout::build(h, rows, theme::SPACE_XS);
+        ws.insert_node(Self {
+            target: target.cast(),
+            column,
+            stroke_picker,
+            fill_picker,
+        })
+    }
+}
+
+#[utils::dynamic_node(skip)]
+impl Node for PathMenu {
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Path Menu".into()
+    }
+
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
+        let constraints = ctx.constraints;
+        let drawn = ctx.draw_workspace_node(self.column.erase(), constraints);
+        let ws = ctx.node.workspace;
+        let target = self.target.erase();
+
+        if let Some(stroke) = ws.send_request(target, GetStroke)
+            && let Some(color) = repicked(
+                ws,
+                self.stroke_picker,
+                target,
+                ColorSlot::Stroke,
+                stroke.color,
+            )
+        {
+            ws.submit_action(target, "Set stroke colour", SetPathStrokeColor { color });
+        }
+        if let Some(picker) = self.fill_picker
+            && let Some(fill) = ws.send_request(target, GetFill)
+            && let Some(color) = repicked(ws, picker, target, ColorSlot::Fill, fill)
+        {
+            ws.submit_action(target, "Set fill colour", SetPathFill { color });
+        }
+
+        drawn.unwrap_or(DrawResult::Complete { region: None })
+    }
+
+    fn on_delete(&self, ctx: NodeContext) {
+        // The menu is going away mid-gesture if a preview is still showing; drop it.
+        drop_preview(ctx.workspace, self.target.erase(), ColorSlot::Stroke);
+        if self.fill_picker.is_some() {
+            drop_preview(ctx.workspace, self.target.erase(), ColorSlot::Fill);
+        }
+        ctx.workspace.delete_node(self.column.erase());
+        ctx.workspace.delete_node(self.stroke_picker.erase());
+        if let Some(picker) = self.fill_picker {
+            ctx.workspace.delete_node(picker.erase());
+        }
+    }
+}
+
+defhandlers! { PathMenu {} }
