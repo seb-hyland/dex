@@ -28,7 +28,7 @@ fn drawn_height(node: CodeEditor, offered: AxisConstraint) -> f32 {
         let _ = egui_ctx.run_ui(input.clone(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let mut ui = ui.new_child(egui::UiBuilder::new());
-                let mut draw_ctx = DrawContext::for_ui(
+                let mut draw_ctx = DrawContext::root(
                     NodeContext {
                         id: uid,
                         workspace: &ws,
@@ -124,7 +124,7 @@ fn an_editor_in_a_column_does_not_swallow_it() {
             LayoutChild::Node(std::sync::Arc::new(Label::new("under it".to_owned()))),
         ],
         spacing: 6.0,
-        fill_last: false,
+        sizing: Vec::new(),
     };
 
     let ws = Workspace::new_empty();
@@ -145,7 +145,7 @@ fn an_editor_in_a_column_does_not_swallow_it() {
         let _ = egui_ctx.run_ui(input.clone(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let mut ui = ui.new_child(egui::UiBuilder::new());
-                let mut draw_ctx = DrawContext::for_ui(
+                let mut draw_ctx = DrawContext::root(
                     NodeContext {
                         id: NodeUid::nil(),
                         workspace: &ws,

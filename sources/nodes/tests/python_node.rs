@@ -335,7 +335,7 @@ fn the_layout_draws_a_coloured_tile_per_child() {
         let _ = ctx2.run_ui(input.clone(), |c| {
             egui::CentralPanel::default().show(c, |ui| {
                 let mut ui = ui.new_child(egui::UiBuilder::new());
-                let mut dc = DrawContext::for_ui(
+                let mut dc = DrawContext::root(
                     NodeContext {
                         id: NodeUid::nil(),
                         workspace: &ws2,
@@ -490,7 +490,7 @@ class Wrapper:
     let _ = egui_ctx.run_ui(input, |c| {
         egui::CentralPanel::default().show(c, |ui| {
             let mut ui = ui.new_child(egui::UiBuilder::new());
-            let mut dc = DrawContext::for_ui(
+            let mut dc = DrawContext::root(
                 NodeContext {
                     id: NodeUid::nil(),
                     workspace: &ws,

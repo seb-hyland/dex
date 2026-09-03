@@ -68,7 +68,7 @@ fn row_height(ctx: &egui::Context, build: impl FnOnce(&Workspace) -> NodeUid) ->
                 wrap: WrapConstraints::NotAllowed,
                 should_clip: false,
             };
-            let mut draw = DrawContext::for_ui(
+            let mut draw = DrawContext::root(
                 NodeContext {
                     id: uid,
                     workspace: &ws,

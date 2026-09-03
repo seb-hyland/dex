@@ -30,7 +30,7 @@ fn drawn_unbounded(ws: &Workspace, root: NodeUid) -> Option<ScreenRegion> {
                 wrap: WrapConstraints::NotAllowed,
                 should_clip: false,
             };
-            let mut draw_ctx = DrawContext::for_ui(
+            let mut draw_ctx = DrawContext::root(
                 NodeContext {
                     id: root,
                     workspace: ws,

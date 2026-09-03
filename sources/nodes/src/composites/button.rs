@@ -122,10 +122,6 @@ impl Node for Button {
             should_clip: ctx.constraints.should_clip,
         };
 
-        // The frame sizes to its content, so it cannot be painted until the
-        // content is drawn — but it has to sit behind it. Reserve the slot.
-        let frame_idx = ctx.ui.painter().add(egui::Shape::Noop);
-
         let icon = self.icon();
         let lead = icon.map_or(0.0, |i| {
             i.size
@@ -136,77 +132,96 @@ impl Node for Button {
                 }
         });
 
-        let label_result = (!self.label.text.is_empty()).then(|| {
-            ctx.draw_node(
-                &self.label,
-                DrawConstraints {
-                    pos: content_origin + Vector { x: lead, y: 0.0 },
-                    x: content_constraints
-                        .x
-                        .map(|a| AxisConstraint::AtMost((a.provided_value() - lead).max(0.0))),
-                    ..content_constraints
-                },
-            )
-        });
-        // If the label couldn't fit and requested a new line, pass that request up.
-        if let Some(DrawResult::Wrap { continuation, .. }) = label_result {
-            return DrawResult::Wrap {
-                region: None,
-                continuation,
+        // How big the button ends up, given what its content took.
+        let sized = |content: Vector| {
+            let mut size = Vector {
+                x: content.x + 2.0 * pad_x,
+                y: content.y + 2.0 * pad_y,
             };
-        }
-        let label_size = label_result
-            .and_then(|r| r.region())
-            .map(|r| r.size())
-            .unwrap_or_default();
-
-        if let Some(icon) = icon {
-            // Centred against the label's line, so the two share a middle.
-            let drop = ((label_size.y - icon.size) * 0.5).max(0.0);
-            ctx.draw_node(
-                &icon,
-                DrawConstraints {
-                    pos: content_origin + Vector { x: 0.0, y: drop },
-                    ..content_constraints
-                },
-            );
-        }
-
-        let content_size = Vector {
-            x: lead + label_size.x,
-            y: label_size.y.max(icon.map_or(0.0, |i| i.size)),
+            // An unbounded offer is not a width to fill.
+            if self.fill_width
+                && let Some(w) = avail_w
+                && w.is_finite()
+            {
+                size.x = w;
+            }
+            size
         };
-
-        let mut button_size = Vector {
-            x: content_size.x + 2.0 * pad_x,
-            y: content_size.y + 2.0 * pad_y,
-        };
-
-        // An unbounded offer is not a width to fill.
-        if self.fill_width
-            && let Some(w) = avail_w
-            && w.is_finite()
-        {
-            button_size.x = w;
-        }
-
         let (fill, border) = if hovered {
             (self.hover_fill, self.hover_border)
         } else {
             (self.fill_color, self.border)
         };
+
+        // The frame sizes to its content, so it cannot be painted until that content has drawn.
+        let content = ctx.with_backdrop(
+            |ctx| {
+                let label_result = (!self.label.text.is_empty()).then(|| {
+                    ctx.draw_node(
+                        &self.label,
+                        DrawConstraints {
+                            pos: content_origin + Vector { x: lead, y: 0.0 },
+                            x: content_constraints.x.map(|a| {
+                                AxisConstraint::AtMost((a.provided_value() - lead).max(0.0))
+                            }),
+                            ..content_constraints
+                        },
+                    )
+                });
+                // A label that ran out of room asks to wrap; nothing is framed.
+                if let Some(DrawResult::Wrap { continuation, .. }) = label_result {
+                    return Err(continuation);
+                }
+                let label_size = label_result
+                    .and_then(|r| r.region())
+                    .map(|r| r.size())
+                    .unwrap_or_default();
+
+                if let Some(icon) = icon {
+                    // Centred against the label's line, so the two share a middle.
+                    let drop = ((label_size.y - icon.size) * 0.5).max(0.0);
+                    ctx.draw_node(
+                        &icon,
+                        DrawConstraints {
+                            pos: content_origin + Vector { x: 0.0, y: drop },
+                            ..content_constraints
+                        },
+                    );
+                }
+
+                Ok(Vector {
+                    x: lead + label_size.x,
+                    y: label_size.y.max(icon.map_or(0.0, |i| i.size)),
+                })
+            },
+            |content| {
+                content.as_ref().ok().map(|content| {
+                    Rect {
+                        size: sized(*content),
+                        corner_radius: self.corner_radius,
+                        fill_color: fill,
+                        border,
+                        stroke_kind: StrokeKind::Inside,
+                    }
+                    .shape(origin)
+                })
+            },
+        );
+
+        let content_size = match content {
+            Ok(size) => size,
+            // Pass the label's wrap request up.
+            Err(continuation) => {
+                return DrawResult::Wrap {
+                    region: None,
+                    continuation,
+                };
+            }
+        };
+        let button_size = sized(content_size);
         if hovered {
             ctx.set_cursor(self.cursor);
         }
-
-        let frame = Rect {
-            size: button_size,
-            corner_radius: self.corner_radius,
-            fill_color: fill,
-            border,
-            stroke_kind: StrokeKind::Inside,
-        };
-        ctx.ui.painter().set(frame_idx, frame.shape(origin));
 
         ctx.draw_workspace_node(
             self.interaction.erase(),

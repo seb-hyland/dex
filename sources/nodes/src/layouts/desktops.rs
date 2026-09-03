@@ -942,52 +942,6 @@ impl Node for DesktopTabView {
         let active =
             ctx.node.workspace.send_request(self.parent, ActiveCanvas) == Some(self.canvas);
 
-        // The editable name, inset by the padding.
-        let name_res = ctx.draw_workspace_node(
-            self.name.erase(),
-            DrawConstraints {
-                pos: origin + Vector { x: PAD_X, y: PAD_Y },
-                x: Some(AxisConstraint::AtMost((avail.x - 2.0 * PAD_X).max(0.0))),
-                y: Some(AxisConstraint::AtMost((avail.y - 2.0 * PAD_Y).max(0.0))),
-                wrap: WrapConstraints::NotAllowed,
-                should_clip: true,
-            },
-        );
-        let name_size = name_res
-            .and_then(|r| r.region())
-            .map(|r| r.size())
-            .unwrap_or(Vector { x: 48.0, y: 18.0 });
-
-        // The close button follows the name; drawn unconstrained, so it reports
-        // the natural size the tab is then sized around.
-        let button_res = ctx.draw_workspace_node(
-            self.delete_button.erase(),
-            DrawConstraints {
-                pos: origin
-                    + Vector {
-                        x: PAD_X + name_size.x + GAP,
-                        y: PAD_Y,
-                    },
-                x: None,
-                y: None,
-                wrap: WrapConstraints::NotAllowed,
-                should_clip: false,
-            },
-        );
-        let button_size = button_res
-            .and_then(|r| r.region())
-            .map(|r| r.size())
-            .unwrap_or(Vector { x: 14.0, y: 14.0 });
-
-        // Everything left of the close button is the tab's own click target.
-        let name_area_w = PAD_X + name_size.x + GAP;
-        let tab_size = Vector {
-            x: name_area_w + button_size.x + PAD_X,
-            // Never taller than the row offers: the tab row's rule sits just
-            // below, and a tab that grows past its allowance cuts through it.
-            y: (name_size.y.max(button_size.y) + 2.0 * PAD_Y).min(avail.y),
-        };
-
         // The active tab is the one with weight: a tinted ground and an accent
         // edge. The rest are outlines, so the row reads as one strip.
         let (fill_color, border) = if active {
@@ -998,14 +952,69 @@ impl Node for DesktopTabView {
         } else {
             (Color::TRANSPARENT, theme::border())
         };
-        let outline = Rect {
-            size: tab_size,
-            corner_radius: theme::RADIUS_MD,
-            fill_color,
-            border,
-            stroke_kind: StrokeKind::Middle,
-        };
-        outline.paint(ctx.ui.painter(), origin);
+
+        // The ground goes behind the title and the close button.
+        let (tab_size, name_area_w) = ctx.with_backdrop(
+            |ctx| {
+                // The editable name, inset by the padding.
+                let name_res = ctx.draw_workspace_node(
+                    self.name.erase(),
+                    DrawConstraints {
+                        pos: origin + Vector { x: PAD_X, y: PAD_Y },
+                        x: Some(AxisConstraint::AtMost((avail.x - 2.0 * PAD_X).max(0.0))),
+                        y: Some(AxisConstraint::AtMost((avail.y - 2.0 * PAD_Y).max(0.0))),
+                        wrap: WrapConstraints::NotAllowed,
+                        should_clip: true,
+                    },
+                );
+                let name_size = name_res
+                    .and_then(|r| r.region())
+                    .map(|r| r.size())
+                    .unwrap_or(Vector { x: 48.0, y: 18.0 });
+
+                // The close button follows the name.
+                // It is drawn unconstrained, so it reports the natural size the tab is then sized around.
+                let button_res = ctx.draw_workspace_node(
+                    self.delete_button.erase(),
+                    DrawConstraints {
+                        pos: origin
+                            + Vector {
+                                x: PAD_X + name_size.x + GAP,
+                                y: PAD_Y,
+                            },
+                        x: None,
+                        y: None,
+                        wrap: WrapConstraints::NotAllowed,
+                        should_clip: false,
+                    },
+                );
+                let button_size = button_res
+                    .and_then(|r| r.region())
+                    .map(|r| r.size())
+                    .unwrap_or(Vector { x: 14.0, y: 14.0 });
+
+                // Everything left of the close button is the tab's own click target.
+                let name_area_w = PAD_X + name_size.x + GAP;
+                let tab_size = Vector {
+                    x: name_area_w + button_size.x + PAD_X,
+                    // Never taller than the row offers.
+                    y: (name_size.y.max(button_size.y) + 2.0 * PAD_Y).min(avail.y),
+                };
+                (tab_size, name_area_w)
+            },
+            |(size, _)| {
+                Some(
+                    Rect {
+                        size: *size,
+                        corner_radius: theme::RADIUS_MD,
+                        fill_color,
+                        border,
+                        stroke_kind: StrokeKind::Middle,
+                    }
+                    .shape(origin),
+                )
+            },
+        );
 
         // Click/double-click sensor over the whole tab when not editing.
         if !editing {

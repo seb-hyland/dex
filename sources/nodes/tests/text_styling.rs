@@ -43,7 +43,7 @@ fn drawn_width(ctx: &egui::Context, label: Label) -> f32 {
             wrap: WrapConstraints::NotAllowed,
             should_clip: false,
         };
-        let mut draw = DrawContext::for_ui(
+        let mut draw = DrawContext::root(
             NodeContext {
                 id: uid,
                 workspace: &ws,

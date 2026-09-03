@@ -274,23 +274,21 @@ impl Node for FileBrowser {
         };
 
         // A scrollable column of the entry buttons.
-        let list_column = VerticalLayout {
-            children: self.rows.iter().map(|r| LayoutChild::from(*r)).collect(),
-            spacing: ROW_GAP,
-            fill_last: false,
-        };
+        let list_column = VerticalLayout::new(
+            self.rows.iter().map(|r| LayoutChild::from(*r)).collect(),
+            ROW_GAP,
+        );
         let list = ScrollLayout::vertical(LayoutChild::Node(Arc::new(list_column)))
-            .with_id_salt(ctx.node.id);
+            .with_id_salt(ctx.widget_id());
 
-        let body = VerticalLayout {
-            children: vec![
+        // The list claims whatever the header leaves.
+        let body = VerticalLayout::filling_last(
+            vec![
                 LayoutChild::Node(Arc::new(header)),
                 LayoutChild::Node(Arc::new(list)),
             ],
-            spacing: HEADER_GAP,
-            // The list claims the remaining height.
-            fill_last: true,
-        };
+            HEADER_GAP,
+        );
         let bordered = Bordered {
             child: LayoutChild::Node(Arc::new(body)),
             padding: theme::SPACE_MD,
@@ -545,7 +543,7 @@ impl Node for FileOpenError {
                 LayoutChild::Node(Arc::new(ErrorLayout::message(self.message.clone()))),
             ],
             spacing: 6.0,
-            fill_last: false,
+            sizing: Vec::new(),
         };
         let bordered = Bordered {
             child: LayoutChild::Node(Arc::new(body)),

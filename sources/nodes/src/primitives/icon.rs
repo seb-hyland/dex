@@ -142,16 +142,6 @@ impl Icon {
             width: 0.0,
         }
     }
-
-    /// The same, with the line weight chosen by hand.
-    pub fn weighted(glyph: Glyph, size: f32, color: Color, width: f32) -> Self {
-        Self {
-            glyph,
-            size,
-            color,
-            width,
-        }
-    }
 }
 
 impl Icon {

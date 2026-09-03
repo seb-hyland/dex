@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use utils::match_dyn;
 
 use crate::{
-    ActionBody, ActionFor, AxisConstraint, DrawConstraints, DrawContext, DrawResult, Node,
-    NodeContext, RequestFor, ScreenPos, ScreenRegion, Vector, WrapConstraints,
+    ActionBody, ActionFor, AxisConstraint, Color, DrawConstraints, DrawContext, DrawResult, Font,
+    Node, NodeContext, RequestFor, ScreenPos, ScreenRegion, TextMetrics, TextWrap, Vector,
+    WrapConstraints,
     compute::{ComputeScheduler, ComputeSchedulerHandle, ComputeTask},
     inspect::{InspectProbe, InspectTarget},
     messages::{Action, ActionGroup, Request, downcast_resp},
@@ -313,15 +314,14 @@ impl Workspace {
                 ui.set_clip_rect(draw_area);
                 // Claim the whole draw area so the layer's hit-test rect covers it.
                 ui.allocate_rect(draw_area, egui::Sense::hover());
-                let mut ctx = DrawContext {
-                    node: NodeContext {
+                let mut ctx = DrawContext::root(
+                    NodeContext {
                         id: root_node,
                         workspace: self,
                     },
                     constraints,
                     ui,
-                    depth: 0,
-                };
+                );
                 ctx.draw_workspace_node(root_node, constraints);
             });
     }
@@ -844,15 +844,6 @@ impl ActionBody for CommitOutput {}
 
 #[utils::dynamic_scoped(PyDrawContext)]
 impl<'ctx> DrawContext<'ctx> {
-    pub fn for_ui(node: NodeContext<'ctx>, constraints: DrawConstraints, ui: &'ctx mut Ui) -> Self {
-        DrawContext {
-            node,
-            constraints,
-            ui,
-            depth: 0,
-        }
-    }
-
     pub fn get_workspace_node(&self, id: NodeUid) -> Option<Arc<dyn Node>> {
         self.node.workspace.registry.get(id)
     }
@@ -872,37 +863,15 @@ impl<'ctx> DrawContext<'ctx> {
         };
         let clip_region = ScreenRegion::from_min_size(constraints.pos, clip_size);
 
-        if constraints.should_clip {
-            // Draw within a new child UI that is clipped
-
-            let mut child_ui = self.ui.new_child(UiBuilder::new());
-            // Intersect rather than replace: a child's clip narrows what its ancestors already allowed.
-            let clip = Rect::from(clip_region).intersect(self.ui.clip_rect());
-            child_ui.set_clip_rect(clip);
-
-            let temp_ctx = DrawContext {
-                node: NodeContext { id, workspace },
-                ui: &mut child_ui,
-                constraints,
-                depth: self.depth + 1,
-            };
-
+        // Intersect rather than replace: a child's clip narrows what its
+        // ancestors already allowed.
+        let clip = constraints
+            .should_clip
+            .then(|| Rect::from(clip_region).intersect(self.ui.clip_rect()));
+        self.descend(NodeContext { id, workspace }, constraints, clip, |ctx| {
             #[allow(deprecated)] // Private call
-            node.draw(temp_ctx)
-        } else {
-            let temp_ctx = DrawContext {
-                node: NodeContext {
-                    id: id.erase(),
-                    workspace,
-                },
-                constraints,
-                depth: self.depth + 1,
-                ..self.reborrow()
-            };
-
-            #[allow(deprecated)] // Private call
-            node.draw(temp_ctx)
-        }
+            node.draw(ctx)
+        })
     }
 
     pub fn draw_node(&mut self, node: &dyn Node, constraints: DrawConstraints) -> DrawResult {
@@ -917,12 +886,94 @@ impl<'ctx> DrawContext<'ctx> {
         let mut ui = self.ui.new_child(UiBuilder::new().layer_id(layer));
         ui.set_clip_rect(screen);
 
-        let mut ctx = DrawContext {
-            node: self.node,
-            constraints: self.constraints,
-            depth: self.depth,
-            ui: &mut ui,
+        let mut ctx = self.moved(&mut ui);
+        f(&mut ctx)
+    }
+
+    /**
+        Lay `text` out without drawing it.
+
+        Useful for a caller that has to know how big it comes out before it can decide anything.
+    */
+    #[dynamic(skip)] // hands back an egui galley; scripts get `measure_text`
+    pub fn lay_out_text(
+        &self,
+        text: &str,
+        font: Font,
+        color: Color,
+        wrap: TextWrap,
+    ) -> std::sync::Arc<egui::Galley> {
+        let mut job = egui::text::LayoutJob::single_section(
+            text.to_owned(),
+            font.text_format(self.ui.ctx(), color),
+        );
+        job.break_on_newline = wrap.break_on_newline;
+        job.wrap = if wrap.truncate {
+            egui::text::TextWrapping::truncate_at_width(wrap.max_width)
+        } else {
+            egui::text::TextWrapping {
+                max_width: wrap.max_width,
+                ..Default::default()
+            }
         };
+        self.ui.ctx().fonts_mut(|f| f.layout_job(job))
+    }
+
+    /// How big `text` comes out in `font`, without drawing it.
+    pub fn measure_text(&self, text: String, font: Font, wrap: TextWrap) -> TextMetrics {
+        let galley = self.lay_out_text(&text, font, Color::BLACK, wrap);
+        TextMetrics {
+            width: galley.rect.width(),
+            height: galley.rect.height(),
+            row_height: galley.rows.first().map_or(0.0, |r| r.height()),
+            rows: galley.rows.len() as u32,
+        }
+    }
+
+    /// The height of one line of `font`, for centring something against it.
+    pub fn row_height(&self, font: Font) -> f32 {
+        self.ui
+            .ctx()
+            .fonts_mut(|f| f.row_height(&font.font_id_in(self.ui.ctx())))
+    }
+
+    /// Draw something, then paint a backdrop behind it.
+    #[dynamic(skip)] // takes closures, which cannot cross into Python
+    pub fn with_backdrop<R>(
+        &mut self,
+        draw: impl FnOnce(&mut DrawContext<'_>) -> R,
+        backdrop: impl FnOnce(&R) -> Option<egui::Shape>,
+    ) -> R {
+        let slot = self.ui.painter().add(egui::Shape::Noop);
+        let drawn = draw(self);
+        if let Some(shape) = backdrop(&drawn) {
+            self.ui.painter().set(slot, shape);
+        }
+        drawn
+    }
+
+    /// Draw `node` without showing it, to find out how big it comes out.
+    #[dynamic(skip)] // `&dyn Node`; scripts use `measure_workspace_node`
+    pub fn measure_node(&mut self, node: &dyn Node, constraints: DrawConstraints) -> DrawResult {
+        self.sizing_draw(|ctx| ctx.draw_node(node, constraints))
+    }
+
+    /// Measure a node the workspace holds. See [`DrawContext::measure_node`].
+    pub fn measure_workspace_node(
+        &mut self,
+        id: NodeUid,
+        constraints: DrawConstraints,
+    ) -> Option<DrawResult> {
+        self.sizing_draw(|ctx| ctx.draw_workspace_node(id, constraints))
+    }
+
+    /// Run `f` as a sizing draw: invisible, and marked so nothing records state.
+    #[dynamic(skip)]
+    fn sizing_draw<R>(&mut self, f: impl FnOnce(&mut DrawContext<'_>) -> R) -> R {
+        let mut ui = self
+            .ui
+            .new_child(UiBuilder::new().invisible().sizing_pass());
+        let mut ctx = self.sizing(&mut ui);
         f(&mut ctx)
     }
 

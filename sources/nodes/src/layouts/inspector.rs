@@ -212,7 +212,8 @@ impl Node for Inspector {
                 wrap: WrapConstraints::NotAllowed,
                 should_clip: false,
             };
-            let mut menu_ctx = DrawContext::for_ui(node, constraints, ui);
+            // The menu draws into a `Ui` of the popup's.
+            let mut menu_ctx = ctx.child(ui, node, constraints);
             let drawn = menu_ctx.draw_workspace_node(inspector, constraints);
             if let Some(size) = drawn.and_then(|r| r.region()).map(|r| r.size())
                 && size.x.is_finite()

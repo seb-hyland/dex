@@ -57,7 +57,7 @@ impl Field {
                     wrap: WrapConstraints::NotAllowed,
                     should_clip: true,
                 };
-                let mut draw = DrawContext::for_ui(
+                let mut draw = DrawContext::root(
                     NodeContext {
                         id: uid.erase(),
                         workspace: ws,

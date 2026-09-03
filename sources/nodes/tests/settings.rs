@@ -740,7 +740,7 @@ fn the_choose_button_is_not_clipped_by_the_band_kept_for_it() {
                     wrap: WrapConstraints::NotAllowed,
                     should_clip: true,
                 };
-                let mut draw = DrawContext::for_ui(
+                let mut draw = DrawContext::root(
                     NodeContext {
                         id: browser.erase(),
                         workspace: ws,

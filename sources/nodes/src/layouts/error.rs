@@ -44,7 +44,7 @@ impl Node for ErrorLayout {
         let body = VerticalLayout {
             children: vec![LayoutChild::Node(Arc::new(header)), self.child.clone()],
             spacing: 4.0,
-            fill_last: false,
+            sizing: Vec::new(),
         };
         let constraints = ctx.constraints;
         ctx.draw_node(&body, constraints)

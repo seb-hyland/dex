@@ -103,10 +103,6 @@ impl Canvas {
         })
     }
 
-    pub fn push_child(&mut self, child: NodeUid) {
-        self.children.push(child);
-    }
-
     fn screen_offset(&self) -> Vector {
         self.screen_offset.val().unwrap_or(Vector::splat(0.0))
     }

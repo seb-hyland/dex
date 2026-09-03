@@ -90,7 +90,15 @@ impl Node for InteractionBox {
 
         let resp = ctx
             .ui
-            .interact(region.into(), egui::Id::new(ctx.node.id), self.to_sense());
+            .interact(region.into(), ctx.widget_id(), self.to_sense());
+        // A sizing draw only wants the region; recording what it "saw" would
+        // overwrite the real draw's state with a phantom.
+        if ctx.measuring() {
+            return DrawResult::Complete {
+                region: Some(region),
+            };
+        }
+
         // Where the pointer went down.
         let ui_press_origin = ctx.ui.input(|i| i.pointer.press_origin());
 

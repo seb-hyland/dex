@@ -456,11 +456,7 @@ impl Node for LambdaArgs {
             .collect();
         rows.push(LayoutChild::from(self.add_button));
 
-        let layout = VerticalLayout {
-            children: rows,
-            spacing: V_ROW_GAP,
-            fill_last: false,
-        };
+        let layout = VerticalLayout::new(rows, V_ROW_GAP);
         let region = ctx
             .draw_node(&layout, constraints)
             .region()
@@ -799,8 +795,9 @@ impl Node for Lambda {
         };
         let origin = constraints.pos;
 
-        let body = VerticalLayout {
-            children: vec![
+        // The output claims whatever the rest of the node leaves.
+        let body = VerticalLayout::filling_last(
+            vec![
                 LayoutChild::from(self.name),
                 LayoutChild::from(self.args),
                 LayoutChild::Node(Arc::new(SectionDivider)),
@@ -809,10 +806,8 @@ impl Node for Lambda {
                 LayoutChild::Node(Arc::new(SectionDivider)),
                 LayoutChild::Inspectable(self.output),
             ],
-            spacing: V_SECTIONS_GAP,
-            // The output claims the remaining height
-            fill_last: true,
-        };
+            V_SECTIONS_GAP,
+        );
         let bordered = Bordered {
             child: LayoutChild::Node(Arc::new(body)),
             padding: OUTER_PADDING,
@@ -1451,8 +1446,9 @@ impl Node for CanvasLambda {
         };
         let origin = constraints.pos;
 
-        let body = VerticalLayout {
-            children: vec![
+        // The output claims whatever the rest of the node leaves.
+        let body = VerticalLayout::filling_last(
+            vec![
                 LayoutChild::from(self.name),
                 LayoutChild::from(self.args),
                 LayoutChild::Node(Arc::new(SectionDivider)),
@@ -1460,9 +1456,8 @@ impl Node for CanvasLambda {
                 LayoutChild::Node(Arc::new(SectionDivider)),
                 LayoutChild::Inspectable(self.output.erase()),
             ],
-            spacing: V_SECTIONS_GAP,
-            fill_last: true,
-        };
+            V_SECTIONS_GAP,
+        );
         let bordered = Bordered {
             child: LayoutChild::Node(Arc::new(body)),
             padding: OUTER_PADDING,

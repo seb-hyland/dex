@@ -33,6 +33,35 @@ impl Bordered {
     }
 }
 
+/// The region a child settled on, or `None` if it drew nothing or asked to wrap.
+fn completed(res: &DrawResult) -> Option<ScreenRegion> {
+    match res {
+        DrawResult::Complete { region } => *region,
+        DrawResult::Wrap { .. } => None,
+    }
+}
+
+impl Bordered {
+    /// The frame around a child that occupied `region`, clamped to what this node was offered.
+    fn frame(&self, region: ScreenRegion, constraints: &DrawConstraints) -> (Rect, Vector) {
+        let avail = constraints.available();
+        let inset = self.padding + self.border_width;
+        let with_padding = region.size().map(|d| d + 2.0 * inset);
+        let size = Vector {
+            x: with_padding.x.min(avail.x),
+            y: with_padding.y.min(avail.y),
+        };
+        let frame = Rect {
+            size,
+            corner_radius: self.corner_radius,
+            fill_color: self.fill_color,
+            border: Stroke::new(self.border_width, self.border_color),
+            stroke_kind: StrokeKind::Inside,
+        };
+        (frame, size)
+    }
+}
+
 #[utils::dynamic_node]
 impl Node for Bordered {
     fn type_name(&self, _ctx: NodeContext) -> String {
@@ -40,54 +69,27 @@ impl Node for Bordered {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        let child_pos = ctx.constraints.pos + Vector::splat(self.padding + self.border_width);
+        let constraints = ctx.constraints;
+        let inset = self.padding + self.border_width;
         let child_constraints = DrawConstraints {
-            pos: child_pos,
+            pos: constraints.pos + Vector::splat(inset),
             wrap: WrapConstraints::NotAllowed,
-            ..ctx.constraints.shrunk_by_per_side(
-                self.padding + self.border_width,
-                self.padding + self.border_width,
-            )
+            ..constraints.shrunk_by_per_side(inset, inset)
         };
 
-        // The box sizes to the child, so we can't paint until the child is drawn, but the fill must sit behind.
-        // This reserves a slot.
-        let bg_idx = ctx.ui.painter().add(egui::Shape::Noop);
+        let child_res = ctx.with_backdrop(
+            |ctx| self.child.draw(ctx, child_constraints),
+            // Only a child that finished gets a frame.
+            // One that ran out of room and asked to wrap has not settled on a size yet.
+            |res| completed(res).map(|r| self.frame(r, &constraints).0.shape(constraints.pos)),
+        );
 
-        let child_res = self.child.draw(&mut ctx, child_constraints);
-
-        if let DrawResult::Complete {
-            region: maybe_region,
-        } = child_res
-            && let Some(region) = maybe_region
-        {
-            let avail = ctx.constraints.available();
-
-            let child_size_with_padding = region
-                .size()
-                .map(|d| d + 2.0 * (self.padding + self.border_width));
-            let box_size = Vector {
-                x: child_size_with_padding.x.min(avail.x),
-                y: child_size_with_padding.y.min(avail.y),
-            };
-            // Fill and border occupy the reserved slot, behind the child.
-            let frame = Rect {
-                size: box_size,
-                corner_radius: self.corner_radius,
-                fill_color: self.fill_color,
-                border: Stroke::new(self.border_width, self.border_color),
-                stroke_kind: StrokeKind::Inside,
-            };
-            ctx.ui
-                .painter()
-                .set(bg_idx, frame.shape(ctx.constraints.pos));
-
-            DrawResult::Complete {
-                region: Some(ScreenRegion::from_min_size(ctx.constraints.pos, box_size)),
-            }
-        } else {
-            // Child failed to draw
-            DrawResult::Complete { region: None }
+        let Some(region) = completed(&child_res) else {
+            return DrawResult::Complete { region: None };
+        };
+        let (_, size) = self.frame(region, &constraints);
+        DrawResult::Complete {
+            region: Some(ScreenRegion::from_min_size(constraints.pos, size)),
         }
     }
 }

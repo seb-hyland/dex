@@ -151,10 +151,7 @@ fn draw_row_bg(
 fn draw_row_label(ctx: &mut DrawContext, pos: ScreenPos, width: f32, text: &str) {
     let label = Label::new(text.to_owned());
     // Vertically center the text within the row so descenders aren't clipped.
-    let text_h = ctx
-        .ui
-        .ctx()
-        .fonts_mut(|f| f.row_height(&egui::FontId::from(label.font)));
+    let text_h = ctx.row_height(label.font);
     let y = pos.y + ((ROW_H - text_h) * 0.5).max(0.0);
     ctx.draw_node(
         &label,

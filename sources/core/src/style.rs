@@ -128,6 +128,68 @@ impl From<EguiStrokeKind> for StrokeKind {
     }
 }
 
+/// How a run of text is broken when it is laid out.
+#[derive(Copy, Default)]
+#[utils::dynamic_type]
+#[utils::portable(noop_reset)]
+pub struct TextWrap {
+    /// Whether a newline in the text starts a new line on screen.
+    pub break_on_newline: bool,
+    /// The width to break at. Infinite for "however wide it comes out".
+    pub max_width: f32,
+    /// Cut an over-wide line off rather than wrapping it.
+    pub truncate: bool,
+}
+
+#[utils::dynamic_methods]
+impl TextWrap {
+    /// One line. Newlines are not breaks, and nothing wraps.
+    pub const fn singleline() -> Self {
+        Self {
+            break_on_newline: false,
+            max_width: f32::INFINITY,
+            truncate: false,
+        }
+    }
+    /// Break where the text says so, but never wrap a long line.
+    pub const fn multiline() -> Self {
+        Self {
+            break_on_newline: true,
+            max_width: f32::INFINITY,
+            truncate: false,
+        }
+    }
+    /// Break at newlines, and wrap anything wider than `width`.
+    pub const fn wrapped(width: f32) -> Self {
+        Self {
+            break_on_newline: true,
+            max_width: width,
+            truncate: false,
+        }
+    }
+    /// Lay out on one line, cutting it off at `width`.
+    pub const fn truncated(width: f32) -> Self {
+        Self {
+            break_on_newline: false,
+            max_width: width,
+            truncate: true,
+        }
+    }
+}
+
+/// What a run of text came out as, without drawing it.
+#[derive(Copy)]
+#[utils::dynamic_type]
+#[utils::portable(noop_reset)]
+pub struct TextMetrics {
+    pub width: f32,
+    pub height: f32,
+    /// The height of the first line — the one a control centres against.
+    pub row_height: f32,
+    /// How many lines the text came to.
+    pub rows: u32,
+}
+
 pub const BOLD_FAMILY: &str = "Literata-Bold";
 pub const ITALIC_FAMILY: &str = "Literata-Italic";
 pub const BOLD_ITALIC_FAMILY: &str = "Literata-BoldItalic";

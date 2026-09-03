@@ -2,6 +2,39 @@ use dex_core::prelude::*;
 use serde::{Deserialize, Serialize};
 use utils::Reset;
 
+/// How much of a layout's space a child asks for.
+#[derive(Copy, Default, PartialEq, Eq)]
+#[utils::dynamic_type]
+#[utils::portable(noop_reset)]
+pub enum Sizing {
+    /// As much as the child needs, and no more.
+    #[default]
+    Fixed,
+    /// An equal share of whatever the fixed children leave.
+    Fill,
+}
+
+#[utils::dynamic_methods]
+impl Sizing {
+    /// Sizing for `count` children where only the last one fills.
+    pub fn fill_last(count: usize) -> Vec<Sizing> {
+        let mut all = vec![Sizing::Fixed; count];
+        if let Some(last) = all.last_mut() {
+            *last = Sizing::Fill;
+        }
+        all
+    }
+
+    /// Sizing for `count` children where only the one at `index` fills.
+    pub fn fill_at(count: usize, index: usize) -> Vec<Sizing> {
+        let mut all = vec![Sizing::Fixed; count];
+        if let Some(slot) = all.get_mut(index) {
+            *slot = Sizing::Fill;
+        }
+        all
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub enum LayoutChild {
     Id(NodeUid),
@@ -18,6 +51,20 @@ impl LayoutChild {
             return LayoutChild::Id(handle.0);
         }
         LayoutChild::Node(crate::scripting::to_dyn_node_py(obj))
+    }
+
+    /// Lay this child out under `constraints` without showing it, to find out how big it comes out.
+    pub(crate) fn measure(
+        &self,
+        ctx: &mut DrawContext,
+        constraints: DrawConstraints,
+    ) -> DrawResult {
+        match self {
+            LayoutChild::Id(uid) | LayoutChild::Inspectable(uid) => ctx
+                .measure_workspace_node(*uid, constraints)
+                .unwrap_or(DrawResult::Complete { region: None }),
+            LayoutChild::Node(node) => ctx.measure_node(&**node, constraints),
+        }
     }
 
     /// Draw this child under `constraints`.

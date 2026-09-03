@@ -14,7 +14,7 @@ pub mod vertical;
 pub mod vertical_dnd;
 
 pub use bordered::Bordered;
-pub use child::LayoutChild;
+pub use child::{LayoutChild, Sizing};
 pub use horizontal::HorizontalLayout;
 pub use mirror::Mirror;
 pub use scroll::ScrollLayout;

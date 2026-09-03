@@ -36,7 +36,7 @@ pub mod prelude {
         snapshot::GraphSnapshot,
         style::{
             BOLD_FAMILY, BOLD_ITALIC_FAMILY, Color, CursorIcon, Font, ITALIC_FAMILY, Stroke,
-            StrokeKind,
+            StrokeKind, TextMetrics, TextWrap,
         },
         workspace::{LoadWorkspace, SaveError, Workspace, WorkspaceActionHandle},
         *,
@@ -113,6 +113,15 @@ pub struct NodeContext<'ctx> {
     pub workspace: &'ctx Workspace,
 }
 
+/// Which kind of draw is in progress.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Pass {
+    /// The real thing: it paints, and what the pointer did is recorded.
+    Draw,
+    /// A sizing draw, to find out how big something comes out.
+    Sizing,
+}
+
 #[non_exhaustive]
 pub struct DrawContext<'ctx> {
     /// The identity and workspace handle of the node being drawn.
@@ -126,6 +135,9 @@ pub struct DrawContext<'ctx> {
 
     /// How deep in the draw tree this node sits.
     pub depth: u32,
+
+    /// Whether this is the real draw or a sizing one.
+    pass: Pass,
 }
 
 #[utils::dynamic_scoped(PyDrawContext)]
@@ -150,12 +162,103 @@ impl<'ctx> DrawContext<'ctx> {
         self.ui.ctx().set_cursor_icon(icon.into());
     }
 
-    pub(crate) fn reborrow<'rb>(&'rb mut self) -> DrawContext<'rb> {
+    /// The top of a draw tree: `node` drawing onto `ui` under `constraints`.
+    pub fn root(
+        node: NodeContext<'ctx>,
+        constraints: DrawConstraints,
+        ui: &'ctx mut Ui,
+    ) -> DrawContext<'ctx> {
+        DrawContext {
+            node,
+            constraints,
+            ui,
+            depth: 0,
+            pass: Pass::Draw,
+        }
+    }
+
+    /// Draw `node` under `constraints`, one level down.
+    #[dynamic(skip)] // takes a closure, which cannot cross into Python
+    pub fn descend<R>(
+        &mut self,
+        node: NodeContext<'_>,
+        constraints: DrawConstraints,
+        clip: Option<egui::Rect>,
+        f: impl FnOnce(DrawContext<'_>) -> R,
+    ) -> R {
+        // Read before the `Ui` is reborrowed.
+        let (depth, pass) = (self.depth + 1, self.pass);
+        match clip {
+            Some(clip) => {
+                let mut child_ui = self.ui.new_child(egui::UiBuilder::new());
+                child_ui.set_clip_rect(clip);
+                f(DrawContext {
+                    node,
+                    constraints,
+                    ui: &mut child_ui,
+                    depth,
+                    pass,
+                })
+            }
+            None => f(DrawContext {
+                node,
+                constraints,
+                ui: &mut *self.ui,
+                depth,
+                pass,
+            }),
+        }
+    }
+
+    /// This draw of `node`, one level down, on a `Ui` someone else made.
+    #[dynamic(skip)] // borrows a `Ui`; no script-facing form
+    pub fn child<'a>(
+        &'a self,
+        ui: &'a mut Ui,
+        node: NodeContext<'a>,
+        constraints: DrawConstraints,
+    ) -> DrawContext<'a> {
+        DrawContext {
+            node,
+            constraints,
+            ui,
+            depth: self.depth + 1,
+            pass: self.pass,
+        }
+    }
+
+    /// This same draw, moved onto another surface.
+    #[dynamic(skip)] // borrows a `Ui`; no script-facing form
+    pub fn moved<'a>(&'a self, ui: &'a mut Ui) -> DrawContext<'a> {
         DrawContext {
             node: self.node,
             constraints: self.constraints,
+            ui,
             depth: self.depth,
-            ui: &mut *self.ui,
+            pass: self.pass,
+        }
+    }
+
+    /// A sizing draw: nothing it paints or senses is kept.
+    #[dynamic(skip)] // borrows a `Ui`; no script-facing form
+    pub fn sizing<'a>(&'a self, ui: &'a mut Ui) -> DrawContext<'a> {
+        DrawContext {
+            pass: Pass::Sizing,
+            ..self.moved(ui)
+        }
+    }
+
+    pub fn measuring(&self) -> bool {
+        self.pass == Pass::Sizing
+    }
+
+    /// A stable egui id for this node's own widget.
+    #[dynamic(skip)] // an egui id has no script-facing form
+    pub fn widget_id(&self) -> egui::Id {
+        if self.measuring() {
+            egui::Id::new(("dex_measuring", self.node.id))
+        } else {
+            egui::Id::new(self.node.id)
         }
     }
 }

@@ -1,8 +1,6 @@
 use dex_core::prelude::*;
 use dex_core::theme;
-use egui::{
-    Color32, Mesh, Painter, Pos2, Sense, Shape, ecolor::HsvaGamma, lerp, pos2, text::LayoutJob,
-};
+use egui::{Color32, Mesh, Painter, Pos2, Sense, Shape, ecolor::HsvaGamma, lerp, pos2};
 use serde::{Deserialize, Serialize};
 use utils::Transient;
 
@@ -108,12 +106,12 @@ impl Node for ColorPicker {
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {
-        let mut job = LayoutJob::single_section(
-            self.label.clone(),
-            self.font.text_format(ctx.ui.ctx(), self.text_color),
+        let galley = ctx.lay_out_text(
+            &self.label,
+            self.font,
+            self.text_color,
+            TextWrap::singleline(),
         );
-        job.break_on_newline = false;
-        let galley = ctx.ui.ctx().fonts_mut(|fonts| fonts.layout_job(job));
 
         let row_h = galley.rows[0].height().max(BAR_H + 2.0);
         let width = match ctx.constraints.x {

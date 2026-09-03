@@ -1,6 +1,6 @@
 use dex_core::prelude::*;
 use dex_core::theme;
-use egui::{Pos2, text::LayoutJob};
+use egui::Pos2;
 use utils::Transient;
 
 use crate::primitives::icon::{Glyph, Icon};
@@ -72,13 +72,8 @@ impl Node for Checkbox {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        let mut job = LayoutJob::single_section(
-            self.label.clone(),
-            self.font.text_format(ctx.ui.ctx(), self.color),
-        );
         // A tick box's label is one line, however long it is.
-        job.break_on_newline = false;
-        let galley = ctx.ui.ctx().fonts_mut(|fonts| fonts.layout_job(job));
+        let galley = ctx.lay_out_text(&self.label, self.font, self.color, TextWrap::singleline());
 
         let row_h = galley.rows[0].height();
         let side = (row_h - 2.0 * BOX_INSET).max(MIN_SIDE);

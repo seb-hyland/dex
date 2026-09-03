@@ -1,9 +1,6 @@
 use dex_core::prelude::*;
 use dex_core::theme;
-use egui::{
-    Align, Color32, FontId, Frame, Layout, Margin, Pos2, Rect, TextEdit, UiBuilder,
-    text::{LayoutJob, TextWrapping},
-};
+use egui::{Align, Frame, Layout, Margin, Pos2, Rect, TextEdit, UiBuilder, text::LayoutJob};
 use egui_code_editor::{CodeEditor as CodeEditorWidget, ColorTheme, DEFAULT_THEMES, Syntax};
 use utils::Transient;
 
@@ -127,12 +124,8 @@ impl Label {
         remaining: &str,
         avail_w: Option<f32>,
     ) -> DrawResult {
-        let mut job = LayoutJob::single_section(
-            remaining.to_owned(),
-            self.font.text_format(ctx.ui.ctx(), self.shown_color()),
-        );
-        job.break_on_newline = false;
-        let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job.clone()));
+        let color = self.shown_color();
+        let galley = ctx.lay_out_text(remaining, self.font, color, TextWrap::singleline());
 
         let fits = avail_w.is_none_or(|w| galley.rect.width() <= w);
         if fits {
@@ -155,9 +148,8 @@ impl Label {
         }
 
         let w = avail_w.unwrap_or(f32::INFINITY);
-        // Update job to truncate at max size
-        job.wrap = TextWrapping::truncate_at_width(w);
-        let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job));
+        // Too wide: lay it out again, cut off at the width on offer.
+        let galley = ctx.lay_out_text(remaining, self.font, color, TextWrap::truncated(w));
 
         let origin: Pos2 = constraints.pos.into();
         ctx.ui
@@ -181,12 +173,12 @@ impl Label {
         let height = avail_h.unwrap_or(f32::INFINITY);
         let wrap_constraints = constraints.wrap;
 
-        let mut job = LayoutJob::single_section(
-            remaining.to_owned(),
-            self.font.text_format(ctx.ui.ctx(), self.shown_color()),
+        let galley = ctx.lay_out_text(
+            remaining,
+            self.font,
+            self.shown_color(),
+            TextWrap::wrapped(width),
         );
-        job.wrap.max_width = width;
-        let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job));
 
         let first_row_height = galley.rows[0].height();
         if first_row_height > height {
@@ -324,12 +316,12 @@ impl LabelEditable {
 
     /// Render the committed value as static, non-interactive text.
     fn draw_static(&self, ctx: DrawContext) -> DrawResult {
-        let mut job = LayoutJob::single_section(
-            self.value.clone(),
-            self.font.text_format(ctx.ui.ctx(), self.shown_color()),
+        let galley = ctx.lay_out_text(
+            &self.value,
+            self.font,
+            self.shown_color(),
+            TextWrap::singleline(),
         );
-        job.break_on_newline = false;
-        let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(job));
         let content_w = galley.rect.width();
         let row_h = galley.rows[0].height();
 
@@ -402,14 +394,8 @@ impl Node for LabelEditable {
 
         // Measure the width of the text field
         let content = self.buf.val_or_else(|| self.value.clone()).clone();
-        let mut measure_job = LayoutJob::single_section(
-            content,
-            self.font.text_format(ctx.ui.ctx(), self.shown_color()),
-        );
-        measure_job.break_on_newline = false;
-        let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(measure_job));
-        let content_w = galley.rect.width();
-        let row_h = galley.rows[0].height();
+        let measured = ctx.measure_text(content, self.font, TextWrap::singleline());
+        let (content_w, row_h) = (measured.width, measured.row_height);
 
         // When the parent demands an exact size fill it; otherwise size to the content.
         let exact_w = match ctx.constraints.x {
@@ -467,7 +453,7 @@ impl Node for LabelEditable {
         let rect = Rect::from_min_size(origin.into(), size.into());
 
         let mut buf_mut = self.buf.val_mut_or_else(|| self.value.clone());
-        let editor_id = egui::Id::new(ctx.node.id);
+        let editor_id = ctx.widget_id();
 
         // Text too long for the field is laid out from the left, not centred, so it scrolls to be visible.
         let overflowing = self.singleline && content_w > block_w;
@@ -521,7 +507,7 @@ impl Node for LabelEditable {
             .scope_builder(
                 UiBuilder::new()
                     .max_rect(rect)
-                    .id_salt(ctx.node.id)
+                    .id_salt(ctx.widget_id())
                     .layout(Layout::left_to_right(Align::Min)),
                 |ui| ui.add(editor),
             )
@@ -780,14 +766,12 @@ impl Node for CodeEditor {
         let avail_h = ctx.constraints.y.map(|a| a.provided_value());
 
         // Since a monospace font is used, we can reason about fit by determining the width of a single character
-        let probe = LayoutJob::simple_singleline(
+        let probe = ctx.measure_text(
             "0".to_owned(),
-            FontId::monospace(self.font_size),
-            Color32::WHITE,
+            Font::monospaced(self.font_size),
+            TextWrap::singleline(),
         );
-        let galley = ctx.ui.ctx().fonts_mut(|f| f.layout_job(probe));
-        let row_h = galley.rows[0].height();
-        let char_w = galley.rect.width();
+        let (row_h, char_w) = (probe.row_height, probe.width);
 
         // Vertical fit --------------------------------------------------
         if let Some(h) = avail_h
@@ -851,7 +835,7 @@ impl Node for CodeEditor {
         let text_w = (block_w - gutter - CHROME_H).max(char_w * MIN_COLS);
 
         let syntax = syntax_for(&self.language);
-        let editor_id = egui::Id::new(ctx.node.id);
+        let editor_id = ctx.widget_id();
         let mut editor = CodeEditorWidget::default()
             .with_id(editor_id)
             .with_fontsize(self.font_size)
@@ -882,7 +866,7 @@ impl Node for CodeEditor {
         let drawn = ctx.ui.scope_builder(
             UiBuilder::new()
                 .max_rect(rect)
-                .id_salt(ctx.node.id)
+                .id_salt(ctx.widget_id())
                 .layout(Layout::top_down(Align::Min)),
             |ui| {
                 ui.set_clip_rect(clip);

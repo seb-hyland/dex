@@ -187,7 +187,7 @@ fn the_controls_tab_carries_the_three_things_it_is_for() {
                 wrap: WrapConstraints::NotAllowed,
                 should_clip: true,
             };
-            let mut draw = DrawContext::for_ui(
+            let mut draw = DrawContext::root(
                 NodeContext {
                     id: sidebar.erase(),
                     workspace: ws_ref,

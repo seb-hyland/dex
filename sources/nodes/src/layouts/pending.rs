@@ -34,7 +34,7 @@ impl Node for PendingLayout {
         let body = VerticalLayout {
             children: vec![LayoutChild::Node(Arc::new(label)), self.child.clone()],
             spacing: 4.0,
-            fill_last: false,
+            sizing: Vec::new(),
         };
         let constraints = ctx.constraints;
         ctx.draw_node(&body, constraints)

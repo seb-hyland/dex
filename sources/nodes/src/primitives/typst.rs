@@ -1,6 +1,5 @@
 use dex_core::prelude::*;
 use dex_core::theme;
-use egui::UiBuilder;
 use typst::{
     Library, LibraryExt,
     diag::{FileError, FileResult, SourceDiagnostic},
@@ -205,10 +204,8 @@ impl Node for TypstEditor {
         "A Typst Editor".to_owned()
     }
 
-    fn draw(&self, ctx: DrawContext) -> DrawResult {
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
         let editing = *self.edit_in_progress.val_or_else(|| false);
-        let mut ui = ctx.ui.new_child(UiBuilder::new());
-        let mut ctx = DrawContext::for_ui(ctx.node, ctx.constraints, &mut ui);
 
         let avail_w = ctx.constraints.x.map(|a| a.provided_value()).unwrap_or(0.0);
         let avail_h = ctx.constraints.y.map(|a| a.provided_value()).unwrap_or(0.0);

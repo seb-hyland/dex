@@ -70,7 +70,7 @@ fn tick_row_height(ctx: &egui::Context) -> f32 {
                 wrap: WrapConstraints::NotAllowed,
                 should_clip: false,
             };
-            let mut draw = DrawContext::for_ui(
+            let mut draw = DrawContext::root(
                 NodeContext {
                     id: uid.erase(),
                     workspace: &ws,
