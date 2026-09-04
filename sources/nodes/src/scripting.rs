@@ -6,7 +6,7 @@ use dex_core::prelude::*;
 use arrow::array::RecordBatch;
 
 use crate::{
-    layouts::pending::PendingLayout,
+    layouts::{child::LayoutChild, pending::PendingLayout, scroll::ScrollLayout},
     primitives::{
         dynamic::DynamicNode,
         nothing::Nothing,
@@ -151,6 +151,12 @@ pub fn node_to_value(node: &dyn Node) -> Option<ScriptValue> {
     if let Some(t) = any.downcast_ref::<Table>() {
         return Some(ScriptValue::Table(t.batch().clone()));
     }
+    // TODO: GENERALIZE
+    if let Some(scroll) = any.downcast_ref::<ScrollLayout>()
+        && let LayoutChild::Node(inner) = &scroll.child
+    {
+        return node_to_value(&**inner);
+    }
     None
 }
 
@@ -177,16 +183,48 @@ pub fn to_dyn_node_py(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> Arc<dyn Node> {
     if let Ok(v) = obj.extract::<String>() {
         return Arc::new(Label::new(v));
     }
-    // Columnar data is a table.
-    if let Some(batch) = record_batch_from_python(obj) {
-        return Arc::new(Table::new(ArrowData(batch)));
-    }
+    // A node type of our own, before anything that has to be *tried* rather
+    // than tested: these are the values a drawing script hands over thousands
+    // of times a frame, and they are recognised by a type check.
     for extractor in dex_dynamic::__rt::inventory::iter::<NodeExtractor> {
         if let Some(node) = (extractor.from_python)(obj) {
             return node;
         }
     }
+    // Columnar data is a table.
+    if let Some(batch) = looks_like_arrow(obj)
+        .then(|| record_batch_from_python(obj))
+        .flatten()
+    {
+        return Arc::new(Table::new(ArrowData(batch)));
+    }
     Arc::new(DynamicNode::from_python(obj))
+}
+
+/**
+    Whether `obj` could be Arrow data at all.
+
+    [`record_batch_from_python`] finds out by *trying*, and on anything else
+    that costs a pyarrow import and a raised Python exception — tens of
+    microseconds each time. Once, that is nothing. For every shape a drawing
+    script hands over, every frame, it was the whole frame: seven milliseconds
+    of a nine-millisecond plot, spent failing to read a polygon as a table.
+
+    So the attempt is gated on the object carrying one of the names Arrow data
+    is recognised by — the C data interface either side of it, or the chunked
+    methods the fallback path calls.
+*/
+fn looks_like_arrow(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> bool {
+    use pyo3::prelude::*;
+    const MARKERS: [&str; 4] = [
+        "__arrow_c_array__",
+        "__arrow_c_stream__",
+        "combine_chunks",
+        "to_batches",
+    ];
+    MARKERS
+        .iter()
+        .any(|marker| obj.hasattr(*marker).unwrap_or(false))
 }
 
 /// A `RecordBatch` from anything holding Arrow columns, or `None`.

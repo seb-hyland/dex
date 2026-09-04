@@ -2,6 +2,7 @@ use dex_core::prelude::*;
 use utils::Transient;
 
 use crate::layouts::dnd::{self, Axis, PendingReorder, Strip};
+use crate::layouts::scroll::draw_scrolled;
 use crate::primitives::interaction::InteractionBox;
 
 /**
@@ -17,6 +18,8 @@ pub struct HorizontalDnD {
     sensors: Vec<NodeUid<InteractionBox>>,
     pub spacing: f32,
 
+    pub scrollable: bool,
+
     /// Cached draw sizes from last frame
     sizes: Transient<Vec<Vector>>,
     /// Pending reorder while a child is dragged
@@ -30,6 +33,7 @@ impl HorizontalDnD {
         ws: WorkspaceActionHandle,
         children: Vec<NodeUid>,
         spacing: f32,
+        scrollable: bool,
     ) -> NodeUid<HorizontalDnD> {
         let sensors = children
             .iter()
@@ -39,9 +43,24 @@ impl HorizontalDnD {
             children,
             sensors,
             spacing,
+            scrollable,
             sizes: Transient::default(),
             pending: Transient::default(),
         })
+    }
+}
+
+impl HorizontalDnD {
+    /// The strip that draws (and reorders) this container's children.
+    fn strip(&self) -> Strip<'_> {
+        Strip {
+            axis: Axis::Horizontal,
+            children: &self.children,
+            sensors: &self.sensors,
+            spacing: self.spacing,
+            sizes: &self.sizes,
+            pending: &self.pending,
+        }
     }
 }
 
@@ -52,15 +71,12 @@ impl Node for HorizontalDnD {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        let (result, commit) = Strip {
-            axis: Axis::Horizontal,
-            children: &self.children,
-            sensors: &self.sensors,
-            spacing: self.spacing,
-            sizes: &self.sizes,
-            pending: &self.pending,
-        }
-        .draw(&mut ctx);
+        let (result, commit) = if self.scrollable {
+            let id = egui::Id::new(ctx.node.id);
+            draw_scrolled(&mut ctx, [true, false], id, |sub| self.strip().draw(sub))
+        } else {
+            self.strip().draw(&mut ctx)
+        };
 
         if let Some(p) = commit {
             ctx.submit_action_for_self::<Self, _>(

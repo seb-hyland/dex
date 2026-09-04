@@ -238,3 +238,33 @@ fn a_number_refuses_text_that_is_not_one() {
         "text that is not a number leaves the value alone"
     );
 }
+
+/// A text file opened in the FileBrowser arrives as a `ScrollLayout` wrapping a
+/// `Label` — so long files scroll in the node. Wired into a transform it must
+/// still cross as its text, not as a node reference: the scroll wrapper is
+/// presentational and carries its content's value.
+#[test]
+fn a_scrolled_label_resolves_to_its_text() {
+    use dex_nodes::layouts::ScrollLayout;
+    use dex_nodes::layouts::child::LayoutChild;
+    use dex_nodes::primitives::text::Label;
+    use dex_nodes::scripting::ScriptValue;
+    use std::sync::Arc;
+
+    let gbff = "LOCUS       NC_1  100 bp\nFEATURES\n     CDS  1..99\n";
+    let mut ws = Workspace::new_empty();
+    let handle = ws.action_handle();
+
+    // Exactly what `FileBrowser::node_for` builds for a non-CSV text file.
+    let mut label = Label::new(gbff.to_owned());
+    label.singleline = false;
+    let scrolled =
+        handle.insert_node(ScrollLayout::vertical(LayoutChild::Node(Arc::new(label))));
+    ws.process_pending();
+    ws.set_root(scrolled.erase());
+
+    match dex_nodes::scripting::resolve_arg(&ws, scrolled.erase()).value {
+        ScriptValue::Str(text) => assert_eq!(text, gbff, "the file's text crossed intact"),
+        other => panic!("a scrolled text file must cross as a string, got {other:?}"),
+    }
+}

@@ -567,6 +567,65 @@ fn a_focused_editor_keeps_the_arrow_keys() {
     );
 }
 
+/// The way out of an override is reachable with the tab row folded away.
+///
+/// The row doubles as the override's title bar, and the Close button sits in
+/// it. Folded, the row had no height: the button was drawn at the top of the
+/// panel and the override's own card was then painted over it, so it could
+/// neither be seen nor pressed, and there was no way back out.
+#[test]
+fn an_override_can_be_closed_with_the_tab_row_folded() {
+    let mut app = App::new();
+    let root = app.root();
+    let canvas = app.ws.send_request(root, ActiveCanvas).unwrap();
+
+    app.ws.submit_action(root, "fold the tabs", ToggleTabBar);
+    app.ws.submit_action(
+        root,
+        "fullscreen",
+        PushOverride {
+            node: canvas.erase(),
+        },
+    );
+    app.ws.process_pending();
+    let output = app.frame(vec![]);
+
+    let close = output
+        .shapes
+        .iter()
+        .find_map(|c| match &c.shape {
+            egui::Shape::Text(t) if t.galley.text().contains("Close") => {
+                Some(t.visual_bounding_rect())
+            }
+            _ => None,
+        })
+        .expect("the way out of the override is on screen");
+
+    // And it answers: pressing it puts the override away.
+    let at = close.center();
+    app.frame(vec![
+        egui::Event::PointerMoved(at),
+        egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        },
+        egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        },
+    ]);
+    let after = app.frame(vec![]);
+    let still_open = after.shapes.iter().any(|c| match &c.shape {
+        egui::Shape::Text(t) => t.galley.text().contains("Close"),
+        _ => false,
+    });
+    assert!(!still_open, "the override did not close");
+}
+
 /// A canvas offers to fill the window with itself, which is the override stack.
 #[test]
 fn a_canvas_offers_to_go_fullscreen() {

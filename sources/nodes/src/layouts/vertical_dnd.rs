@@ -3,6 +3,7 @@ use utils::Transient;
 
 use crate::layouts::dnd::{self, Axis, PendingReorder, Strip};
 use crate::layouts::horizontal_dnd::{AddChild, ChildCount, Children, RemoveChild, Reorder};
+use crate::layouts::scroll::draw_scrolled;
 use crate::primitives::interaction::InteractionBox;
 
 /// A vertical container whose child nodes can be reordered by drag-and-drop.
@@ -12,6 +13,7 @@ pub struct VerticalDnD {
     children: Vec<NodeUid>,
     sensors: Vec<NodeUid<InteractionBox>>,
     pub spacing: f32,
+    pub scrollable: bool,
 
     /// Cached draw sizes from last frame
     sizes: Transient<Vec<Vector>>,
@@ -26,6 +28,7 @@ impl VerticalDnD {
         ws: WorkspaceActionHandle,
         children: Vec<NodeUid>,
         spacing: f32,
+        scrollable: bool,
     ) -> NodeUid<VerticalDnD> {
         let sensors = children
             .iter()
@@ -35,9 +38,24 @@ impl VerticalDnD {
             children,
             sensors,
             spacing,
+            scrollable,
             sizes: Transient::default(),
             pending: Transient::default(),
         })
+    }
+}
+
+impl VerticalDnD {
+    /// The strip that draws (and reorders) this container's children.
+    fn strip(&self) -> Strip<'_> {
+        Strip {
+            axis: Axis::Vertical,
+            children: &self.children,
+            sensors: &self.sensors,
+            spacing: self.spacing,
+            sizes: &self.sizes,
+            pending: &self.pending,
+        }
     }
 }
 
@@ -48,15 +66,12 @@ impl Node for VerticalDnD {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        let (result, commit) = Strip {
-            axis: Axis::Vertical,
-            children: &self.children,
-            sensors: &self.sensors,
-            spacing: self.spacing,
-            sizes: &self.sizes,
-            pending: &self.pending,
-        }
-        .draw(&mut ctx);
+        let (result, commit) = if self.scrollable {
+            let id = egui::Id::new(ctx.node.id);
+            draw_scrolled(&mut ctx, [false, true], id, |sub| self.strip().draw(sub))
+        } else {
+            self.strip().draw(&mut ctx)
+        };
 
         if let Some(p) = commit {
             ctx.submit_action_for_self::<Self, _>(

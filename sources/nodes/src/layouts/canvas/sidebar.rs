@@ -144,7 +144,7 @@ impl CanvasSidebar {
                 })
             })
             .collect();
-        let backpack = VerticalDnD::build(ws.clone(), Vec::new(), theme::SPACE_SM);
+        let backpack = VerticalDnD::build(ws.clone(), Vec::new(), theme::SPACE_SM, true);
         let venv_button = Button::build(ws.clone(), Label::new(venv_button_label(false)));
         let venv_clear_button = Button::build(ws.clone(), Label::new("Clear".to_owned()));
         // Starts on the default, so the field always shows what will run rather

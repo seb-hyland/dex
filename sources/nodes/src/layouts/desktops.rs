@@ -12,8 +12,6 @@ use crate::{
             nodes::{CanvasItemBounds, CanvasNode, CanvasNodeChild},
             sidebar::CanvasSidebar,
         },
-        child::LayoutChild,
-        horizontal::HorizontalLayout,
         horizontal_dnd::{AddChild, Children, HorizontalDnD, RemoveChild, Reorder},
         inspector::{Inspector, menu_button},
         mirror::Mirror,
@@ -89,9 +87,10 @@ impl Desktops {
 
         let canvas = Canvas::build(ws.clone());
         let tab = DesktopTabView::build(ws.clone(), canvas, id, "Canvas 1".to_owned());
-        let tab_bar = HorizontalDnD::build(ws.clone(), vec![tab.erase()], TAB_SPACING);
+        let tab_bar = HorizontalDnD::build(ws.clone(), vec![tab.erase()], TAB_SPACING, true);
         let sidebar = CanvasSidebar::build(ws.clone(), id);
         let add_button = Button::build_with(ws.clone(), Label::new(String::new()), |b| {
+            b.fill_color = Color::WHITE;
             b.icon = Some(Glyph::Plus);
             // Padded to stand as tall as a tab, so the row has one baseline.
             b.padding = theme::SPACE_MD;
@@ -276,8 +275,11 @@ impl Node for Desktops {
             );
         }
 
+        // A folded tab row unfolds for as long as an override is open, to allow closing it.
+        let collapsed = self.tabs_collapsed && self.override_stack.is_empty();
+
         // A folded tab row leaves the content the whole height.
-        let tab_bar_h = if self.tabs_collapsed { 0.0 } else { TAB_BAR_H };
+        let tab_bar_h = if collapsed { 0.0 } else { TAB_BAR_H };
         let content_pos = ScreenPos {
             x: right_x,
             y: origin.y + tab_bar_h,
@@ -376,34 +378,78 @@ impl Node for Desktops {
                     should_clip: true,
                 },
             );
-        } else if self.tabs_collapsed {
+        } else if collapsed {
             ctx.draw_workspace_node(self.active.erase(), content_constraints);
         } else {
-            // Tab bar, then the add-canvas button, laid out in a row.
-            let layout = HorizontalLayout {
-                children: vec![
-                    LayoutChild::from(self.tab_bar),
-                    LayoutChild::from(self.add_button),
-                ],
-                spacing: TAB_SPACING,
-                allow_wrap: false,
-            };
-            ctx.draw_node(
-                &layout,
+            // The tab bar fills the row and scrolls its own overflow; the add-canvas button floats on right end.
+            let btn_size = ctx
+                .measure_workspace_node(
+                    self.add_button.erase(),
+                    DrawConstraints {
+                        pos: right_origin,
+                        x: Some(AxisConstraint::AtMost(right_w)),
+                        y: Some(AxisConstraint::AtMost(TAB_H)),
+                        wrap: WrapConstraints::NotAllowed,
+                        should_clip: false,
+                    },
+                )
+                .and_then(|r| r.region())
+                .map(|r| r.size())
+                .unwrap_or(Vector { x: TAB_H, y: TAB_H });
+
+            ctx.draw_workspace_node(
+                self.tab_bar.erase(),
                 DrawConstraints {
                     pos: right_origin
                         + Vector {
                             x: TAB_SPACING,
                             y: TAB_ROW_INSET,
                         },
-                    x: Some(AxisConstraint::AtMost(
+                    x: Some(AxisConstraint::Exactly(
                         (right_w - 2.0 * TAB_SPACING).max(0.0),
                     )),
-                    y: Some(AxisConstraint::AtMost(TAB_H)),
+                    y: Some(AxisConstraint::Exactly(TAB_H)),
                     wrap: WrapConstraints::NotAllowed,
-                    should_clip: false,
+                    should_clip: true,
                 },
             );
+
+            ctx.draw_workspace_node(self.active.erase(), content_constraints);
+
+            // The button and its halo, on the foreground.
+            let btn_pos = ScreenPos {
+                x: right_origin.x + right_w - TAB_SPACING - btn_size.x,
+                y: origin.y + (TAB_BAR_H - btn_size.y) * 0.5,
+            };
+            ctx.overlay(|ctx| {
+                // A gradient wash under the button.
+                let x1 = right_origin.x + right_w;
+                let x0 = x1 - (btn_size.x + theme::SPACE_XL * 2.0);
+                let y0 = origin.y;
+                let y1 = origin.y + TAB_BAR_H;
+                let clear = egui::Color32::from_white_alpha(0);
+                let solid = egui::Color32::from_white_alpha(235);
+
+                let mut wash = egui::Mesh::default();
+                wash.colored_vertex(egui::pos2(x0, y0), clear);
+                wash.colored_vertex(egui::pos2(x0, y1), clear);
+                wash.colored_vertex(egui::pos2(x1, y0), solid);
+                wash.colored_vertex(egui::pos2(x1, y1), solid);
+                wash.add_triangle(0, 1, 2);
+                wash.add_triangle(1, 2, 3);
+                ctx.ui.painter().add(egui::Shape::mesh(wash));
+
+                ctx.draw_workspace_node(
+                    self.add_button.erase(),
+                    DrawConstraints {
+                        pos: btn_pos,
+                        x: Some(AxisConstraint::Exactly(btn_size.x)),
+                        y: Some(AxisConstraint::Exactly(btn_size.y)),
+                        wrap: WrapConstraints::NotAllowed,
+                        should_clip: false,
+                    },
+                );
+            });
             if ctx
                 .node
                 .workspace
@@ -412,8 +458,6 @@ impl Node for Desktops {
             {
                 ctx.submit_action_for_self::<Self, _>(AddCanvas, "Add canvas");
             }
-
-            ctx.draw_workspace_node(self.active.erase(), content_constraints);
         }
 
         // Draw sidebar splitter ----------------------------------------
@@ -480,7 +524,7 @@ impl Node for Desktops {
         // panels are bounded the same way, so they read as the same kind of
         // thing.
         let tabs_line_y = origin.y + tab_bar_h;
-        if !self.tabs_collapsed {
+        if !collapsed {
             ctx.ui.painter().rect_filled(
                 ScreenRegion::from_min_size(
                     ScreenPos {
@@ -528,7 +572,7 @@ impl Node for Desktops {
             } else {
                 self.collapse_sidebar_button
             },
-            if self.tabs_collapsed {
+            if collapsed {
                 self.reveal_tabs_button
             } else {
                 self.collapse_tabs_button
@@ -546,8 +590,9 @@ impl Node for Desktops {
                 },
             );
         }
-        // Halfway along the tab row's.
-        if !self.tabs_collapsed || near(origin.y, false) {
+
+        // Halfway along the tab row's — but not while an override is open.
+        if self.override_stack.is_empty() && (!collapsed || near(origin.y, false)) {
             chrome(
                 &mut ctx,
                 tabs_button,
@@ -1029,7 +1074,7 @@ impl Node for DesktopTabView {
                         corner_radius: theme::RADIUS_MD,
                         fill_color,
                         border,
-                        stroke_kind: StrokeKind::Middle,
+                        stroke_kind: StrokeKind::Inside,
                     }
                     .shape(origin),
                 )

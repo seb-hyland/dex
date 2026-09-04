@@ -24,12 +24,12 @@ const MENU_WIDTH: f32 = 180.0;
 /// How far the pointer may stray from the menu before it closes.
 const MENU_SLACK: f32 = 36.0;
 /// Once the pointer is this near the lens, it holds its target outright.
-const LENS_GRACE: f32 = 24.0;
+const LENS_GRACE: f32 = 10.0;
 /// How straight at the lens the pointer must be travelling to hold it: the
 /// cosine of the half-angle of the cone, so about twenty-three degrees either
 /// side of dead on. A deliberate walk sits within a couple of degrees of dead
 /// on; anything vaguer than this is going somewhere else.
-const LENS_CONE: f32 = 0.82;
+const LENS_CONE: f32 = 0.92;
 /// How long a heading outlives the movement that set it. Long enough to cover
 /// the frames a hand does not move during a walk, short enough that stopping
 /// to look at something hands the lens straight over to it.
