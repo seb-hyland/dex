@@ -13,7 +13,7 @@ const HEADER_MODULES: &[&str] = &["typing"];
 
 /// A language server config scoped to the checkout directory.
 fn pyright_config() -> String {
-    let env = match crate::settings::venv() {
+    let env = match crate::settings::effective_venv() {
         // `venvPath` is the folder the environment sits *in*, and `venv` its
         // name — pyright joins them itself.
         Some(venv) => match (venv.parent(), venv.file_name()) {
@@ -68,6 +68,8 @@ pub struct Checkout {
     /// The contents as last written or read, so a change is detectable without
     /// trusting mtime resolution.
     pub last_seen: String,
+    /// The environment the config on disk describes. See [`refresh_config`].
+    pub venv_generation: u64,
 }
 
 impl Checkout {
@@ -107,6 +109,31 @@ pub fn write(key: &str, source: &str, globals: &[(String, String)]) -> std::io::
         dir,
         file,
         last_seen: contents,
+        venv_generation: crate::settings::venv_generation(),
+    })
+}
+
+/**
+    Bring a checkout's config back in step with the current environment.
+
+    [`None`] when it already is, which is every frame but the one after the environment changes.
+*/
+pub fn refresh_config(checkout: &Checkout) -> Option<Checkout> {
+    let generation = crate::settings::venv_generation();
+    if generation == checkout.venv_generation {
+        return None;
+    }
+
+    // A checkout whose directory has gone is not worth resurrecting; it is
+    // refreshed properly the next time it is opened.
+    if !checkout.dir.is_dir() {
+        return None;
+    }
+    let _ = std::fs::write(checkout.dir.join("pyrightconfig.json"), pyright_config());
+    let _ = std::fs::write(checkout.dir.join("dex.pyi"), dex_core::stubs_gen::render());
+    Some(Checkout {
+        venv_generation: generation,
+        ..checkout.clone()
     })
 }
 

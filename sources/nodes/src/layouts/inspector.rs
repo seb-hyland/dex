@@ -25,8 +25,17 @@ const MENU_WIDTH: f32 = 180.0;
 const MENU_SLACK: f32 = 36.0;
 /// Once the pointer is this near the lens, it holds its target outright.
 const LENS_GRACE: f32 = 24.0;
-/// How long a new node must hold the pointer before the lens moves to it.
-const LENS_DWELL: f64 = 0.18;
+/// How straight at the lens the pointer must be travelling to hold it: the
+/// cosine of the half-angle of the cone, so about twenty-three degrees either
+/// side of dead on. A deliberate walk sits within a couple of degrees of dead
+/// on; anything vaguer than this is going somewhere else.
+const LENS_CONE: f32 = 0.82;
+/// How long a heading outlives the movement that set it. Long enough to cover
+/// the frames a hand does not move during a walk, short enough that stopping
+/// to look at something hands the lens straight over to it.
+const LENS_HEADING_LIFE: f64 = 0.2;
+/// Movement below this is noise, not a heading.
+const LENS_MOTION: f32 = 0.5;
 /// A stable egui id: there is only ever one handle.
 const HANDLE_ID: &str = "dex_inspector_handle";
 
@@ -48,14 +57,16 @@ pub fn menu_button(ws: WorkspaceActionHandle, label: &str) -> NodeUid<Button> {
     })
 }
 
-/// Where the lens sits, and what is queued to take it over.
+/// Where the lens sits, and which way the pointer was last seen going.
 #[derive(Clone)]
 pub struct HandleState {
     pub target: NodeUid,
     pub region: ScreenRegion,
-    /// What the pointer has wandered onto since, and when it got there.
-    pub candidate: Option<NodeUid>,
-    pub since: f64,
+    /// Where the pointer was, and the direction it was last moving in.
+    pub pointer: Option<ScreenPos>,
+    pub heading: Option<Vector>,
+    /// When `heading` was last set, so standing still lets it lapse.
+    pub moved_at: f64,
 }
 
 /// Where the lens sits for a target that drew into `region`.
@@ -69,56 +80,101 @@ fn lens_region(region: ScreenRegion) -> ScreenRegion {
     )
 }
 
-/// Which node the lens should be offering, given what is under the pointer.
+/// The cosine of the angle between two directions; zero-length is no direction.
+fn cosine(a: Vector, b: Vector) -> f32 {
+    let (la, lb) = (a.x.hypot(a.y), b.x.hypot(b.y));
+    if la <= f32::EPSILON || lb <= f32::EPSILON {
+        return 0.0;
+    }
+    (a.x * b.x + a.y * b.y) / (la * lb)
+}
+
+/**
+    Which node the lens should be offering, given what is under the pointer.
+
+    Not simply whatever is under it. The lens is drawn beside its node rather
+    than under the pointer, so reaching for it means leaving the node that
+    offered it. The lens holds only while the pointer is *travelling towards it*,
+    within a cone of [`LENS_CONE`]. Anything else hands it over at once, with no delay.
+
+    The last real movement is remembered, and believed for [`LENS_HEADING_LIFE`] after
+    it happened. Inside that window a walk survives the still frames in the middle of it;
+    while past it the direction is forgotten.
+
+    Being on the lens itself always holds it.
+*/
 fn settle(
     held: Option<HandleState>,
     found: Option<InspectTarget>,
     pointer: Option<ScreenPos>,
     now: f64,
 ) -> Option<HandleState> {
-    let fresh = |target: InspectTarget| HandleState {
-        target: target.node,
-        region: target.region,
-        candidate: None,
-        since: now,
+    let (heading, moved_at) = match (&held, pointer) {
+        (Some(held), Some(to)) => match held.pointer {
+            Some(from) => {
+                let motion = Vector {
+                    x: to.x - from.x,
+                    y: to.y - from.y,
+                };
+                if motion.x.hypot(motion.y) >= LENS_MOTION {
+                    (Some(motion), now)
+                } else {
+                    (held.heading, held.moved_at)
+                }
+            }
+            None => (None, now),
+        },
+        _ => (None, now),
     };
+    let carry = |target: NodeUid, region: ScreenRegion| HandleState {
+        target,
+        region,
+        pointer,
+        heading,
+        moved_at,
+    };
+    let take = |target: InspectTarget| carry(target.node, target.region);
+
     let Some(held) = held else {
         // Nothing showing: the first thing under the pointer takes it.
-        return found.map(fresh);
+        return found.map(take);
     };
+    let lens = lens_region(held.region);
 
     // On the lens, or as good as. Whatever else the pointer is over, it is
     // there to click this.
-    if pointer.is_some_and(|p| lens_region(held.region).distance_to(p) <= LENS_GRACE) {
-        return Some(HandleState {
-            candidate: None,
-            since: now,
-            ..held
-        });
+    if pointer.is_some_and(|p| lens.distance_to(p) <= LENS_GRACE) {
+        return Some(carry(held.target, held.region));
     }
 
     // Still on the same node: follow it, in case it moved or resized.
     if let Some(target) = &found
         && target.node == held.target
     {
-        return Some(fresh(target.clone()));
+        return Some(take(target.clone()));
     }
 
-    // Somewhere else — or nowhere, which is a candidate of its own, so that
-    // leaving the drawing puts the lens away rather than stranding it.
-    let candidate = found.as_ref().map(|t| t.node);
-    if held.candidate == candidate && now - held.since >= LENS_DWELL {
-        return found.map(fresh);
+    // Somewhere else, or nowhere. Hold only if the pointer is on its way here.
+    let coming = if now - moved_at <= LENS_HEADING_LIFE
+        && let Some(heading) = heading
+        && let Some(from) = pointer
+    {
+        let centre = lens.center();
+        cosine(
+            heading,
+            Vector {
+                x: centre.x - from.x,
+                y: centre.y - from.y,
+            },
+        ) >= LENS_CONE
+    } else {
+        false
+    };
+    if coming {
+        Some(carry(held.target, held.region))
+    } else {
+        found.map(take)
     }
-    Some(HandleState {
-        candidate,
-        since: if held.candidate == candidate {
-            held.since
-        } else {
-            now
-        },
-        ..held
-    })
 }
 
 #[utils::portable]
@@ -258,8 +314,9 @@ impl Node for Inspector {
             _ => HandleState {
                 target,
                 region,
-                candidate: None,
-                since: now,
+                pointer,
+                heading: None,
+                moved_at: now,
             },
         });
 
@@ -676,3 +733,157 @@ defhandlers! { Inspector {
         },
     ],
 }}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A lens showing for `target`, drawn where a node at (100, 100) would put
+    /// it, with the pointer sitting in the middle of that node.
+    fn showing(target: NodeUid) -> HandleState {
+        HandleState {
+            target,
+            region: ScreenRegion::from_min_size(
+                ScreenPos { x: 100.0, y: 100.0 },
+                Vector { x: 300.0, y: 300.0 },
+            ),
+            pointer: Some(ScreenPos { x: 250.0, y: 250.0 }),
+            heading: None,
+            moved_at: 0.0,
+        }
+    }
+
+    fn over(node: NodeUid) -> InspectTarget {
+        InspectTarget {
+            node,
+            region: ScreenRegion::from_min_size(
+                ScreenPos { x: 200.0, y: 200.0 },
+                Vector { x: 40.0, y: 40.0 },
+            ),
+        }
+    }
+
+    fn at(x: f32, y: f32) -> Option<ScreenPos> {
+        Some(ScreenPos { x, y })
+    }
+
+    /// A step towards the lens, from a state that already saw the one before
+    /// it — so the heading is set the way a real frame sets it.
+    fn step(
+        held: HandleState,
+        to: Option<ScreenPos>,
+        found: Option<InspectTarget>,
+        now: f64,
+    ) -> HandleState {
+        settle(Some(held), found, to, now).expect("the lens is still up")
+    }
+
+    /// Walking at the lens holds it, however many other nodes the walk crosses.
+    #[test]
+    fn a_walk_towards_the_lens_holds_it() {
+        let (mine, other) = (
+            NodeUid::<Inspector>::mint().erase(),
+            NodeUid::<Inspector>::mint().erase(),
+        );
+        // The lens is up and left of (100, 100); walk from (250, 250) at it.
+        let mut state = showing(mine);
+        let mut now = 0.0;
+        for i in 1..=10 {
+            let t = i as f32 / 10.0;
+            now += 1.0 / 60.0;
+            state = step(
+                state,
+                at(250.0 - 150.0 * t, 250.0 - 150.0 * t),
+                Some(over(other)),
+                now,
+            );
+            assert_eq!(state.target, mine, "gave the lens up {i} steps in");
+        }
+    }
+
+    /// Moving anywhere else hands it over on the very next frame — no interval
+    /// to sit through, which is the whole point of a direction over a timer.
+    #[test]
+    fn moving_across_the_lens_hands_it_over_at_once() {
+        let (mine, other) = (
+            NodeUid::<Inspector>::mint().erase(),
+            NodeUid::<Inspector>::mint().erase(),
+        );
+        // Away from the lens, which sits up and to the left.
+        let moved = step(
+            showing(mine),
+            at(300.0, 300.0),
+            Some(over(other)),
+            1.0 / 60.0,
+        );
+        assert_eq!(
+            moved.target, other,
+            "one frame of movement away, and it is gone"
+        );
+    }
+
+    /// Standing still lets the heading lapse, so stopping on something selects
+    /// it even if the walk that got there was aimed at the lens.
+    #[test]
+    fn standing_still_gives_the_lens_up() {
+        let (mine, other) = (
+            NodeUid::<Inspector>::mint().erase(),
+            NodeUid::<Inspector>::mint().erase(),
+        );
+        let mut state = showing(mine);
+        // One step towards the lens sets the heading, and holds.
+        state = step(state, at(200.0, 200.0), Some(over(other)), 0.02);
+        assert_eq!(state.target, mine);
+        // Then nothing moves for longer than a heading lives.
+        state = step(state, at(200.0, 200.0), Some(over(other)), 0.05);
+        assert_eq!(state.target, mine, "a couple of still frames is not a stop");
+        state = step(state, at(200.0, 200.0), Some(over(other)), 0.4);
+        assert_eq!(state.target, other, "stopping to look at it selects it");
+    }
+
+    /// Passing close by the lens, on the way elsewhere, still hands it over.
+    ///
+    /// The hold is meant for a pointer coming *to* the lens. A generous halo
+    /// around it holds regardless of direction over a wide area, so brushing
+    /// past on the way somewhere else dragged the lens along — which is the
+    /// opposite of what the hold is for.
+    #[test]
+    fn passing_by_the_lens_does_not_hold_it() {
+        let (mine, other) = (
+            NodeUid::<Inspector>::mint().erase(),
+            NodeUid::<Inspector>::mint().erase(),
+        );
+        // Slide straight down the side of the lens, thirteen points clear of
+        // it — near, but going past rather than at it.
+        let lens = lens_region(showing(mine).region).center();
+        let start = ScreenPos {
+            x: lens.x + 20.0,
+            y: lens.y - 30.0,
+        };
+        let mut state = showing(mine);
+        state.pointer = Some(start);
+        let moved = step(
+            state,
+            at(start.x, start.y + 40.0),
+            Some(over(other)),
+            1.0 / 60.0,
+        );
+        assert_eq!(
+            moved.target, other,
+            "the lens held on to a pointer that was only going past it"
+        );
+    }
+
+    /// Once the pointer is on the lens, nothing takes it away — the click has
+    /// to be able to land.
+    #[test]
+    fn the_lens_holds_when_the_pointer_is_on_it() {
+        let (mine, other) = (
+            NodeUid::<Inspector>::mint().erase(),
+            NodeUid::<Inspector>::mint().erase(),
+        );
+        let lens = lens_region(showing(mine).region).center();
+        let state = step(showing(mine), Some(lens), Some(over(other)), 5.0);
+        assert_eq!(state.target, mine);
+    }
+}

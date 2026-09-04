@@ -277,9 +277,14 @@ impl CanvasSidebar {
         The file wins while it is checked out.
     */
     fn poll_prelude_checkout(&self, ctx: NodeContext) {
-        let Some(current) = self.prelude_checkout.val().clone() else {
+        let Some(mut current) = self.prelude_checkout.val().clone() else {
             return;
         };
+        // The environment may have been changed since this was checked out.
+        if let Some(refreshed) = checkout::refresh_config(&current) {
+            current = refreshed;
+            self.prelude_checkout.set(current.clone());
+        }
         let Some(pulled) = checkout::poll(&current) else {
             return;
         };

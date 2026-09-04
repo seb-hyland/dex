@@ -36,6 +36,8 @@ pub struct Button {
 
     /// Stretch the button to the full width its parent offers.
     pub fill_width: bool,
+    /// Stretch the button to the full height its parent offers, centring the content in it.
+    pub fill_height: bool,
 
     interaction: NodeUid<InteractionBox>,
 }
@@ -68,6 +70,7 @@ impl Button {
             hover_border: theme::border_hover(),
             cursor: CursorIcon::PointingHand,
             fill_width: false,
+            fill_height: false,
             interaction,
         };
         configure(&mut button);
@@ -113,7 +116,36 @@ impl Node for Button {
         let avail_h = ctx.constraints.y.map(|a| a.provided_value());
 
         let origin = ctx.constraints.pos;
-        let content_origin = origin + Vector { x: pad_x, y: pad_y };
+
+        let stretch = self
+            .fill_height
+            .then(|| avail_h.filter(|h| h.is_finite()))
+            .flatten();
+        let lift = stretch.map_or(0.0, |height| {
+            let measured = if self.label.text.is_empty() {
+                0.0
+            } else {
+                ctx.measure_node(
+                    &self.label,
+                    DrawConstraints {
+                        pos: origin,
+                        x: None,
+                        y: None,
+                        wrap: WrapConstraints::NotAllowed,
+                        should_clip: false,
+                    },
+                )
+                .region()
+                .map_or(0.0, |r| r.size().y)
+            };
+            let content = measured.max(self.icon().map_or(0.0, |i| i.size));
+            ((height - content) * 0.5 - pad_y).max(0.0)
+        });
+        let content_origin = origin
+            + Vector {
+                x: pad_x,
+                y: pad_y + lift,
+            };
         let content_constraints = DrawConstraints {
             pos: content_origin,
             x: avail_w.map(|w| AxisConstraint::AtMost((w - 2.0 * pad_x).max(0.0))),
@@ -144,6 +176,9 @@ impl Node for Button {
                 && w.is_finite()
             {
                 size.x = w;
+            }
+            if let Some(h) = stretch {
+                size.y = h;
             }
             size
         };

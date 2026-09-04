@@ -160,6 +160,176 @@ fn a_checkout_typechecks_and_completes() {
     let _ = std::fs::remove_dir_all(&out.dir);
 }
 
+/// An edit pulled back reaches the editor, not just the value behind it.
+///
+/// `GetText` prefers the live edit buffer, and the editor draws from it, so a
+/// `SetText` that wrote only the committed value left the old text both on
+/// screen and running. The bare-lambda test above never caught it because an
+/// editor that has not drawn has no buffer to shadow anything.
+#[test]
+fn an_edit_reaches_an_editor_that_has_already_drawn() {
+    use dex_core::prelude::*;
+    use dex_nodes::composites::lambda::{ActiveScript, Lambda};
+    use dex_nodes::layouts::canvas::layout::{AddCanvasItem, CanvasChildren};
+    use dex_nodes::layouts::canvas::nodes::CanvasNodeChild;
+    use dex_nodes::layouts::desktops::{ActiveCanvas, Desktops};
+    use dex_nodes::primitives::text::{CodeEditor, GetText, RequestExternalEdit};
+
+    no_editor();
+    dex_nodes::scripting::init_python();
+
+    let mut ws = Desktops::new_workspace();
+    let egui_ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1200.0, 900.0));
+    let frame = |ws: &mut Workspace| {
+        let _ = egui_ctx.clone().run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |c| {
+                egui::CentralPanel::default().show(c, |ui| ws.draw_frame(ui, screen));
+            },
+        );
+    };
+    frame(&mut ws);
+
+    let canvas = ws
+        .send_request(ws.root(), ActiveCanvas)
+        .expect("the desktop has a canvas");
+    ws.submit_action(
+        canvas,
+        "add a lambda",
+        AddCanvasItem {
+            child: Arc::new(Lambda::new(ws.action_handle())),
+            size: Vector { x: 420.0, y: 340.0 },
+        },
+    );
+    ws.process_pending();
+    frame(&mut ws);
+
+    let item = *ws
+        .send_request(canvas, CanvasChildren)
+        .unwrap_or_default()
+        .first()
+        .expect("the lambda was placed");
+    let lambda = ws
+        .send_request(item, CanvasNodeChild)
+        .expect("the item wraps the lambda");
+
+    // This lambda's own editor, not the sidebar's prelude.
+    fn editor_under(ws: &Workspace, node: NodeUid, depth: usize) -> Option<NodeUid> {
+        if depth > 6 {
+            return None;
+        }
+        let held = ws.get_node(node)?;
+        if held.as_ref().as_any_ref().is::<CodeEditor>() {
+            return Some(node);
+        }
+        let mut found = None;
+        held.owned_refs(&mut |child| {
+            if found.is_none() {
+                found = editor_under(ws, child, depth + 1);
+            }
+        });
+        found
+    }
+    let editor = editor_under(&ws, lambda, 0).expect("the lambda has an editor");
+
+    // Exactly what the "Open in IDE" row submits.
+    ws.submit_action(editor.cast::<CodeEditor>(), "open", RequestExternalEdit);
+    ws.process_pending();
+    for _ in 0..3 {
+        frame(&mut ws);
+    }
+
+    let dir = std::env::temp_dir().join(format!("dex-checkout-{}", lambda.key()));
+    assert!(dir.is_dir(), "the button's request checked nothing out");
+
+    std::fs::write(
+        dir.join("main.py"),
+        format!(
+            "import dex  {}\n\ndef transform():\n    return 'from the ide'\n",
+            checkout::MARKER
+        ),
+    )
+    .unwrap();
+    for _ in 0..3 {
+        frame(&mut ws);
+    }
+
+    let shown = ws
+        .send_request(editor.cast::<CodeEditor>(), GetText)
+        .unwrap_or_default();
+    assert!(
+        shown.contains("from the ide"),
+        "the editor still shows the text it had: {shown:?}"
+    );
+    let script = ws.send_request(lambda, ActiveScript).unwrap_or_default();
+    assert!(
+        script.contains("from the ide"),
+        "the lambda would still run the old script: {script:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A checkout's environment follows the setting, rather than being frozen at
+/// the moment it was opened.
+#[test]
+fn changing_the_environment_rewrites_an_open_checkout() {
+    use dex_nodes::settings;
+
+    no_editor();
+    dex_nodes::scripting::init_python();
+
+    // A directory shaped like a virtual environment, since that is all the
+    // setting checks before it will take one.
+    let venv = std::env::temp_dir().join("dex-test-venv/lib/python3.99/site-packages");
+    std::fs::create_dir_all(&venv).unwrap();
+    let venv = std::env::temp_dir().join("dex-test-venv");
+
+    // With nothing configured, an activated environment is still found: the
+    // embedded interpreter imports from it, so a checkout that ignored it would
+    // call every package in it missing.
+    let restore_active = std::env::var_os("VIRTUAL_ENV");
+    unsafe { std::env::set_var("VIRTUAL_ENV", &venv) };
+    if settings::venv().is_none() {
+        assert_eq!(
+            settings::effective_venv().as_deref(),
+            Some(venv.as_path()),
+            "an activated environment is what a checkout is read against"
+        );
+    }
+    match restore_active {
+        Some(v) => unsafe { std::env::set_var("VIRTUAL_ENV", v) },
+        None => unsafe { std::env::remove_var("VIRTUAL_ENV") },
+    }
+
+    let key = "config-refresh";
+    let dir = std::env::temp_dir().join(format!("dex-checkout-{key}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let before = settings::venv();
+    let checkout = checkout::write(key, "x = 1\n", &[]).expect("checked out");
+
+    settings::set_venv(Some(venv.clone())).expect("the test environment is taken");
+    let refreshed = checkout::refresh_config(&checkout).expect("the environment moved");
+    let config = std::fs::read_to_string(dir.join("pyrightconfig.json")).unwrap();
+    assert!(
+        config.contains("dex-test-venv"),
+        "the config still describes the old environment: {config}"
+    );
+
+    // And it settles: nothing rewrites the file until the setting moves again.
+    assert!(
+        checkout::refresh_config(&refreshed).is_none(),
+        "the config is rewritten every frame"
+    );
+
+    settings::set_venv(before).expect("restored");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&venv);
+}
+
 /// The one node that currently drives a checkout. The helper is generic, so a
 /// prelude editor would wire up the same way.
 #[test]

@@ -887,7 +887,10 @@ defhandlers! { CodeEditor {
         RequestExternalEdit => (this, _a) { this.external_edit.set(true); },
     ],
     extern_actions: [
-        SetText => (this, s) { this.value = s.value },
+        SetText => (this, s) {
+            this.buf.set(s.value.clone());
+            this.value = s.value;
+        },
     ],
     requests: [
         // The live buffer if mid-edit, else the committed value — `value` only

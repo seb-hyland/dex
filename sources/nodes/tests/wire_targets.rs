@@ -159,6 +159,140 @@ fn every_connection_in_a_generated_equation_can_be_drawn() {
     );
 }
 
+/// One wire per connection, and no more.
+///
+/// A sizing draw is invisible because the `Ui` it runs on is — but a port
+/// paints its wire onto an explicit layer, taken from the context rather than
+/// from that `Ui`, so it escaped and landed on screen a second time, from
+/// wherever the measuring pass had put the port. Every wire drew twice, once
+/// through the middle of nothing.
+#[test]
+fn a_connection_draws_exactly_one_wire() {
+    use dex_nodes::composites::lambda::{AddArg, ConnectedTarget, LambdaArgs};
+
+    dex_nodes::scripting::init_python();
+    let mut ws = Desktops::new_workspace();
+    let egui_ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1200.0, 900.0));
+    // A clock that moves, because a wire is drawn onto a child `Ui` and so
+    // fades in with its parent: frozen at zero, every frame catches it partly
+    // transparent and it never shows its own colour.
+    let mut clock = 0.0;
+    let mut run = |ws: &mut Workspace| {
+        clock += 1.0 / 60.0;
+        let input = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(clock),
+            ..Default::default()
+        };
+        egui_ctx.clone().run_ui(input, |c| {
+            egui::CentralPanel::default().show(c, |ui| ws.draw_frame(ui, screen));
+        })
+    };
+    run(&mut ws);
+
+    let canvas = ws
+        .send_request(ws.root(), ActiveCanvas)
+        .expect("the desktop has a canvas");
+    for (label, size) in [
+        ("Hello, ", Vector { x: 160.0, y: 60.0 }),
+        ("world", Vector { x: 160.0, y: 60.0 }),
+    ] {
+        ws.submit_action(
+            canvas,
+            "add a text",
+            AddCanvasItem {
+                child: Arc::new(dex_nodes::primitives::text::Label::new(label.to_owned())),
+                size,
+            },
+        );
+    }
+    ws.submit_action(
+        canvas,
+        "add a lambda",
+        AddCanvasItem {
+            child: Arc::new(Lambda::new(ws.action_handle())),
+            size: Vector { x: 420.0, y: 340.0 },
+        },
+    );
+    ws.process_pending();
+    run(&mut ws);
+
+    // A fresh lambda takes no arguments; give it two, as the `+` row does.
+    let args_row = ws
+        .live_ids()
+        .into_iter()
+        .find(|uid| {
+            ws.get_node(*uid)
+                .is_some_and(|n| n.as_ref().as_any_ref().is::<LambdaArgs>())
+        })
+        .expect("the lambda has an argument list");
+    for _ in 0..2 {
+        ws.submit_action(args_row, "add argument", AddArg);
+        ws.process_pending();
+    }
+    run(&mut ws);
+
+    // Wire every port the lambda has to the first text item.
+    let items = ws
+        .send_request(canvas, dex_nodes::layouts::canvas::layout::CanvasChildren)
+        .unwrap_or_default();
+    let text = items[0];
+    assert!(
+        ws.inspectable_rect(text).is_some(),
+        "the text item is somewhere a wire can reach"
+    );
+    let ports: Vec<NodeUid> = ws
+        .live_ids()
+        .into_iter()
+        .filter(|uid| ws.send_request(*uid, ConnectedTarget).is_some())
+        .collect();
+    assert!(!ports.is_empty(), "a fresh lambda has ports to connect");
+    for port in &ports {
+        ws.submit_action(
+            *port,
+            "connect",
+            dex_nodes::composites::lambda::SetConnection { target: Some(text) },
+        );
+    }
+    ws.process_pending();
+    for _ in 0..12 {
+        run(&mut ws);
+    }
+    let output = run(&mut ws);
+
+    // The wire's own colour, so nothing else in the scene is counted.
+    let wire = egui::Color32::from(Color::rgba(176, 202, 224, 150));
+    for c in output.shapes.iter() {
+        match &c.shape {
+            egui::Shape::Path(p) if p.points.len() == 2 => {
+                println!("PATH2 {:?} clip={:?}", p.stroke, c.clip_rect)
+            }
+            egui::Shape::LineSegment { stroke, .. } => println!("SEG {stroke:?}"),
+            _ => {}
+        }
+    }
+    let drawn = output
+        .shapes
+        .iter()
+        .filter(|c| match &c.shape {
+            egui::Shape::Path(p) => {
+                p.points.len() == 2 && p.stroke.color == egui::epaint::ColorMode::Solid(wire)
+            }
+            egui::Shape::LineSegment { stroke, .. } => stroke.color == wire,
+            _ => false,
+        })
+        .count();
+    let connected = ports
+        .iter()
+        .filter(|uid| matches!(ws.send_request(**uid, ConnectedTarget), Some(Some(_))))
+        .count();
+    assert_eq!(
+        drawn, connected,
+        "{connected} connection(s) drew {drawn} wire(s)"
+    );
+}
+
 /// A container's version follows its contents.
 ///
 /// The registry bumps only the uid an action was addressed to, so a consumer

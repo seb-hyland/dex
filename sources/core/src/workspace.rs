@@ -881,10 +881,23 @@ impl<'ctx> DrawContext<'ctx> {
     /// Draw outside this node's bounds, over everything else in the frame.
     #[dynamic(skip)] // takes a closure, which cannot cross into Python
     pub fn overlay<R>(&mut self, f: impl FnOnce(&mut DrawContext<'_>) -> R) -> R {
-        let layer = LayerId::new(Order::Foreground, Id::new(("dex_overlay", self.node.id)));
+        // A layer to itself, and the whole window to draw in.
         let screen = self.ui.ctx().viewport_rect();
-        let mut ui = self.ui.new_child(UiBuilder::new().layer_id(layer));
-        ui.set_clip_rect(screen);
+        self.overlay_in(Id::new(("dex_overlay", self.node.id)), screen, f)
+    }
+
+    /// The same as [`DrawContext::overlay`], on the layer `layer` names and clipped to `clip`.
+    #[dynamic(skip)] // takes a closure, which cannot cross into Python
+    pub fn overlay_in<R>(
+        &mut self,
+        layer: Id,
+        clip: Rect,
+        f: impl FnOnce(&mut DrawContext<'_>) -> R,
+    ) -> R {
+        let mut ui = self
+            .ui
+            .new_child(UiBuilder::new().layer_id(LayerId::new(Order::Foreground, layer)));
+        ui.set_clip_rect(clip);
 
         let mut ctx = self.moved(&mut ui);
         f(&mut ctx)
@@ -1012,6 +1025,11 @@ impl<'ctx> DrawContext<'ctx> {
         let depth = self.depth;
 
         let result = self.draw_workspace_node(id, constraints);
+
+        // A sizing draw is a question, not an inspectable entity.
+        if self.measuring() {
+            return result;
+        }
 
         // A node that declines an inspector is not addressable.
         if !workspace

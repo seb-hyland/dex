@@ -98,7 +98,16 @@ impl Desktops {
             b.padding_x = 0.0;
         });
         let divider = ws.insert_node(InteractionBox::sensing(true, false, true));
-        let close_override_button = Button::build(ws.clone(), Label::new("Close".to_owned()));
+
+        let close_override_button =
+            Button::build_with(ws.clone(), Label::new("Close".to_owned()), |b| {
+                b.padding = TAB_PAD_Y;
+                b.padding_x = TAB_PAD_X;
+                b.corner_radius = theme::RADIUS_MD;
+                // A tab is clamped to the row's height.
+                b.fill_height = true;
+            });
+
         // A fold control sits on the line it folds.
         let chrome = |glyph: Glyph| {
             Button::build_with(ws.clone(), Label::new(String::new()), |b| {
@@ -159,6 +168,11 @@ const TAB_BAR_H: f32 = TAB_ROW_INSET * 2.0 + TAB_H;
 /// but is capped here, so changing the title's font cannot push a tab through
 /// the rule beneath it.
 const TAB_H: f32 = 26.0;
+/// A tab's padding, and so the padding of anything that has to stand beside
+/// one: the title bar's Close button is a tab-shaped thing in a tab-shaped
+/// row, and reads as an intruder at any other size.
+const TAB_PAD_X: f32 = theme::SPACE_LG;
+const TAB_PAD_Y: f32 = theme::SPACE_SM;
 /// Space above and below the tabs, between them and the row's edges. Smaller
 /// than the gap between tabs: a tab that reaches the rule below it looks like
 /// it is cutting through it.
@@ -932,8 +946,8 @@ impl Node for DesktopTabView {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        const PAD_X: f32 = theme::SPACE_LG;
-        const PAD_Y: f32 = theme::SPACE_SM;
+        const PAD_X: f32 = TAB_PAD_X;
+        const PAD_Y: f32 = TAB_PAD_Y;
         /// Space between the name and the close button.
         const GAP: f32 = theme::SPACE_SM;
 

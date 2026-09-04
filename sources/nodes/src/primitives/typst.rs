@@ -233,11 +233,8 @@ impl Node for TypstEditor {
         } else {
             const GAP: f32 = theme::SPACE_MD;
             let preview_height = avail_h * 0.4;
-            // The preview hangs above the node while its code is being
-            // edited, which is outside the node's own box — so it goes on the
-            // overlay layer. Drawn normally it would be clipped away by the
-            // canvas item that owns this editor.
-            let preview_res = ctx.overlay_node(
+
+            ctx.overlay_node(
                 &*preview,
                 DrawConstraints {
                     pos: ScreenPos {
@@ -250,7 +247,6 @@ impl Node for TypstEditor {
                     should_clip: true,
                 },
             );
-            let preview_region = preview_res.region().unwrap_or(ScreenRegion::empty());
 
             let editor_res = ctx.draw_workspace_node(self.editor.erase(), ctx.constraints);
             let editor_region = editor_res
@@ -267,7 +263,7 @@ impl Node for TypstEditor {
             }
 
             DrawResult::Complete {
-                region: Some(preview_region.union(editor_region)),
+                region: Some(editor_region),
             }
         }
     }

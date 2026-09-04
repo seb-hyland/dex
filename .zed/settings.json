@@ -1,7 +1,7 @@
 {
   "languages": {
-    // "Python": {
-    //   "language_servers": [],
-    // },
+    "Python": {
+      "language_servers": [],
+    },
   },
 }

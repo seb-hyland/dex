@@ -610,4 +610,33 @@ fn a_canvas_offers_to_go_fullscreen() {
         closable,
         "an opened override draws the way back out of itself"
     );
+
+    // The title bar is the tab row wearing a different hat, so what stands in
+    // it has to stand at a tab's height. A Close button built to the button
+    // default is four points taller, and the row reads as broken.
+    let text = output
+        .shapes
+        .iter()
+        .find_map(|c| match &c.shape {
+            egui::Shape::Text(t) if t.galley.text().contains("Close") => {
+                Some(t.visual_bounding_rect())
+            }
+            _ => None,
+        })
+        .expect("the Close label drew");
+    let frame = output
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Rect(r) if r.rect.contains_rect(text) => Some(r.rect),
+            _ => None,
+        })
+        .min_by(|a, b| a.area().total_cmp(&b.area()))
+        .expect("the Close button drew a frame");
+    assert_eq!(
+        frame.height(),
+        26.0,
+        "the Close button stands {} tall, where a tab stands 26",
+        frame.height()
+    );
 }

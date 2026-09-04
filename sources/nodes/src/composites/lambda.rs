@@ -1,7 +1,7 @@
 use dex_core::prelude::*;
 use dex_core::theme;
 
-use egui::{Id, LayerId, Order};
+use egui::Id;
 use utils::Transient;
 
 use crate::layouts::desktops::{Desktops, PythonPrelude};
@@ -45,7 +45,10 @@ pub struct LambdaEditor {
 impl LambdaEditor {
     /// Build a lambda editor into `ws`.
     pub fn build(ws: WorkspaceActionHandle) -> NodeUid<LambdaEditor> {
-        ws.insert_node(Self::holding(ws.clone(), String::new()))
+        ws.insert_node(Self::holding(
+            ws.clone(),
+            "def transform():\n    return".to_owned(),
+        ))
     }
 
     /// An editor already holding `source`, for a caller placing one under an id of its own.
@@ -87,6 +90,10 @@ defhandlers! { LambdaEditor {
 
 /// Marks the node a wire runs to, drawn over it.
 const CONNECTION_MARK_INSET: f32 = 1.0;
+/// Every wire shares one layer and every mark another, so that a mark is drawn
+/// over all the wires and not merely over its own.
+const WIRE_LAYER: &str = "lambda_wires";
+const MARK_LAYER: &str = "lambda_wire_marks";
 /// The drop candidate under a live drag, distinct from a settled connection.
 const CANDIDATE_COLOR: Color = Color {
     r: 40,
@@ -96,13 +103,29 @@ const CANDIDATE_COLOR: Color = Color {
 };
 
 /// Ring to show the target of a wire.
-fn outline(painter: &egui::Painter, region: ScreenRegion, color: Color) {
-    painter.rect_stroke(
-        egui::Rect::from(region).shrink(CONNECTION_MARK_INSET),
-        4.0,
-        egui::Stroke::new(2.0, egui::Color32::from(color)),
-        egui::StrokeKind::Inside,
+fn outline(ctx: &mut DrawContext, region: ScreenRegion, color: Color) {
+    let region = ScreenRegion::from(egui::Rect::from(region).shrink(CONNECTION_MARK_INSET));
+    ctx.draw_node(
+        &Rect {
+            size: region.size(),
+            corner_radius: 4.0,
+            fill_color: Color::TRANSPARENT,
+            border: Stroke::new(2.0, color),
+            stroke_kind: StrokeKind::Inside,
+        },
+        loose(region.min),
     );
+}
+
+/// Constraints for something drawn at `pos` at its own size, unclipped.
+fn loose(pos: ScreenPos) -> DrawConstraints {
+    DrawConstraints {
+        pos,
+        x: None,
+        y: None,
+        wrap: WrapConstraints::NotAllowed,
+        should_clip: false,
+    }
 }
 
 /// Whether `ancestor` owns `start`, at any depth.
@@ -184,22 +207,9 @@ impl Node for ConnectionPort {
 
         let wire_stroke = Stroke::new(1.5, wire_color);
 
+        // Clipped to the surface the wires belong to.
         let clip = crate::layouts::canvas::layout::wire_clip(ctx.ui.ctx())
             .unwrap_or_else(|| ctx.ui.clip_rect());
-        let wire_painter = ctx
-            .ui
-            .ctx()
-            .layer_painter(LayerId::new(Order::Foreground, Id::new("lambda_wires")))
-            .with_clip_rect(clip);
-        // The outline goes over the nodes.
-        let mark_painter = ctx
-            .ui
-            .ctx()
-            .layer_painter(LayerId::new(
-                Order::Foreground,
-                Id::new("lambda_wire_marks"),
-            ))
-            .with_clip_rect(clip);
 
         // Poll the drag sensor.
         ctx.draw_workspace_node(
@@ -219,24 +229,38 @@ impl Node for ConnectionPort {
             .flatten();
 
         let ws = ctx.node.workspace;
-        if let Some(pos) = cur_drag_pos {
+        // Where the wire ends, and what to ring at the far end of it.
+        let (end, mark) = if let Some(pos) = cur_drag_pos {
             // Update ongoing drag
             self.drag_pos.set(pos);
-            Path::span((pos - port_center).to_vector(), wire_stroke)
-                .paint(&wire_painter, port_center);
             // Say what would be wired up if the drag ended here.
-            if let Some(rect) = ws.inspectable_at(pos).and_then(|c| ws.inspectable_rect(c)) {
-                outline(&mark_painter, rect, CANDIDATE_COLOR);
-            }
+            let candidate = ws
+                .inspectable_at(pos)
+                .and_then(|c| ws.inspectable_rect(c))
+                .map(|rect| (rect, CANDIDATE_COLOR));
+            (Some(pos), candidate)
         } else if let Some(target) = self.connected
             && let Some(rect) = ws.inspectable_rect(target)
         {
             // Stop at the target's edge rather than its middle.
-            let target_anchor = rect.edge_towards(port_center);
-            Path::span((target_anchor - port_center).to_vector(), wire_stroke)
-                .paint(&wire_painter, port_center);
+            (
+                Some(rect.edge_towards(port_center)),
+                Some((rect, wire_color)),
+            )
+        } else {
+            (None, None)
+        };
 
-            outline(&mark_painter, rect, wire_color);
+        if let Some(end) = end {
+            ctx.overlay_in(Id::new(WIRE_LAYER), clip, |ctx| {
+                ctx.draw_node(
+                    &Path::span((end - port_center).to_vector(), wire_stroke),
+                    loose(port_center),
+                );
+            });
+        }
+        if let Some((rect, color)) = mark {
+            ctx.overlay_in(Id::new(MARK_LAYER), clip, |ctx| outline(ctx, rect, color));
         }
 
         let drag_released = ctx
@@ -722,9 +746,14 @@ impl Lambda {
         The file wins while it is checked out.
     */
     fn poll_checkout(&self, ctx: NodeContext) {
-        let Some(current) = self.checkout.val().clone() else {
+        let Some(mut current) = self.checkout.val().clone() else {
             return;
         };
+        // The environment may have been changed since this was checked out.
+        if let Some(refreshed) = checkout::refresh_config(&current) {
+            current = refreshed;
+            self.checkout.set(current.clone());
+        }
         let Some(pulled) = checkout::poll(&current) else {
             return;
         };

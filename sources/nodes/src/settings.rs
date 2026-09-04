@@ -24,6 +24,24 @@ fn venv_slot() -> &'static Mutex<Option<PathBuf>> {
     VENV.get_or_init(|| Mutex::new(None))
 }
 
+/// Bumped whenever the environment changes.
+static VENV_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Which environment is in force, as a number that changes when it does.
+pub fn venv_generation() -> u64 {
+    VENV_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The environment a script should be read against.
+pub fn effective_venv() -> Option<PathBuf> {
+    if let Some(configured) = venv() {
+        return Some(configured);
+    }
+    let active = PathBuf::from(std::env::var_os("VIRTUAL_ENV")?);
+    // Only if it really is one: the variable outlives a deleted environment.
+    site_packages(&active).is_some().then_some(active)
+}
+
 fn editor_slot() -> &'static Mutex<String> {
     static EDITOR: OnceLock<Mutex<String>> = OnceLock::new();
     EDITOR.get_or_init(|| Mutex::new(DEFAULT_EDITOR.to_owned()))
@@ -72,6 +90,7 @@ pub fn set_venv(path: Option<PathBuf>) -> Result<(), String> {
 
     let mut slot = venv_slot().lock().map_err(|_| "settings lock poisoned")?;
     *slot = path;
+    VENV_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
 

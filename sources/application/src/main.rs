@@ -27,7 +27,7 @@ fn main() -> eframe::Result {
     dioxus_devtools::connect_subsecond();
 
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([900.0, 600.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1400.0, 800.0]),
         ..Default::default()
     };
     eframe::run_native(
