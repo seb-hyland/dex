@@ -328,6 +328,32 @@ dex_dynamic::__rt::inventory::submit! {
 }
 
 /**
+    Run `callable()` on a dedicated background thread.
+
+    This does not leverage the compute scheduler, so background async I/O does not starve the worker pool.
+*/
+#[pyfunction]
+pub fn spawn(callable: Py<PyAny>) {
+    std::thread::spawn(move || {
+        Python::attach(|py| {
+            if let Err(e) = callable.call0(py) {
+                e.print(py);
+            }
+        });
+    });
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    dex_dynamic::DynamicBinding {
+        name: "spawn",
+        register_python: |m| {
+            use pyo3::types::PyModuleMethods;
+            m.add_function(pyo3::wrap_pyfunction!(spawn, m)?)
+        },
+    }
+}
+
+/**
     Capture a bound value as bytes for its `__reduce__`.
     CBOR (RFC 8949): binary and compact.
 */
