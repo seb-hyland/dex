@@ -258,8 +258,7 @@ fn a_scrolled_label_resolves_to_its_text() {
     // Exactly what `FileBrowser::node_for` builds for a non-CSV text file.
     let mut label = Label::new(gbff.to_owned());
     label.singleline = false;
-    let scrolled =
-        handle.insert_node(ScrollLayout::vertical(LayoutChild::Node(Arc::new(label))));
+    let scrolled = handle.insert_node(ScrollLayout::vertical(LayoutChild::Node(Arc::new(label))));
     ws.process_pending();
     ws.set_root(scrolled.erase());
 

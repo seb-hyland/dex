@@ -10,7 +10,8 @@ use dex_nodes::{
     layouts::canvas::{
         layout::{
             AddCanvasItem, AdoptCanvasNode, Canvas, CanvasChildren, CanvasLayerNodes,
-            CanvasViewOrigin, Layer, NodeScreenRect, RemoveCanvasItem,
+            CanvasViewOrigin, CanvasZoom, Layer, NodeScreenRect, RemoveCanvasItem, ResetCanvasView,
+            ResetCanvasZoom,
         },
         nodes::CanvasItemBounds,
     },
@@ -168,13 +169,17 @@ impl Harness {
         self.frame(vec![]);
     }
 
-    /// Where the item's top-left corner is on screen, as the canvas maps it.
-    fn item_on_screen(&self) -> ScreenPos {
+    /// Where the item sits on screen, as the canvas maps it.
+    fn item_rect(&self) -> ScreenRegion {
         self.ws
             .send_request(self.canvas, NodeScreenRect { node: self.item() })
             .flatten()
             .expect("the item is on screen")
-            .min
+    }
+
+    /// Where the item's top-left corner is on screen, as the canvas maps it.
+    fn item_on_screen(&self) -> ScreenPos {
+        self.item_rect().min
     }
 
     /// Where the probe painted its mark this frame, by its centre.
@@ -272,6 +277,101 @@ fn a_background_and_an_item_agree_on_where_a_canvas_point_is() {
         "a panned surface is no longer showing its own origin: ({}, {})",
         origin.x,
         origin.y
+    );
+}
+
+/// Pinch/ctrl-scroll magnifies the plane about the cursor: the item grows by
+/// the zoom factor, and the canvas point under the cursor does not move.
+#[test]
+fn zooming_scales_the_plane_about_the_cursor() {
+    let mut h = Harness::new();
+
+    let before = h.item_rect();
+    // Aim the cursor at the item's top-left corner, so the canvas point there is
+    // the one that must stay put.
+    let cursor = egui::pos2(before.min.x, before.min.y);
+    h.frame(vec![egui::Event::PointerMoved(cursor)]);
+    h.frame(vec![
+        egui::Event::PointerMoved(cursor),
+        egui::Event::Zoom(2.0),
+    ]);
+
+    let after = h.item_rect();
+
+    // The point under the cursor held still.
+    assert!(
+        (after.min.x - before.min.x).abs() < 0.5 && (after.min.y - before.min.y).abs() < 0.5,
+        "the corner under the cursor moved: was ({}, {}), now ({}, {})",
+        before.min.x,
+        before.min.y,
+        after.min.x,
+        after.min.y
+    );
+
+    // And the item is twice the size it was.
+    let (bw, bh) = (before.size().x, before.size().y);
+    let (aw, ah) = (after.size().x, after.size().y);
+    assert!(
+        (aw - 2.0 * bw).abs() < 0.5 && (ah - 2.0 * bh).abs() < 0.5,
+        "the item scaled to ({aw}, {ah}) from ({bw}, {bh}), not double"
+    );
+
+    // The zoom the surface reports matches.
+    let zoom =
+        h.ws.send_request(h.canvas, CanvasZoom)
+            .expect("the surface reports its zoom");
+    assert!((zoom - 2.0).abs() < 1e-3, "the zoom is {zoom}, not 2.0");
+}
+
+/// The desktop-menu commands: one resets the zoom to life size, the other pans
+/// back to the plane's origin, and each leaves the other alone.
+#[test]
+fn the_view_can_be_reset_to_life_size_and_to_the_origin() {
+    let mut h = Harness::new();
+
+    // Zoom in about a corner and pan, so both are off their defaults.
+    let corner = egui::pos2(300.0, 220.0);
+    h.frame(vec![egui::Event::PointerMoved(corner)]);
+    h.frame(vec![
+        egui::Event::PointerMoved(corner),
+        egui::Event::Zoom(1.8),
+    ]);
+    h.drag(egui::pos2(700.0, 520.0), egui::pos2(560.0, 430.0));
+
+    let zoom = h.ws.send_request(h.canvas, CanvasZoom).unwrap();
+    let origin = h.ws.send_request(h.canvas, CanvasViewOrigin).unwrap();
+    assert!(zoom > 1.01, "the view is zoomed in ({zoom})");
+    assert!(
+        origin.x.abs() > 1.0 || origin.y.abs() > 1.0,
+        "and panned off the origin ({}, {})",
+        origin.x,
+        origin.y
+    );
+
+    // Reset the zoom: the pan is untouched.
+    h.ws.submit_action(h.canvas, "reset zoom", ResetCanvasZoom);
+    h.ws.process_pending();
+    h.frame(vec![]);
+    assert!(
+        (h.ws.send_request(h.canvas, CanvasZoom).unwrap() - 1.0).abs() < 1e-3,
+        "reset zoom returns to life size"
+    );
+    let after_zoom_reset = h.ws.send_request(h.canvas, CanvasViewOrigin).unwrap();
+    assert!(
+        (after_zoom_reset.x - origin.x).abs() < 0.5 && (after_zoom_reset.y - origin.y).abs() < 0.5,
+        "reset zoom leaves the pan where it was"
+    );
+
+    // Reset the position: back to the origin.
+    h.ws.submit_action(h.canvas, "reset position", ResetCanvasView);
+    h.ws.process_pending();
+    h.frame(vec![]);
+    let reset = h.ws.send_request(h.canvas, CanvasViewOrigin).unwrap();
+    assert!(
+        reset.x.abs() < 1e-3 && reset.y.abs() < 1e-3,
+        "reset position returns to the origin, not ({}, {})",
+        reset.x,
+        reset.y
     );
 }
 

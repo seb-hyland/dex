@@ -894,9 +894,18 @@ impl<'ctx> DrawContext<'ctx> {
         clip: Rect,
         f: impl FnOnce(&mut DrawContext<'_>) -> R,
     ) -> R {
-        let mut ui = self
-            .ui
-            .new_child(UiBuilder::new().layer_id(LayerId::new(Order::Foreground, layer)));
+        self.on_layer(LayerId::new(Order::Foreground, layer), clip, f)
+    }
+
+    /// Run `f` with drawing directed onto `layer`, clipped to `clip`.
+    #[dynamic(skip)] // takes a closure, which cannot cross into Python
+    pub fn on_layer<R>(
+        &mut self,
+        layer: LayerId,
+        clip: Rect,
+        f: impl FnOnce(&mut DrawContext<'_>) -> R,
+    ) -> R {
+        let mut ui = self.ui.new_child(UiBuilder::new().layer_id(layer));
         ui.set_clip_rect(clip);
 
         let mut ctx = self.moved(&mut ui);
@@ -1046,7 +1055,20 @@ impl<'ctx> DrawContext<'ctx> {
             .and_then(|r| r.region())
             .or_else(|| allotted(&constraints));
         let visible = region.and_then(|region| region.intersect(clip));
-        workspace.probe.record(id, depth, region, visible);
+
+        // Inside a zoomed/panned surface these are in the layer's own coordinates.
+        let to_global = self.ui.ctx().layer_transform_to_global(self.ui.layer_id());
+        let globalize = |r: ScreenRegion| match to_global {
+            Some(t) => ScreenRegion::from(t * Rect::from(r)),
+            None => r,
+        };
+        workspace.probe.record(
+            id,
+            depth,
+            region.map(globalize),
+            visible.map(globalize),
+            self.ui.layer_id(),
+        );
         result
     }
 

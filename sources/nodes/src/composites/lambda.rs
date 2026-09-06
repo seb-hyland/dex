@@ -1,7 +1,7 @@
 use dex_core::prelude::*;
 use dex_core::theme;
 
-use egui::Id;
+use egui::{Id, Pos2};
 use utils::Transient;
 
 use crate::layouts::desktops::{Desktops, PythonPrelude};
@@ -24,7 +24,7 @@ use crate::{
     },
     primitives::{
         icon::Glyph,
-        interaction::{DragPointerPos, InteractionBox, WasClicked, WasDragReleased},
+        interaction::{DragPointerPos, InteractionBox, TakeClicked, WasDragReleased},
         nothing::Nothing,
         shapes::{Circle, Path, Rect},
         text::{CodeEditor, GetText, Label, LabelEditable, SetText, TakeExternalEditRequest},
@@ -207,6 +207,16 @@ impl Node for ConnectionPort {
 
         let wire_stroke = Stroke::new(1.5, wire_color);
 
+        /*
+            The port sits inside whatever surface it belongs to, and on a zoomed canvas that surface's items
+            are drawn on a transformed layer.
+        */
+        let to_global = ctx.ui.ctx().layer_transform_to_global(ctx.ui.layer_id());
+        let to_screen = |p: ScreenPos| -> ScreenPos {
+            to_global.map_or(p, |t| ScreenPos::from(t.mul_pos(Pos2::from(p))))
+        };
+        let screen_port_center = to_screen(port_center);
+
         // Clipped to the surface the wires belong to.
         let clip = crate::layouts::canvas::layout::wire_clip(ctx.ui.ctx())
             .unwrap_or_else(|| ctx.ui.clip_rect());
@@ -226,7 +236,8 @@ impl Node for ConnectionPort {
             .node
             .workspace
             .send_request(self.drag_sensor, DragPointerPos {})
-            .flatten();
+            .flatten()
+            .map(to_screen);
 
         let ws = ctx.node.workspace;
         // Where the wire ends, and what to ring at the far end of it.
@@ -244,7 +255,7 @@ impl Node for ConnectionPort {
         {
             // Stop at the target's edge rather than its middle.
             (
-                Some(rect.edge_towards(port_center)),
+                Some(rect.edge_towards(screen_port_center)),
                 Some((rect, wire_color)),
             )
         } else {
@@ -254,8 +265,8 @@ impl Node for ConnectionPort {
         if let Some(end) = end {
             ctx.overlay_in(Id::new(WIRE_LAYER), clip, |ctx| {
                 ctx.draw_node(
-                    &Path::span((end - port_center).to_vector(), wire_stroke),
-                    loose(port_center),
+                    &Path::span((end - screen_port_center).to_vector(), wire_stroke),
+                    loose(screen_port_center),
                 );
             });
         }
@@ -491,7 +502,7 @@ impl Node for LambdaArgs {
             if ctx
                 .node
                 .workspace
-                .send_request(self.delete_buttons[i].erase(), WasClicked)
+                .send_request(self.delete_buttons[i].erase(), TakeClicked)
                 .unwrap_or(false)
             {
                 ctx.submit_action_for_self::<Self, _>(DeleteArg { index: i }, "Delete argument");
@@ -500,7 +511,7 @@ impl Node for LambdaArgs {
         if ctx
             .node
             .workspace
-            .send_request(self.add_button.erase(), WasClicked)
+            .send_request(self.add_button.erase(), TakeClicked)
             .unwrap_or(false)
         {
             ctx.submit_action_for_self::<Self, _>(AddArg, "Add argument");
@@ -861,7 +872,7 @@ impl Node for Lambda {
         if ctx
             .node
             .workspace
-            .send_request(self.update_button.erase(), WasClicked)
+            .send_request(self.update_button.erase(), TakeClicked)
             .unwrap_or(false)
         {
             self.run_update(ctx.node);
@@ -1510,7 +1521,7 @@ impl Node for CanvasLambda {
         if ctx
             .node
             .workspace
-            .send_request(self.open_button.erase(), WasClicked)
+            .send_request(self.open_button.erase(), TakeClicked)
             .unwrap_or(false)
         {
             let root = ctx.node.workspace.root();

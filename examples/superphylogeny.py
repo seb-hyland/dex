@@ -9,8 +9,23 @@ Three views, joined into a single object you explore by clicking inward:
      swaps itself for the Genome Explorer of that assembly. It carries a
      fullscreen button, because a genome does not fit in a popup.
   3. **Click a gene → its structure.** The gene's inspector shows its record
-     and, if the CDS carries a UniProt cross-reference, fetches the AlphaFold
+     and, if the CDS resolves to a UniProt accession, fetches the AlphaFold
      model for it — again on a task, again with fullscreen.
+
+Every one of those three is bigger than the box it is shown in, so every one of
+them sits on a `Canvas` of its own (`on_plane`): drawn once, life-size and
+generous, and moved around by dragging and alt-scrolling. Nothing invents its own
+navigation. Zoom is measured against a whole desktop rather than against the box
+in hand, so a plane shown small in an inspector's preview is the same picture
+scaled down, and opening it fullscreen shows you what you were already looking
+at. The exception is the structure, which gives up the plane's drag in exchange
+for being turned by it.
+
+Each plane is named after what it holds, so the inspector's heading and the
+breadcrumb trail say "Genome" and not "A Canvas". And anything that must stay
+legible however far the plane has been dragged or magnified — a genome's title
+and key, the selected atom's readout — is drawn in the plane's *foreground*,
+which stays put and life-size over it.
 
 Nothing is precomputed and nothing blocks: every fetch runs through `dex.spawn`,
 which hands a Python callable to a background thread. The callable owns a
@@ -34,6 +49,7 @@ for the whole tree, or make only a chosen rank's tips inspectable.
 """
 
 import io
+import json
 import math
 import random
 import re
@@ -50,7 +66,7 @@ NCBI_DATASETS = (
     "https://api.ncbi.nlm.nih.gov/datasets/v2alpha/genome/accession/"
     "{acc}/download?include_annotation_type=GENOME_GBFF"
 )
-ALPHAFOLD = "https://alphafold.ebi.ac.uk/files/AF-{uni}-F1-model_v4.pdb"
+ALPHAFOLD_API = "https://alphafold.ebi.ac.uk/api/prediction/{uni}"
 UA = {"User-Agent": "dex-superphylogeny/0.1 (research use)"}
 TIMEOUT = 60.0
 
@@ -87,9 +103,22 @@ def fetch_gbff(gtdb_key):
 
 
 def fetch_alphafold(uniprot):
-    """The AlphaFold predicted structure (PDB) for a UniProt accession."""
-    req = urllib.request.Request(ALPHAFOLD.format(uni=uniprot), headers=UA)
-    return urllib.request.urlopen(req, timeout=TIMEOUT).read().decode("utf-8", "replace")
+    """The AlphaFold predicted structure (PDB) for a UniProt accession.
+
+    The model URL is *asked for*, not composed. The file names carry a database
+    version (`…-model_v6.pdb`), and it moves: every hard-coded `v4` URL is now a
+    404, which — being caught as "no model" — read as "AlphaFold has nothing for
+    this protein" for every protein in the archive. The prediction endpoint
+    answers with the current URL, so this cannot go stale again.
+    """
+    req = urllib.request.Request(ALPHAFOLD_API.format(uni=uniprot), headers=UA)
+    entries = json.loads(urllib.request.urlopen(req, timeout=TIMEOUT).read())
+    url = next((e.get("pdbUrl") for e in entries if e.get("pdbUrl")), None)
+    if not url:
+        raise urllib.error.HTTPError(req.full_url, 404, "no AlphaFold model", None, None)
+    return urllib.request.urlopen(
+        urllib.request.Request(url, headers=UA), timeout=TIMEOUT
+    ).read().decode("utf-8", "replace")
 
 
 ESMFOLD = "https://api.esmatlas.com/foldSequence/v1/pdb/"
@@ -319,7 +348,7 @@ class FoldPrompt:
 
             def worker():
                 try:
-                    node = framed(ws, ws.insert_node_dyn(build_protein(ws, fetch_esmfold(seq))))
+                    node = framed(ws, build_protein(ws, fetch_esmfold(seq)))
                 except Exception as exc:  # noqa: BLE001
                     node = dex.ErrorLayout.message("%s: %s" % (type(exc).__name__, exc))
                 ws.insert_node_at_dyn(me, node)
@@ -344,6 +373,31 @@ class FoldPrompt:
 # ======================================================================
 # Shared draw helpers
 # ======================================================================
+
+
+def on_plane(ws, body_uid, size, what="Placed it", foreground=(), name=None):
+    """Put `body_uid` on a pan/zoom canvas of its own, and return the canvas.
+
+    Every view here that is bigger than the box it is shown in gets one of
+    these: the body is drawn once, life-size and generous, and the plane the
+    surface provides is how you move around it. Dragging empty space pans and
+    alt-scroll magnifies, so no view has to invent its own navigation — and
+    nothing that wants a drag for something else (turning a structure) may take
+    the whole surface for it. Those go in `foreground`, which stays put and
+    life-size while the plane moves under it.
+    """
+    canvas = dex.Canvas.build(ws)
+    item = dex.StaticCanvasItem.build(
+        ws, body_uid, dex.Vector.new(0.0, 0.0), dex.Vector.new(size[0], size[1]))
+    ws.submit_action(canvas, dex.AdoptCanvasNode(item, dex.Layer.midground()), what)
+    for node in foreground:
+        ws.submit_action(canvas, dex.AdoptCanvasNode(node, dex.Layer.foreground()),
+                         "Added the chrome")
+    # A plane is a means, not an end: the inspector's heading and every crumb in
+    # the trail should say what is on it, not that it is a canvas.
+    if name:
+        ws.submit_action(canvas, dex.NameCanvas(name=name), "Named the plane")
+    return canvas
 
 
 def _abs():
@@ -590,65 +644,97 @@ def circle_pts(cx, cy, r, n=48):
              cy + r * math.sin(2 * math.pi * k / n)) for k in range(n)]
 
 
-def atom_cloud(z, max_points=900):
-    """A 3D electron-density point cloud for atomic number `z`.
+def bohr_shells(z):
+    """One ring per Bohr shell for atomic number `z`: radius, electrons, plane.
 
-    One fuzzy shell per Bohr shell — points scattered on a sphere at the shell's
-    radius with a Gaussian radial spread, as many as the shell has electrons.
-    Seeded by `z`, so the cloud is stable frame to frame (no shimmer). Radii are
-    normalised to ~1 and scaled to the box at draw time.
+    A shell model is all the electron structure the periodic table hands you
+    without orbitals, so it is drawn as one: rings you can count, with the
+    electrons on them as discrete points. The rings do not lie in one plane —
+    each is tilted a little further than the last — so the model reads as a
+    solid object turning rather than as flat concentric circles.
     """
-    shells = electron_shells(z) or [1]
-    total = sum(shells) or 1
-    n = len(shells)
-    rng = random.Random(z * 2654435761 & 0xFFFFFFFF)
-    pts = []
-    for (i, count) in enumerate(shells):
-        r0 = (i + 1) / n
-        k = max(10, int(max_points * count / total))
-        for _ in range(k):
-            u = rng.uniform(-1.0, 1.0)
-            th = rng.uniform(0.0, 2.0 * math.pi)
-            s = math.sqrt(max(0.0, 1.0 - u * u))
-            rr = r0 * (1.0 + rng.gauss(0.0, 0.11))
-            pts.append((s * math.cos(th) * rr, s * math.sin(th) * rr, u * rr, i))
-    return pts, n
+    counts = electron_shells(z) or [0]
+    n = len(counts)
+    return [((i + 1) / n, count, 0.30 + i * (0.9 / max(n, 1)))
+            for (i, count) in enumerate(counts)]
+
+
+def _turn(p, yaw, tilt):
+    """A point through the viewer's yaw and tilt, the way the protein turns."""
+    (x, y, z) = p
+    (ca, sa) = (math.cos(yaw), math.sin(yaw))
+    (cb, sb) = (math.cos(tilt), math.sin(tilt))
+    (x, z) = (x * ca + z * sa, -x * sa + z * ca)
+    (y, z) = (y * cb - z * sb, y * sb + z * cb)
+    return (x, y, z)
+
+
+def _on_ring(r, plane, angle):
+    """The point at `angle` around a ring of radius `r`, in its own tilted plane."""
+    (ct, st) = (math.cos(plane), math.sin(plane))
+    (x, y) = (r * math.cos(angle), r * math.sin(angle))
+    return (x, y * ct, y * st)
 
 
 def shell_color(i, n):
-    """Inner shells blue, outer shells warm — a simple density gradient."""
+    """Inner shells blue, outer shells warm — near the nucleus to far from it."""
     return lerp_rgb((70, 110, 198), (206, 132, 96), i / max(n - 1, 1))
 
 
-def draw_cloud(ctx, cx, cy, R, points, n_shells, yaw, tilt, dot=1.6):
-    """Project the cloud with the viewer's yaw/tilt, depth-sort, fade the far
-    side — the same machinery the protein uses, on one atom's electrons."""
-    (ca, sa) = (math.cos(yaw), math.sin(yaw))
-    (cb, sb) = (math.cos(tilt), math.sin(tilt))
-    proj = []
-    for (x, y, z, sh) in points:
-        dx, dz = x * ca + z * sa, -x * sa + z * ca
-        dy, dz = y * cb - dz * sb, y * sb + dz * cb
-        proj.append((cx + dx * R, cy - dy * R, dz, sh))
-    proj.sort(key=lambda p: p[2])
-    zlo = proj[0][2]
-    span = (proj[-1][2] - zlo) or 1.0
-    _polygon(ctx, circle_pts(cx, cy, max(4.0, R * 0.06), 28), (66, 70, 78))
-    for (sx, sy, dz, sh) in proj:
-        t = (dz - zlo) / span
-        col = lerp_rgb(FAR, shell_color(sh, n_shells), 0.25 + 0.7 * t)
-        _polygon(ctx, octagon(sx, sy, dot * (0.7 + 0.8 * t)), col)
+def draw_bohr(ctx, cx, cy, R, shells, yaw, tilt, dot=3.2, arcs=72):
+    """The model, depth-sorted about its nucleus.
+
+    Everything — every arc of every ring, every electron, the nucleus itself —
+    goes into one list keyed by depth and is painted back to front, so the near
+    half of a ring passes in front of the nucleus and the far half behind it.
+    That, and fading with depth, is the whole of the three-dimensionality.
+    """
+    n = len(shells)
+    nucleus_r = max(3.0, R * 0.09)
+    items = [(0.0, "nucleus", None)]
+    for (i, (r, count, plane)) in enumerate(shells):
+        ink = shell_color(i, n)
+        ring = [_turn(_on_ring(r, plane, 2 * math.pi * k / arcs), yaw, tilt)
+                for k in range(arcs)]
+        for k in range(arcs):
+            (a, b) = (ring[k], ring[(k + 1) % arcs])
+            items.append(((a[2] + b[2]) / 2.0, "arc", (a, b, ink)))
+        for e in range(count):
+            q = _turn(_on_ring(r, plane, 2 * math.pi * e / count), yaw, tilt)
+            items.append((q[2], "electron", (q, ink)))
+
+    items.sort(key=lambda it: it[0])
+    lo = items[0][0]
+    span = (items[-1][0] - lo) or 1.0
+    for (depth, kind, payload) in items:
+        t = (depth - lo) / span
+        if kind == "nucleus":
+            _polygon(ctx, circle_pts(cx, cy, nucleus_r, 28), (86, 92, 102))
+        elif kind == "arc":
+            (a, b, ink) = payload
+            shade = lerp_rgb(lerp_rgb(ink, FAR, 0.78), ink, t)
+            _line(ctx, [(cx + a[0] * R, cy - a[1] * R), (cx + b[0] * R, cy - b[1] * R)],
+                  shade, 1.0 + 0.5 * t)
+        else:
+            (q, ink) = payload
+            shade = lerp_rgb(lerp_rgb(ink, FAR, 0.42), ink, t)
+            _polygon(ctx, octagon(cx + q[0] * R, cy - q[1] * R, dot * (0.66 + 0.6 * t)), shade)
+
+
+def shell_counts(shells):
+    """`2 \u00b7 8 \u00b7 18`: the model's own caption."""
+    return " \u00b7 ".join(str(count) for (_r, count, _plane) in shells)
 
 
 class AtomModel:
-    """A single atom as a rotatable 3D electron-density cloud — driven by the
-    same drag-to-rotate machinery as the protein, and pushable fullscreen."""
+    """A single atom as a rotatable 3D Bohr model — driven by the same
+    drag-to-rotate machinery as the protein, and pushable fullscreen."""
 
     def __init__(self, element, z, sensor):
         self.element = element
         self.z = z
         self.sensor = sensor
-        self.points, self.n_shells = atom_cloud(z)
+        self.shells = bohr_shells(z)
         self.yaw, self.tilt = 0.6, 0.32
 
     def draw(self, ctx):
@@ -667,11 +753,14 @@ class AtomModel:
             self.tilt = max(-1.4, min(1.4, self.tilt + drag.y * DRAG_SENS))
         cx, cy = base.pos.x + w / 2.0, base.pos.y + h / 2.0
         R = min(w, h) / 2.0 - 18.0
-        draw_cloud(ctx, cx, cy, R, self.points, self.n_shells, self.yaw, self.tilt,
-                   dot=max(1.6, R * 0.012))
+        draw_bohr(ctx, cx, cy, R, self.shells, self.yaw, self.tilt,
+                  dot=max(3.0, R * 0.022))
         _text(ctx, "%s  ·  %s  ·  Z %d"
               % (ELEMENT_NAME.get(self.element, self.element), self.element, self.z),
               base.pos.x + 10.0, base.pos.y + 8.0, 12.0, INK)
+        # What the rings are: the electron count per shell, outward.
+        _text(ctx, "shells  %s" % shell_counts(self.shells),
+              base.pos.x + 10.0, base.pos.y + 26.0, 10.0, FAINT)
         return dex.DrawResult.Complete(
             region=dex.ScreenRegion.from_min_size(base.pos, dex.Vector.new(w, h)))
 
@@ -688,36 +777,29 @@ class AtomModel:
         return None
 
 
-PAN_MODE_BOX = (110.0, 22.0)   # the rotate/pan toggle in the corner
-
-
 class Protein:
     """Every atom as a depth-sorted CPK dot over the backbone trace.
 
-    Drag rotates (yaw + pitch) or pans, per the corner toggle. Click an atom to
-    select it: it is ringed, and a panel shows its expanded identity, a Bohr
-    model of its element, and an Open-Fullscreen button that pushes that model
-    over the whole view — the same fullscreen the protein itself has.
+    Drag it to turn it — the whole surface, so there is nothing to aim at first.
+    It sits on a plane, so alt-scroll magnifies it; the plane's own drag is given
+    up in exchange, which is the trade a thing you turn has to make.
+
+    Click an atom to select it: it is ringed, and the `AtomPanel` pinned in the
+    plane's foreground shows what it is.
     """
 
-    def __init__(self, title, order, chains, atoms, sensor, mode_sensor, model_button):
+    def __init__(self, title, order, chains, atoms, sensor):
         self.title = title
         self.order = list(order)
         self.chains = {c: list(p) for (c, p) in chains.items()}
         self.atoms = list(atoms)   # (element, chain, resname, resseq, name, (x,y,z))
         self.sensor = sensor
-        self.mode_sensor = mode_sensor
-        self.model_button = model_button
         self.yaw = 0.0
         self.tilt = PROT_TILT
-        self.pan_x = 0.0
-        self.pan_y = 0.0
-        self.pan_mode = False
-        self.selected = None       # index into self.atoms
-        self.atom_model_uid = None
-        self._model_element = None
-        self._prev_elem = None     # cached preview cloud, keyed by element
-        self._prev_pts, self._prev_n = None, 0
+        # Read by the `AtomPanel` in the foreground: an index into `atoms`, or
+        # None. The structure is the only thing that can know which atom a click
+        # landed on, so it is the one that says.
+        self.selected = None
         pts = [a[5] for a in self.atoms] or [p for c in self.chains.values() for p in c]
         if pts:
             self.center = tuple(sum(p[i] for p in pts) / len(pts) for i in range(3))
@@ -737,20 +819,16 @@ class Protein:
         ctx.draw_node(self.sensor, _box(base.pos.x, base.pos.y, w, h))
         drag = ws.send_request(self.sensor, dex.WasDragged())
         if drag is not None:
-            if self.pan_mode:
-                self.pan_x += drag.x
-                self.pan_y += drag.y
-            else:
-                self.yaw += drag.x * DRAG_SENS
-                self.tilt = max(-1.4, min(1.4, self.tilt + drag.y * DRAG_SENS))
+            self.yaw += drag.x * DRAG_SENS
+            self.tilt = max(-1.4, min(1.4, self.tilt + drag.y * DRAG_SENS))
 
         avail = min(w, h) / 2.0 - 12.0
         if avail <= 0.0 or not self.atoms:
             return dex.DrawResult.Complete(
                 region=dex.ScreenRegion.from_min_size(base.pos, dex.Vector.new(w, h)))
         scale = avail / self.radius
-        ox = base.pos.x + w / 2.0 + self.pan_x
-        oy = base.pos.y + h / 2.0 + self.pan_y
+        ox = base.pos.x + w / 2.0
+        oy = base.pos.y + h / 2.0
         (ca, sa) = (math.cos(self.yaw), math.sin(self.yaw))
         (cb, sb) = (math.cos(self.tilt), math.sin(self.tilt))
         (cx, cy, cz) = self.center
@@ -800,42 +878,73 @@ class Protein:
             (sx, sy, _) = proj_atoms[self.selected]
             ring = octagon(sx, sy, 6.5)
             _line(ctx, ring + [ring[0]], (250, 176, 40), 1.8)
-            self._atom_panel(ctx, ws, base.pos.x + 8.0, base.pos.y + 8.0)
-
-        # The rotate/pan toggle, top-right, drawn last so it takes its own clicks.
-        (mbw, mbh) = PAN_MODE_BOX
-        mx, my = base.pos.x + w - mbw - 8.0, base.pos.y + 8.0
-        _polygon(ctx, [(mx, my), (mx + mbw, my), (mx + mbw, my + mbh), (mx, my + mbh)],
-                 (238, 240, 244))
-        _text(ctx, "Mode: Pan" if self.pan_mode else "Mode: Rotate",
-              mx + 8.0, my + 4.0, 10.0, INK)
-        ctx.draw_node(self.mode_sensor, _box(mx, my, mbw, mbh))
-        if ws.send_request(self.mode_sensor, dex.TakeClicked()):
-            self.pan_mode = not self.pan_mode
 
         return dex.DrawResult.Complete(
             region=dex.ScreenRegion.from_min_size(base.pos, dex.Vector.new(w, h)))
 
-    def _atom_panel(self, ctx, ws, x, y):
-        """Expanded identity + a Bohr model of the atom's element, with a button
-        to push that model fullscreen."""
-        (elem, ch, resname, resseq, name, coord) = self.atoms[self.selected]
+    def type_name(self):
+        return "A PDB Viewer"
+
+    def owned_nodes(self):
+        return [self.sensor]
+
+    def on_delete(self, ctx):
+        ctx.workspace.delete_node(self.sensor)
+
+    def build_inspector(self, ctx):
+        return None
+
+
+class AtomPanel:
+    """What the selected atom is, pinned to the plane's top-left.
+
+    A foreground, so it stays put and life-size: drawn with the structure it
+    would turn with the model and grow with the magnification, which is the
+    opposite of what a readout is for.
+
+    It reads the selection off the `Protein` object itself rather than through a
+    message. The two are one view drawn in two bands — only the structure can
+    know which atom a click landed on — and a plain Python reference is the
+    honest way to say so. (A deep copy of the surface splits them; the price of
+    not inventing a message for one field.)
+    """
+
+    def __init__(self, protein, model_button):
+        self.protein = protein
+        self.model_button = model_button
+        self.atom_model_uid = None
+        self._model_element = None
+        self._shell_elem = None     # the cached still, keyed by element
+        self._shells = None
+
+    def draw(self, ctx):
+        base = ctx.constraints
+        picked = self.protein.selected
+        if picked is None or picked >= len(self.protein.atoms):
+            return dex.DrawResult.Complete(region=None)
+
+        ws = ctx.node.workspace
+        (x, y) = (base.pos.x + PANEL_INSET, base.pos.y + PANEL_INSET)
+        (elem, ch, resname, resseq, name, coord) = self.protein.atoms[picked]
         z = ELEMENT_Z.get(elem, 0)
-        pw, ph = 176.0, 168.0
-        _polygon(ctx, [(x, y), (x + pw, y), (x + pw, y + ph), (x, y + ph)], (255, 255, 255))
+        (pw, ph) = PANEL_SIZE
+        ctx.draw_node(
+            dex.Rect.bordered(pw, ph, dex.Color.rgba(255, 255, 255, 242), 6.0,
+                              dex.Stroke.new(1.0, dex.Color.rgb(*SCRUB_EDGE))),
+            _box(x, y, pw, ph),
+        )
         _text(ctx, "%s %s%s" % (resname or "?", ch.strip() or "?", resseq),
               x + 8.0, y + 6.0, 11.0, INK)
         _text(ctx, "atom %s" % name, x + 8.0, y + 22.0, 10.0, (90, 96, 104))
         _text(ctx, "%s (%s, Z %d)" % (ELEMENT_NAME.get(elem, elem), elem, z),
               x + 8.0, y + 36.0, 10.0, (90, 96, 104))
         _text(ctx, "x %.2f  y %.2f  z %.2f" % coord, x + 8.0, y + 50.0, 9.0, FAINT)
-        # Electron-density preview (static; the fullscreen model rotates).
-        if elem != self._prev_elem:
-            self._prev_pts, self._prev_n = atom_cloud(z, 220)
-            self._prev_elem = elem
-        draw_cloud(ctx, x + pw / 2.0, y + 96.0, 30.0, self._prev_pts, self._prev_n,
-                   0.6, 0.32, dot=1.4)
-        # Open-Fullscreen button (a rotatable 3D model).
+        # A still of the Bohr model; the fullscreen one turns.
+        if elem != self._shell_elem:
+            self._shells = bohr_shells(z)
+            self._shell_elem = elem
+        draw_bohr(ctx, x + pw / 2.0, y + 94.0, 30.0, self._shells, 0.6, 0.32, dot=2.0)
+        _text(ctx, shell_counts(self._shells), x + 8.0, y + ph - 44.0, 9.0, FAINT)
         ctx.draw_node(self.model_button, _box(x + 8.0, y + ph - 26.0, pw - 16.0, 22.0))
         if ws.send_request(self.model_button, dex.TakeClicked()):
             handle = ws.action_handle()
@@ -847,19 +956,18 @@ class Protein:
                 self._model_element = elem
             ws.submit_action(ws.root(), dex.PushOverride(node=self.atom_model_uid),
                              "Atom model fullscreen")
+        return dex.DrawResult.Complete(region=None)
 
     def type_name(self):
-        return "A PDB Viewer"
+        return "Atom Readout"
 
     def owned_nodes(self):
-        out = [self.sensor, self.mode_sensor, self.model_button]
+        out = [self.model_button]
         if self.atom_model_uid is not None:
             out.append(self.atom_model_uid)
         return out
 
     def on_delete(self, ctx):
-        ctx.workspace.delete_node(self.sensor)
-        ctx.workspace.delete_node(self.mode_sensor)
         ctx.workspace.delete_node(self.model_button)
         if self.atom_model_uid is not None:
             ctx.workspace.delete_node(self.atom_model_uid)
@@ -878,13 +986,26 @@ def _polygon(ctx, pts, rgb):
                                    dex.Color.rgb(*rgb), dex.Stroke.none()), _abs())
 
 
+# The structure is drawn once at this size and then magnified from there.
+PROT_SIZE = 900.0
+# The atom readout, pinned in the plane's foreground.
+PANEL_SIZE = (176.0, 168.0)
+PANEL_INSET = 12.0
+SCRUB_EDGE = (206, 210, 218)
+
+
 def build_protein(ws, pdb_text):
+    """The structure on a plane of its own, with its readout pinned in front.
+    Returns the canvas, which is what goes in a slot or fullscreen."""
     (title, order, chains, atoms) = parse_pdb(pdb_text)
-    # Main view senses clicks (pick an atom) and drags (rotate / pan).
+    # Clicks pick an atom, drags turn the structure.
     sensor = ws.insert_node_dyn(dex.InteractionBox.sensing(False, True, True))
-    mode_sensor = ws.insert_node_dyn(dex.InteractionBox.sensing(False, True, False))
+    protein = Protein(title, order, chains, atoms, sensor)
+    body = ws.insert_node_dyn(protein)
     model_button = dex.Button.build(ws, dex.Label.new("Open Fullscreen"))
-    return Protein(title, order, chains, atoms, sensor, mode_sensor, model_button)
+    panel = ws.insert_node_dyn(AtomPanel(protein, model_button))
+    return on_plane(ws, body, (PROT_SIZE, PROT_SIZE), "Placed the structure",
+                    [panel], name="Structure")
 
 
 # ======================================================================
@@ -896,6 +1017,10 @@ FEATURE_COLORS = {
     "ncRNA": (150, 110, 180), "tmRNA": (176, 120, 168), "regulatory": (200, 176, 90),
 }
 G_MARGIN, G_TITLE, ROW_H, BAND, LINE_HALF = 12.0, 22.0, 40.0, 8.0, 5.0
+# The map is laid out once at this size — rows enough for a whole genome at a
+# readable scale — and then panned and zoomed, rather than reflowed to whatever
+# box it is being shown in.
+GENOME_SIZE = (1500.0, 1150.0)
 G_LEGEND = 22.0
 TRACK_BG = (240, 242, 246)
 
@@ -980,9 +1105,13 @@ class Gene:
                     if acc:
                         try:
                             pdb = fetch_alphafold(acc)
-                            return framed(ws, ws.insert_node_dyn(build_protein(ws, pdb)))
+                            return framed(ws, build_protein(ws, pdb))
                         except urllib.error.HTTPError as e:
-                            if e.code != 404:
+                            # 404: the archive has no model for it. 400: the
+                            # accession is not one AlphaFold indexes at all.
+                            # Either way there is nothing to show, and ESMFold
+                            # below is the fallback.
+                            if e.code not in (400, 404):
                                 raise
                     # No precomputed model. ESMFold can fold the sequence live, but
                     # that is slow — so offer a button, not an automatic wait.
@@ -1010,7 +1139,12 @@ class Gene:
 
 
 class GenomeExplorer:
-    """The wrapped genome map (see genome_explorer.py), genes inspectable."""
+    """The wrapped genome map (see genome_explorer.py), genes inspectable.
+
+    The map alone: what it is and what its colours mean are drawn by
+    `GenomeChrome` in the plane's foreground, where they stay legible however far
+    the map has been dragged or magnified.
+    """
 
     def __init__(self, records, offsets, genes, total_len, types_present):
         self.records = list(records)
@@ -1034,15 +1168,8 @@ class GenomeExplorer:
             height = THUMB_H
         x0, y0 = base.pos.x + G_MARGIN, base.pos.y + G_MARGIN
         plot_w, plot_h = width - 2 * G_MARGIN, height - 2 * G_MARGIN
-        # Truncate the title to the panel width, so it never spills the thumbnail.
-        title = self.title
-        tfont = dex.Font.proportional(12.0)
-        tm = ctx.measure_text(title, tfont, dex.TextWrap.singleline())
-        if tm.width > plot_w and len(title) > 4:
-            avg = tm.width / len(title)
-            keep = max(4, int(plot_w / max(avg, 1.0)) - 1)
-            title = title[:keep].rstrip() + "…"
-        _text(ctx, title, x0, y0, 12.0, INK)
+        # The title and the key sit in the plane's foreground (`GenomeChrome`),
+        # so the map only leaves room for them.
         top = y0 + G_TITLE
         avail_h = plot_h - G_TITLE - G_LEGEND
         if avail_h < ROW_H or self.total_len <= 0 or plot_w <= 70.0:
@@ -1073,23 +1200,7 @@ class GenomeExplorer:
             else:
                 gy0, gy1 = line_y + LINE_HALF, line_y + LINE_HALF + BAND
             ctx.draw_inspectable_node(g["uid"], _box(gx0, gy0, gx1 - gx0, gy1 - gy0))
-        self._legend(ctx, x0, base.pos.y + height - G_MARGIN - G_LEGEND + 4.0, plot_w)
         return self._done(base, width, height)
-
-    def _legend(self, ctx, x, y, width):
-        """A swatch and name per feature type present, left to right."""
-        font = dex.Font.proportional(10.0)
-        wrap = dex.TextWrap.singleline()
-        sw = 11.0
-        right = x + width
-        for key in self.types_present:
-            m = ctx.measure_text(key, font, wrap)
-            if x + sw + 4.0 + m.width > right:
-                break
-            _polygon(ctx, [(x, y), (x + sw, y), (x + sw, y + sw), (x, y + sw)],
-                     FEATURE_COLORS.get(key, (150, 150, 156)))
-            _text(ctx, key, x + sw + 4.0, y + (sw - m.height) / 2.0, 10.0, INK)
-            x += sw + 6.0 + m.width + 16.0
 
     def _done(self, base, w, h):
         return dex.DrawResult.Complete(
@@ -1104,6 +1215,61 @@ class GenomeExplorer:
     def on_delete(self, ctx):
         for g in self.genes:
             ctx.workspace.delete_node(g["uid"])
+
+    def build_inspector(self, ctx):
+        return None
+
+
+class GenomeChrome:
+    """What the map is, and what its colours mean — pinned to the plane.
+
+    A foreground: the title and the key are the two things you must be able to
+    read at any magnification and wherever the plane has been dragged to, and
+    drawn with the map they were the first things to leave the screen.
+    """
+
+    def __init__(self, title, types_present):
+        self.title = str(title)
+        self.types_present = list(types_present)
+
+    def draw(self, ctx):
+        base = ctx.constraints
+        if base.x is None or base.y is None:
+            return dex.DrawResult.Complete(region=None)
+        (width, height) = (base.x.provided_value(), base.y.provided_value())
+        if not (math.isfinite(width) and math.isfinite(height)):
+            return dex.DrawResult.Complete(region=None)
+        (x0, y0) = (base.pos.x + G_MARGIN, base.pos.y + G_MARGIN)
+        plot_w = width - 2 * G_MARGIN
+
+        font = dex.Font.proportional(12.0)
+        wrap = dex.TextWrap.singleline()
+        # Truncate the title to the panel width, so it never spills the box.
+        title = self.title
+        tm = ctx.measure_text(title, font, wrap)
+        if tm.width > plot_w and len(title) > 4:
+            avg = tm.width / len(title)
+            keep = max(4, int(plot_w / max(avg, 1.0)) - 1)
+            title = title[:keep].rstrip() + "\u2026"
+        _text(ctx, title, x0, y0, 12.0, INK)
+
+        # A swatch and name per feature type present, left to right.
+        (x, y) = (x0, base.pos.y + height - G_MARGIN - G_LEGEND + 4.0)
+        key_font = dex.Font.proportional(10.0)
+        sw = 11.0
+        right = x0 + plot_w
+        for key in self.types_present:
+            m = ctx.measure_text(key, key_font, wrap)
+            if x + sw + 4.0 + m.width > right:
+                break
+            _polygon(ctx, [(x, y), (x + sw, y), (x + sw, y + sw), (x, y + sw)],
+                     FEATURE_COLORS.get(key, (150, 150, 156)))
+            _text(ctx, key, x + sw + 4.0, y + (sw - m.height) / 2.0, 10.0, INK)
+            x += sw + 6.0 + m.width + 16.0
+        return dex.DrawResult.Complete(region=None)
+
+    def type_name(self):
+        return "Genome Key"
 
     def build_inspector(self, ctx):
         return None
@@ -1374,9 +1540,12 @@ class Tip:
             key = self.key
 
             def produce(ws):
-                ge = build_genome_explorer(ws, fetch_gbff(key))
-                ge_uid = ws.insert_node_dyn(ge)
-                return framed(ws, ge_uid)
+                explorer = build_genome_explorer(ws, fetch_gbff(key))
+                chrome = ws.insert_node_dyn(
+                    GenomeChrome(explorer.title, explorer.types_present))
+                plane = on_plane(ws, ws.insert_node_dyn(explorer), GENOME_SIZE,
+                                 "Placed the genome", [chrome], name="Genome")
+                return framed(ws, plane)
 
             self._result = async_slot(ws, produce)
         # Owned by this Tip (persistent), borrowed by the inspector via a Ref.
@@ -1624,6 +1793,26 @@ class SuperPhylogeny:
 
 
 # ======================================================================
+# The canvas the tree sits on
+# ======================================================================
+
+# The tree is drawn once at this size and then panned and zoomed as a whole, so
+# it is generous: room for the labels to breathe when the plane is magnified.
+TREE_SIZE = 1100.0
+
+
+def _on_canvas(ws, tree_node):
+    """Put `tree_node` on a pan/zoom canvas and return the canvas.
+
+    No key in the corner: the tree wears its own, as a labelled clade ring, and
+    a second copy of it as a column of a hundred phyla covered the picture it
+    was meant to explain.
+    """
+    return on_plane(ws, tree_node, (TREE_SIZE, TREE_SIZE), "Placed the tree",
+                    name="Phylogeny")
+
+
+# ======================================================================
 # Build and transform
 # ======================================================================
 
@@ -1655,7 +1844,10 @@ def build(ws, columns):
         label = label_col[row] if row < len(label_col) else key
         color = inks.get(tree.clade_of_tip.get(t), BRANCH_INK)
         tips[t] = ws.insert_node_dyn(Tip(key, label, color))
-    return SuperPhylogeny(columns, tips)
+    sp = SuperPhylogeny(columns, tips)
+    # The tree becomes a single item on a pan/zoom canvas.
+    tree_node = ws.insert_node_dyn(sp)
+    return _on_canvas(ws, tree_node)
 
 
 def _find_table():

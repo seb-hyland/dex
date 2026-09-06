@@ -1,18 +1,16 @@
-"""A drag-to-spin protein viewer from a PDB file.
+"""A protein viewer from a PDB file, on a plane you pan and zoom.
 
 Give the transform a `.pdb` file's text as `pdb_data` and it draws the structure
-as a backbone trace you rotate by dragging left and right — not a 3D renderer,
-just enough projection to turn a coordinate file into something you can turn over
-in your hand.
+as a backbone trace — not a 3D renderer, just enough projection to turn a
+coordinate file into something you can turn over in your hand.
 
-How the spin works, and the one interesting part: a drawing node cannot read the
-pointer on its own, so rotation rides an **`InteractionBox`** — a node that
-senses gestures over the box it is given and answers `WasDragged` with the
-frame's drag delta. Each frame the viewer draws that sensor across the whole
-viewport, asks it how far the pointer dragged, and adds the horizontal part to a
-stored angle. The molecule is then projected at that angle. Drag right, it turns
-right; let go, it holds. Nothing animates on its own — the picture only moves
-while you move it.
+How the controls split, which is the interesting part. Drag the structure to
+turn it — the whole surface, so there is nothing to aim at first. It is one item
+on a **`Canvas`**, so pinch or alt-scroll magnifies it, and its zoom is measured
+against a whole desktop: shown small in an inspector's preview it is the same
+picture, scaled down, rather than a corner of one. What it gives up in exchange
+is the plane's own drag, which is the trade a thing you turn has to make.
+Nothing animates on its own — the picture only moves while you move it.
 
 Everything else is small: the CA atoms of each chain, read from the `ATOM`
 records, are rotated about the vertical, tilted a little for a three-quarter
@@ -67,6 +65,9 @@ DOT_R = 3.2               # ligand-atom radius at the near edge
 
 TITLE_FONT = 13.0
 LEGEND_FONT = 10.0
+
+# The structure is drawn once at this size, then magnified from there.
+VIEW_SIZE = 900.0
 
 # ======================================================================
 # PDB parsing
@@ -171,8 +172,10 @@ class Protein:
         self.order = list(order)
         self.chains = {c: list(pts) for (c, pts) in chains.items()}
         self.hets = list(hets)
+        # Dragging the structure turns it; the plane it sits on magnifies it.
         self.sensor = sensor
-        self.angle = 0.0
+        self.yaw = 0.0
+        self.pitch = TILT
         # Centre and fit-radius from every atom, so the whole thing sits in the
         # box and rotation (which preserves distance) never clips.
         pts = allatoms or [p for c in self.chains.values() for p in c]
@@ -199,12 +202,12 @@ class Protein:
         if width is None or height is None:
             return dex.DrawResult.Complete(region=None)
 
-        # The drag sensor covers the whole box. Drawn first, so its cache holds
-        # this frame's drag by the time we ask.
-        ctx.draw_node(self.sensor, self._box(base.pos.x, base.pos.y, width, height))
-        drag = ctx.node.workspace.send_request(self.sensor, dex.WasDragged())
+        ws = ctx.node.workspace
+        ctx.draw_node(self.sensor, _abs_box(base.pos.x, base.pos.y, width, height))
+        drag = ws.send_request(self.sensor, dex.WasDragged())
         if drag is not None:
-            self.angle += drag.x * DRAG_SENS
+            self.yaw += drag.x * DRAG_SENS
+            self.pitch = max(-1.4, min(1.4, self.pitch + drag.y * DRAG_SENS))
 
         self._text(ctx, self.title, base.pos.x + MARGIN, base.pos.y + MARGIN,
                    TITLE_FONT, INK)
@@ -216,7 +219,7 @@ class Protein:
         ox = base.pos.x + width / 2.0
         oy = base.pos.y + TITLE_H + (height - TITLE_H) / 2.0
 
-        (ay, ax) = (self.angle, TILT)
+        (ay, ax) = (self.yaw, self.pitch)
         (ca, sa) = (math.cos(ay), math.sin(ay))
         (cb, sb) = (math.cos(ax), math.sin(ax))
         (cx, cy, cz) = self.center
@@ -343,15 +346,50 @@ class Protein:
 
 
 # ======================================================================
+# The canvas the structure sits on
+# ======================================================================
+
+
+def _abs_box(x, y, w, h):
+    return dex.DrawConstraints(
+        pos=dex.ScreenPos.new(x, y),
+        x=dex.AxisConstraint.Exactly(w),
+        y=dex.AxisConstraint.Exactly(h),
+        wrap=None, should_clip=False,
+    )
+
+
+def _on_canvas(ws, protein):
+    """Put `protein` on a plane of its own and return the canvas.
+
+    Named after what it holds: a plane is a means, and "A Canvas" is the wrong
+    answer to what the inspector and the breadcrumb trail are asking.
+    """
+    canvas = dex.Canvas.build(ws)
+    protein_uid = ws.insert_node_dyn(protein)
+    item = dex.StaticCanvasItem.build(
+        ws, protein_uid,
+        dex.Vector.new(0.0, 0.0),
+        dex.Vector.new(VIEW_SIZE, VIEW_SIZE),
+    )
+    ws.submit_action(canvas, dex.AdoptCanvasNode(item, dex.Layer.midground()),
+                     "Placed the structure")
+    ws.submit_action(canvas, dex.NameCanvas(name="Structure"), "Named the plane")
+    return canvas
+
+
+# ======================================================================
 # Build and transform
 # ======================================================================
 
 
 def build(ws, pdb_text):
-    """Parse `pdb_text` and build the viewer with its drag sensor."""
+    """Parse `pdb_text` and build the viewer: the structure on a zoomable plane,
+    turned by dragging it."""
     (title, order, chains, hets, allatoms) = parse_pdb(pdb_text)
     sensor = ws.insert_node_dyn(dex.InteractionBox.sensing(False, False, True))
-    return Protein(title, order, chains, hets, allatoms, sensor)
+    protein = Protein(title, order, chains, hets, allatoms, sensor)
+    return _on_canvas(ws, protein)
 
 
 def transform():

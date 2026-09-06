@@ -14,7 +14,7 @@ pub struct InteractionBox {
     cache: Transient<LastFrameInteractions>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct LastFrameInteractions {
     hovered: bool,
     contains_pointer: bool,
@@ -63,6 +63,12 @@ impl InteractionBox {
 
         hover | click | drag
     }
+
+    /// Whether this sensor only watches: it reports where the pointer is and
+    /// takes no gesture for itself. See [`InteractionBox::draw`].
+    fn only_watching(&self) -> bool {
+        self.senses_hover && !self.senses_clicks && !self.senses_drags
+    }
 }
 
 #[utils::dynamic_node]
@@ -88,6 +94,39 @@ impl Node for InteractionBox {
         let origin = ctx.constraints.pos;
         let region = ScreenRegion::from_min_size(origin, size);
 
+        // Screen coordinates into this sensor's own. A canvas draws its items
+        // on a layer carrying the pan-and-zoom transform, so the two differ
+        // there; anywhere else this is the identity.
+        let from_global = ctx.ui.ctx().layer_transform_from_global(ctx.ui.layer_id());
+        let into_local = |p: egui::Pos2| from_global.map_or(p, |t| t * p);
+
+        /*
+            A sensor that only watches claims nothing, so it registers no widget.
+        */
+        if self.only_watching() {
+            if ctx.measuring() {
+                return DrawResult::Complete {
+                    region: Some(region),
+                };
+            }
+            let bounds = egui::Rect::from(region).intersect(ctx.ui.clip_rect());
+            let over = ctx
+                .ui
+                .ctx()
+                .pointer_latest_pos()
+                .map(into_local)
+                .filter(|p| bounds.contains(*p));
+            self.cache.set(LastFrameInteractions {
+                hovered: over.is_some(),
+                contains_pointer: over.is_some(),
+                hover_pos: over.map(ScreenPos::from),
+                ..Default::default()
+            });
+            return DrawResult::Complete {
+                region: Some(region),
+            };
+        }
+
         let resp = ctx
             .ui
             .interact(region.into(), ctx.widget_id(), self.to_sense());
@@ -99,8 +138,10 @@ impl Node for InteractionBox {
             };
         }
 
-        // Where the pointer went down.
-        let ui_press_origin = ctx.ui.input(|i| i.pointer.press_origin());
+        // Where the pointer went down. egui already hands `hover_pos` and
+        // `interact_pointer_pos` back in local coordinates, but `press_origin`
+        // comes straight off the raw input, so it has to be mapped in to match.
+        let ui_press_origin = ctx.ui.input(|i| i.pointer.press_origin()).map(into_local);
 
         self.cache.set(LastFrameInteractions {
             hovered: resp.hovered(),

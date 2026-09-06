@@ -8,7 +8,9 @@ use crate::{
     layouts::{
         canvas::{
             self,
-            layout::{AdoptCanvasNode, Canvas, CanvasChildren, Layer},
+            layout::{
+                AdoptCanvasNode, Canvas, CanvasChildren, Layer, ResetCanvasView, ResetCanvasZoom,
+            },
             nodes::{CanvasItemBounds, CanvasNode, CanvasNodeChild},
             sidebar::CanvasSidebar,
         },
@@ -53,7 +55,9 @@ pub struct Desktops {
     #[dynamic(skip)]
     #[uid_ref]
     override_stack: Vec<NodeUid>,
-    close_override_button: NodeUid<Button>,
+    /// One sensor per crumb in the trail the tab row becomes while an override is open.
+    #[dynamic(skip)]
+    crumb_sensors: Vec<NodeUid<InteractionBox>>,
 
     /// Whether the sidebar and the tab row are folded away.
     sidebar_collapsed: bool,
@@ -98,15 +102,6 @@ impl Desktops {
         });
         let divider = ws.insert_node(InteractionBox::sensing(true, false, true));
 
-        let close_override_button =
-            Button::build_with(ws.clone(), Label::new("Close".to_owned()), |b| {
-                b.padding = TAB_PAD_Y;
-                b.padding_x = TAB_PAD_X;
-                b.corner_radius = theme::RADIUS_MD;
-                // A tab is clamped to the row's height.
-                b.fill_height = true;
-            });
-
         // A fold control sits on the line it folds.
         let chrome = |glyph: Glyph| {
             Button::build_with(ws.clone(), Label::new(String::new()), |b| {
@@ -134,7 +129,7 @@ impl Desktops {
                 sidebar,
                 add_button,
                 divider,
-                close_override_button,
+                crumb_sensors: vec![crumb_sensor(&ws)],
                 inspector,
                 sidebar_width: 200.0,
                 pending_sidebar_width: Transient::default(),
@@ -168,8 +163,8 @@ const TAB_BAR_H: f32 = TAB_ROW_INSET * 2.0 + TAB_H;
 /// the rule beneath it.
 const TAB_H: f32 = 26.0;
 /// A tab's padding, and so the padding of anything that has to stand beside
-/// one: the title bar's Close button is a tab-shaped thing in a tab-shaped
-/// row, and reads as an intruder at any other size.
+/// one: a breadcrumb is a tab-shaped thing in a tab-shaped row, and reads as an
+/// intruder at any other size.
 const TAB_PAD_X: f32 = theme::SPACE_LG;
 const TAB_PAD_Y: f32 = theme::SPACE_SM;
 /// Space above and below the tabs, between them and the row's edges. Smaller
@@ -179,7 +174,143 @@ const TAB_ROW_INSET: f32 = theme::SPACE_SM;
 /// The gap between one tab and the next.
 const TAB_SPACING: f32 = theme::SPACE_MD;
 
+/// A crumb's own sensor: it only has to know when it is pointed at and pressed.
+fn crumb_sensor(ws: &WorkspaceActionHandle) -> NodeUid<InteractionBox> {
+    ws.insert_node(InteractionBox::sensing(true, true, false))
+}
+
+/// The separator between one crumb and the next.
+const CRUMB_ARROW: &str = "\u{203a}";
+/// How much room the separator is given either side of itself.
+const CRUMB_GAP: f32 = theme::SPACE_SM;
+/// A crumb is truncated rather than allowed to push the trail off the row.
+const CRUMB_MAX_W: f32 = 220.0;
+
 impl Desktops {
+    /// The trail of where you are, drawn in place of the tab row.
+    fn draw_breadcrumbs(&self, ctx: &mut DrawContext, origin: ScreenPos, max_w: f32) {
+        let ws = ctx.node.workspace;
+        // Crumb zero names the desktop these were opened over.
+        let mut names = vec![self.active_tab_name(ws)];
+        for &node in &self.override_stack {
+            names.push(
+                ws.get_node(node)
+                    .map(|n| {
+                        n.type_name(NodeContext {
+                            id: node,
+                            workspace: ws,
+                        })
+                    })
+                    .unwrap_or_else(|| "\u{2026}".to_owned()),
+            );
+        }
+
+        let font = theme::text_small();
+        let last = names.len() - 1;
+        let mut x = origin.x;
+        let right = origin.x + max_w;
+        for (i, name) in names.iter().enumerate() {
+            if i > 0 {
+                let m = ctx.measure_text(CRUMB_ARROW.to_owned(), font, TextWrap::singleline());
+                let mut sep = Label::new(CRUMB_ARROW.to_owned());
+                sep.font = font;
+                sep.color = theme::INK_FAINT;
+                ctx.draw_node(
+                    &sep,
+                    DrawConstraints {
+                        pos: ScreenPos {
+                            x: x + CRUMB_GAP,
+                            y: origin.y + (TAB_H - theme::TEXT_SM) * 0.5,
+                        },
+                        x: None,
+                        y: None,
+                        wrap: WrapConstraints::NotAllowed,
+                        should_clip: false,
+                    },
+                );
+                x += CRUMB_GAP * 2.0 + m.width;
+            }
+
+            let m = ctx.measure_text(name.clone(), font, TextWrap::singleline());
+            let text_w = m.width.min(CRUMB_MAX_W);
+            let crumb_w = text_w + 2.0 * TAB_PAD_X;
+            // The trail is a path back, so the near end matters most: stop
+            // rather than run a half-drawn crumb off the row.
+            if x + crumb_w > right && i > 0 {
+                break;
+            }
+
+            let here = i == last;
+            let sensor = self.crumb_sensors.get(i).copied();
+            let hovered =
+                !here && sensor.is_some_and(|s| ws.send_request(s, WasHovered).unwrap_or(false));
+            if hovered {
+                Rect {
+                    size: Vector {
+                        x: crumb_w,
+                        y: TAB_H,
+                    },
+                    corner_radius: theme::RADIUS_MD,
+                    fill_color: theme::SURFACE_ALT,
+                    border: Stroke::NONE,
+                    stroke_kind: StrokeKind::Inside,
+                }
+                .paint(ctx.ui.painter(), ScreenPos { x, y: origin.y });
+            }
+
+            let mut label = Label::new(name.clone());
+            label.font = font;
+            // Where you are, in full ink; where you have been, quieter.
+            label.color = if here { theme::INK } else { theme::INK_MUTED };
+            ctx.draw_node(
+                &label,
+                DrawConstraints {
+                    pos: ScreenPos {
+                        x: x + TAB_PAD_X,
+                        y: origin.y + (TAB_H - theme::TEXT_SM) * 0.5,
+                    },
+                    x: Some(AxisConstraint::AtMost(text_w)),
+                    y: None,
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip: true,
+                },
+            );
+
+            // The last crumb is where you already are; it senses nothing.
+            if !here && let Some(sensor) = sensor {
+                ctx.draw_workspace_node(
+                    sensor.erase(),
+                    DrawConstraints {
+                        pos: ScreenPos { x, y: origin.y },
+                        x: Some(AxisConstraint::Exactly(crumb_w)),
+                        y: Some(AxisConstraint::Exactly(TAB_H)),
+                        wrap: WrapConstraints::NotAllowed,
+                        should_clip: false,
+                    },
+                );
+                if ws.send_request(sensor, TakeClicked).unwrap_or(false) {
+                    ctx.submit_action_for_self::<Self, _>(
+                        PopOverridesTo { depth: i },
+                        "Stepped back",
+                    );
+                }
+            }
+            x += crumb_w;
+        }
+    }
+
+    /// The name on the tab of the canvas currently on display.
+    fn active_tab_name(&self, ws: &Workspace) -> String {
+        ws.send_request(self.tab_bar, Children)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|&tab| {
+                ws.send_request(tab.cast::<DesktopTabView>(), TabCanvas) == Some(self.active)
+            })
+            .and_then(|tab| ws.send_request(tab.cast::<DesktopTabView>(), TabName))
+            .unwrap_or_else(|| "Desktop".to_owned())
+    }
+
     /// Build a fresh canvas and its tab into the workspace, returning the canvas.
     fn open_canvas(&self, ctx: NodeContext, name: String) -> NodeUid<Canvas> {
         let canvas = Canvas::build(ctx.workspace.action_handle());
@@ -291,66 +422,31 @@ impl Node for Desktops {
             wrap: WrapConstraints::NotAllowed,
             should_clip: true,
         };
+        // What a canvas counts as life size in: the room a desktop gets. A
+        // surface shown smaller than this — in an inspector's preview, say —
+        // shows the same span of its plane, scaled down, so its zoom means one
+        // thing wherever it is drawn.
+        canvas::layout::set_canvas_reference(
+            ctx.ui.ctx(),
+            Vector {
+                x: right_w,
+                y: (avail_h - tab_bar_h).max(0.0),
+            },
+        );
 
         if let Some(&opened) = self.override_stack.last() {
-            // An override is open: the tab row becomes a title bar for it, and
-            // the thing itself sits on a card, so it reads as something opened
-            // over the canvas rather than as the canvas having gone blank.
-            let close_res = ctx.draw_workspace_node(
-                self.close_override_button.erase(),
-                DrawConstraints {
-                    pos: right_origin
-                        + Vector {
-                            x: TAB_SPACING,
-                            y: TAB_ROW_INSET,
-                        },
-                    x: Some(AxisConstraint::AtMost(
-                        (right_w - 2.0 * TAB_SPACING).max(0.0),
-                    )),
-                    y: Some(AxisConstraint::AtMost(TAB_H)),
-                    wrap: WrapConstraints::NotAllowed,
-                    should_clip: false,
-                },
-            );
-
-            // Name what is open, beside the way out of it.
-            let close_w = close_res
-                .and_then(|r| r.region())
-                .map(|r| r.size().x)
-                .unwrap_or(0.0);
-            if let Some(node) = ctx.node.workspace.get_node(opened) {
-                let mut title = Label::new(node.type_name(NodeContext {
-                    id: opened,
-                    workspace: ctx.node.workspace,
-                }));
-                title.font = theme::text_small();
-                title.color = theme::INK_MUTED;
-                let title_pos = right_origin
+            // An override is open: the tab row becomes a trail of where you are,
+            // and the thing itself sits on a card, so it reads as something
+            // opened over the canvas rather than as the canvas having gone blank.
+            self.draw_breadcrumbs(
+                &mut ctx,
+                right_origin
                     + Vector {
-                        x: TAB_SPACING + close_w + theme::SPACE_LG,
-                        y: TAB_ROW_INSET + (TAB_H - theme::TEXT_SM) * 0.5,
-                    };
-                ctx.draw_node(
-                    &title,
-                    DrawConstraints {
-                        pos: title_pos,
-                        x: Some(AxisConstraint::AtMost(
-                            (right_w - (title_pos.x - right_origin.x) - TAB_SPACING).max(0.0),
-                        )),
-                        y: None,
-                        wrap: WrapConstraints::NotAllowed,
-                        should_clip: true,
+                        x: TAB_SPACING,
+                        y: TAB_ROW_INSET,
                     },
-                );
-            }
-            if ctx
-                .node
-                .workspace
-                .send_request(self.close_override_button.erase(), WasClicked)
-                .unwrap_or(false)
-            {
-                ctx.submit_action_for_self::<Self, _>(PopOverride, "Close override");
-            }
+                (right_w - 2.0 * TAB_SPACING).max(0.0),
+            );
             // The card: inset from the panel, so the override has an edge.
             let inset = theme::SPACE_LG;
             let card_pos = content_pos + Vector::splat(inset);
@@ -460,24 +556,30 @@ impl Node for Desktops {
             }
         }
 
+        // Everything from here on is drawn *after* the active canvas and sits over it
+
         // Draw sidebar splitter ----------------------------------------
         // Only while there is a sidebar to size: an edge with nothing on one
         // side of it is not a handle.
         if !self.sidebar_collapsed {
-            ctx.draw_workspace_node(
-                self.divider.erase(),
-                DrawConstraints {
-                    pos: ScreenPos {
-                        x: divider_x,
-                        y: origin.y,
+            ctx.overlay(|ctx| {
+                ctx.draw_workspace_node(
+                    self.divider.erase(),
+                    DrawConstraints {
+                        pos: ScreenPos {
+                            x: divider_x,
+                            y: origin.y,
+                        },
+                        x: Some(AxisConstraint::Exactly(DIVIDER_W)),
+                        y: Some(AxisConstraint::Exactly(avail_h)),
+                        wrap: WrapConstraints::NotAllowed,
+                        should_clip: false,
                     },
-                    x: Some(AxisConstraint::Exactly(DIVIDER_W)),
-                    y: Some(AxisConstraint::Exactly(avail_h)),
-                    wrap: WrapConstraints::NotAllowed,
-                    should_clip: false,
-                },
-            );
+                );
+            });
 
+            // Asked after the sensor has drawn, so the rule lights up on the
+            // frame the pointer arrives rather than the one after.
             let divider_active = pending.is_some()
                 || ctx
                     .node
@@ -489,18 +591,20 @@ impl Node for Desktops {
             } else {
                 theme::LINE
             });
-            ctx.ui.painter().rect_filled(
-                ScreenRegion::from_min_size(
-                    ScreenPos {
-                        x: divider_x + DIVIDER_W * 0.5 - 0.5,
-                        y: origin.y,
-                    },
-                    Vector { x: 1.0, y: avail_h },
-                )
-                .into(),
-                0.0,
-                divider_color,
-            );
+            ctx.overlay(|ctx| {
+                ctx.ui.painter().rect_filled(
+                    ScreenRegion::from_min_size(
+                        ScreenPos {
+                            x: divider_x + DIVIDER_W * 0.5 - 0.5,
+                            y: origin.y,
+                        },
+                        Vector { x: 1.0, y: avail_h },
+                    )
+                    .into(),
+                    0.0,
+                    divider_color,
+                );
+            });
 
             if let Some(delta) = ctx
                 .node
@@ -554,16 +658,18 @@ impl Node for Desktops {
                 x: (centre.x - half).clamp(origin.x, origin.x + avail_w - CHROME_SIZE),
                 y: (centre.y - half).clamp(origin.y, origin.y + avail_h - CHROME_SIZE),
             };
-            ctx.draw_workspace_node(
-                button.erase(),
-                DrawConstraints {
-                    pos: at,
-                    x: Some(AxisConstraint::Exactly(CHROME_SIZE)),
-                    y: Some(AxisConstraint::Exactly(CHROME_SIZE)),
-                    wrap: WrapConstraints::NotAllowed,
-                    should_clip: false,
-                },
-            );
+            ctx.overlay(|ctx| {
+                ctx.draw_workspace_node(
+                    button.erase(),
+                    DrawConstraints {
+                        pos: at,
+                        x: Some(AxisConstraint::Exactly(CHROME_SIZE)),
+                        y: Some(AxisConstraint::Exactly(CHROME_SIZE)),
+                        wrap: WrapConstraints::NotAllowed,
+                        should_clip: false,
+                    },
+                );
+            });
         };
 
         let (sidebar_button, tabs_button) = (
@@ -617,7 +723,8 @@ impl Node for Desktops {
             ctx.submit_action_for_self::<Self, _>(ToggleTabBar, "Folded the tab row");
         }
 
-        // Last, and unclipped.
+        // Last, and unclipped. The lens puts itself on an overlay, both to be
+        // seen and to be reached over a canvas (see `Inspector::draw`).
         ctx.draw_workspace_node(
             self.inspector.erase(),
             DrawConstraints {
@@ -775,16 +882,33 @@ defhandlers! { Desktops {
                 this.active = canvases[next];
             }
         },
-        PushOverride { node: NodeUid } => (this, s) {
+        PushOverride { node: NodeUid } => (this, s, ctx) {
             this.override_stack.push(s.node);
+            // One crumb per level, plus the desktop at the root of the trail.
+            this.crumb_sensors.push(crumb_sensor(&ctx.workspace.action_handle()));
         },
         // Return to the surface beneath the current override.
-        PopOverride => (this, _a) {
+        PopOverride => (this, _a, ctx) {
             this.override_stack.pop();
+            if this.crumb_sensors.len() > 1 && let Some(s) = this.crumb_sensors.pop() {
+                ctx.workspace.delete_node(s.erase());
+            }
+        },
+        // Close everything opened above `depth`, leaving that many on the stack.
+        PopOverridesTo { depth: usize } => (this, s, ctx) {
+            while this.override_stack.len() > s.depth {
+                this.override_stack.pop();
+                if this.crumb_sensors.len() > 1 && let Some(sensor) = this.crumb_sensors.pop() {
+                    ctx.workspace.delete_node(sensor.erase());
+                }
+            }
         },
     ],
     requests: [
         ActiveCanvas => (this, _q): NodeUid<Canvas> { this.active },
+        // The surfaces open over the desktop, innermost last — the trail the
+        // breadcrumb row draws.
+        OpenOverrides => (this, _q): Vec<NodeUid> { this.override_stack.clone() },
         // The open tabs, in display order.
         Tabs => (this, _q, ctx): Vec<NodeUid> {
             ctx.workspace.send_request(this.tab_bar, Children).unwrap_or_default()
@@ -870,6 +994,8 @@ pub struct TabInspector {
     back_button: NodeUid<Button>,
     left_button: NodeUid<Button>,
     right_button: NodeUid<Button>,
+    reset_zoom_button: NodeUid<Button>,
+    reset_view_button: NodeUid<Button>,
     column: NodeUid<VerticalLayout>,
 }
 
@@ -884,6 +1010,8 @@ impl TabInspector {
         let back_button = command("Move to back");
         let left_button = command("Move left");
         let right_button = command("Move right");
+        let reset_zoom_button = command("Reset zoom");
+        let reset_view_button = command("Reset position");
 
         let column = VerticalLayout::build(
             ws.clone(),
@@ -895,6 +1023,8 @@ impl TabInspector {
                 back_button.erase(),
                 left_button.erase(),
                 right_button.erase(),
+                reset_zoom_button.erase(),
+                reset_view_button.erase(),
             ],
             2.0,
         );
@@ -907,6 +1037,8 @@ impl TabInspector {
             back_button,
             left_button,
             right_button,
+            reset_zoom_button,
+            reset_view_button,
             column,
         })
     }
@@ -961,6 +1093,14 @@ impl Node for TabInspector {
             && let Some(at) = at
         {
             ws.submit_action(root, "Moved desktop right", MoveTab { tab, to: at + 1 });
+        } else if taken(self.reset_zoom_button) {
+            if let Some(canvas) = ws.send_request(self.tab, TabCanvas) {
+                ws.submit_action(canvas, "Reset zoom", ResetCanvasZoom);
+            }
+        } else if taken(self.reset_view_button)
+            && let Some(canvas) = ws.send_request(self.tab, TabCanvas)
+        {
+            ws.submit_action(canvas, "Reset position", ResetCanvasView);
         }
 
         drawn.unwrap_or(DrawResult::Complete { region: None })
@@ -976,6 +1116,8 @@ impl Node for TabInspector {
             self.back_button,
             self.left_button,
             self.right_button,
+            self.reset_zoom_button,
+            self.reset_view_button,
         ] {
             ctx.workspace.delete_node(button.erase());
         }

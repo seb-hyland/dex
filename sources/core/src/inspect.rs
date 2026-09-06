@@ -16,6 +16,8 @@ pub struct InspectTarget {
     pub node: NodeUid,
     /// The on-screen part of the node.
     pub region: ScreenRegion,
+    /// The egui layer the node drew on.
+    pub layer: egui::LayerId,
 }
 
 /// Per-frame record of every addressable node drawn.
@@ -43,6 +45,8 @@ struct Drawn {
     region: ScreenRegion,
     /// The part of `region` actually on screen.
     visible: Option<ScreenRegion>,
+    /// The layer it drew on. See [`InspectTarget::layer`].
+    layer: egui::LayerId,
 }
 
 impl InspectProbe {
@@ -60,6 +64,7 @@ impl InspectProbe {
         depth: u32,
         region: Option<ScreenRegion>,
         visible: Option<ScreenRegion>,
+        layer: egui::LayerId,
     ) {
         let Some(region) = region else {
             return;
@@ -69,6 +74,7 @@ impl InspectProbe {
             depth,
             region,
             visible,
+            layer,
         });
     }
 
@@ -79,6 +85,7 @@ impl InspectProbe {
         Some(InspectTarget {
             node: hit.node,
             region: hit.visible.unwrap_or(hit.region),
+            layer: hit.layer,
         })
     }
 

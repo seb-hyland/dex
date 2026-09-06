@@ -34,9 +34,12 @@ fn main() -> eframe::Result {
         "dex",
         native_options,
         Box::new(|cc| {
-            // Always run in light mode, ignoring system theme changes
-            cc.egui_ctx
-                .options_mut(|opt| opt.theme_preference = egui::ThemePreference::Light);
+            cc.egui_ctx.options_mut(|opt| {
+                // Always run in light mode, ignoring system theme changes.
+                opt.theme_preference = egui::ThemePreference::Light;
+                // Zoom a canvas with alt-scroll and pinch.
+                opt.input_options.zoom_modifier = egui::Modifiers::ALT;
+            });
             dex_nodes::primitives::image::install_image_support(&cc.egui_ctx);
             dex_nodes::fonts::install_fonts(&cc.egui_ctx);
             Ok(Box::new(App {

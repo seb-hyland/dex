@@ -11,9 +11,10 @@ use dex_nodes::composites::button::Button;
 use dex_nodes::layouts::canvas::layout::{AddCanvasItem, Canvas, CanvasChildren};
 use dex_nodes::layouts::canvas::sidebar::{CanvasSidebar, OpenSidebarTab, SetSaveDir};
 use dex_nodes::layouts::desktops::{
-    ActiveCanvas, AddCanvas, DesktopTabView, Desktops, PushOverride, StepTab, TabCanvas, Tabs,
-    ToggleSidebar, ToggleTabBar,
+    ActiveCanvas, AddCanvas, DesktopTabView, Desktops, OpenOverrides, PushOverride, StepTab,
+    TabCanvas, Tabs, ToggleSidebar, ToggleTabBar,
 };
+use dex_nodes::layouts::inspector::fullscreen_target;
 use dex_nodes::primitives::text::{Label, LabelEditable, SetText};
 
 const SCREEN: egui::Vec2 = egui::vec2(1200.0, 800.0);
@@ -569,10 +570,11 @@ fn a_focused_editor_keeps_the_arrow_keys() {
 
 /// The way out of an override is reachable with the tab row folded away.
 ///
-/// The row doubles as the override's title bar, and the Close button sits in
-/// it. Folded, the row had no height: the button was drawn at the top of the
-/// panel and the override's own card was then painted over it, so it could
-/// neither be seen nor pressed, and there was no way back out.
+/// The row doubles as the override's breadcrumb trail, and the first crumb —
+/// the desktop everything was opened over — is the way back. Folded, the row had
+/// no height: the trail was drawn at the top of the panel and the override's own
+/// card was then painted over it, so it could neither be seen nor pressed, and
+/// there was no way back out.
 #[test]
 fn an_override_can_be_closed_with_the_tab_row_folded() {
     let mut app = App::new();
@@ -590,112 +592,135 @@ fn an_override_can_be_closed_with_the_tab_row_folded() {
     app.ws.process_pending();
     let output = app.frame(vec![]);
 
-    let close = output
-        .shapes
-        .iter()
-        .find_map(|c| match &c.shape {
-            egui::Shape::Text(t) if t.galley.text().contains("Close") => {
-                Some(t.visual_bounding_rect())
-            }
-            _ => None,
-        })
-        .expect("the way out of the override is on screen");
+    // The desktop's own crumb, at the near end of the trail.
+    let home = crumb(&output, "Canvas 1").expect("the way out of the override is on screen");
 
     // And it answers: pressing it puts the override away.
-    let at = close.center();
-    app.frame(vec![
-        egui::Event::PointerMoved(at),
-        egui::Event::PointerButton {
-            pos: at,
-            button: egui::PointerButton::Primary,
-            pressed: true,
-            modifiers: Default::default(),
-        },
-        egui::Event::PointerButton {
-            pos: at,
-            button: egui::PointerButton::Primary,
-            pressed: false,
-            modifiers: Default::default(),
-        },
-    ]);
-    let after = app.frame(vec![]);
-    let still_open = after.shapes.iter().any(|c| match &c.shape {
-        egui::Shape::Text(t) => t.galley.text().contains("Close"),
-        _ => false,
-    });
-    assert!(!still_open, "the override did not close");
+    press(&mut app, home.center());
+    assert!(
+        open_overrides(&app).is_empty(),
+        "the override did not close"
+    );
 }
 
-/// A canvas offers to fill the window with itself, which is the override stack.
+/// The trail names every level, and a middle crumb steps back only partway.
 #[test]
-fn a_canvas_offers_to_go_fullscreen() {
+fn a_breadcrumb_pops_everything_above_it() {
+    let mut app = App::new();
+    let root = app.root();
+    let canvas = app.ws.send_request(root, ActiveCanvas).unwrap();
+    let inner = app
+        .ws
+        .insert_node_now(Label::new("inner".to_owned()))
+        .erase();
+
+    for node in [canvas.erase(), inner] {
+        app.ws
+            .submit_action(root, "fullscreen", PushOverride { node });
+    }
+    app.ws.process_pending();
+    let output = app.frame(vec![]);
+
+    // Three crumbs: the desktop, the canvas opened over it, and the label.
+    let middle = crumb(&output, "A Canvas").expect("the middle of the trail names the canvas");
+    assert!(
+        crumb(&output, "Canvas 1").is_some(),
+        "and the near end names the desktop"
+    );
+
+    // Clicking the canvas's crumb drops what sits above it, and nothing else.
+    press(&mut app, middle.center());
+    assert_eq!(
+        open_overrides(&app),
+        vec![canvas.erase()],
+        "the canvas stayed open and only what sat on it closed"
+    );
+}
+
+/// The rect of the crumb whose label contains `text`, if it drew.
+fn crumb(output: &egui::FullOutput, text: &str) -> Option<egui::Rect> {
+    output.shapes.iter().find_map(|c| match &c.shape {
+        egui::Shape::Text(t) if t.galley.text().contains(text) => Some(t.visual_bounding_rect()),
+        _ => None,
+    })
+}
+
+/// Hover, press and release at `at`, then settle.
+fn press(app: &mut App, at: egui::Pos2) {
+    for _ in 0..2 {
+        app.frame(vec![egui::Event::PointerMoved(at)]);
+    }
+    for pressed in [true, false] {
+        app.frame(vec![egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        }]);
+    }
+    app.ws.process_pending();
+    app.frame(vec![]);
+}
+
+fn open_overrides(app: &App) -> Vec<NodeUid> {
+    app.ws
+        .send_request(app.root().cast::<Desktops>(), OpenOverrides)
+        .unwrap_or_default()
+}
+
+/**
+    A canvas item offers to fill the window with what it *frames*.
+
+    The command comes once, from the placement commands every inspectable node
+    carries — a canvas used to add a second copy of its own — and it opens the
+    node inside the item rather than the positioned, resizable box around it.
+*/
+#[test]
+fn an_item_goes_fullscreen_as_what_it_frames() {
+    use dex_nodes::layouts::canvas::nodes::CanvasNode;
+
     let mut app = App::new();
     let root = app.root();
     let canvas = app.ws.send_request(root, ActiveCanvas).unwrap();
 
+    // A canvas framed as an item: the case that used to offer the command twice.
+    let item = CanvasNode::build(
+        app.ws.action_handle(),
+        canvas.erase(),
+        Vector::ZERO,
+        Vector { x: 200.0, y: 150.0 },
+    );
+    app.ws.process_pending();
     let inspector = app
         .ws
-        .get_node(canvas.erase())
-        .expect("the canvas is live")
+        .get_node(item.erase())
+        .expect("the item is live")
         .build_inspector(NodeContext {
-            id: canvas.erase(),
+            id: item.erase(),
             workspace: &app.ws,
         })
-        .expect("a canvas offers an inspector");
+        .expect("an item offers an inspector");
     app.ws.process_pending();
 
     let labels = button_labels(&app.ws, inspector);
     assert_eq!(
-        labels,
-        ["Open Fullscreen"],
-        "the canvas menu offers exactly one thing"
+        labels
+            .iter()
+            .filter(|l| l.as_str() == "Open Fullscreen")
+            .count(),
+        1,
+        "the command is offered once, not once per layer of wrapping: {labels:?}"
     );
 
-    // What the button does, checked through the action it submits.
-    app.ws.submit_action(
-        root,
-        "fullscreen",
-        PushOverride {
-            node: canvas.erase(),
-        },
-    );
-    app.ws.process_pending();
-    let output = app.frame(vec![]);
-    let closable = output.shapes.iter().any(|c| match &c.shape {
-        egui::Shape::Text(t) => t.galley.text().contains("Close"),
-        _ => false,
-    });
-    assert!(
-        closable,
-        "an opened override draws the way back out of itself"
-    );
-
-    // The title bar is the tab row wearing a different hat, so what stands in
-    // it has to stand at a tab's height. A Close button built to the button
-    // default is four points taller, and the row reads as broken.
-    let text = output
-        .shapes
-        .iter()
-        .find_map(|c| match &c.shape {
-            egui::Shape::Text(t) if t.galley.text().contains("Close") => {
-                Some(t.visual_bounding_rect())
-            }
-            _ => None,
-        })
-        .expect("the Close label drew");
-    let frame = output
-        .shapes
-        .iter()
-        .filter_map(|c| match &c.shape {
-            egui::Shape::Rect(r) if r.rect.contains_rect(text) => Some(r.rect),
-            _ => None,
-        })
-        .min_by(|a, b| a.area().total_cmp(&b.area()))
-        .expect("the Close button drew a frame");
+    // And what it opens is the canvas, not the box around it.
     assert_eq!(
-        frame.height(),
-        26.0,
-        "the Close button stands {} tall, where a tab stands 26",
-        frame.height()
+        fullscreen_target(&app.ws, item.erase()),
+        canvas.erase(),
+        "the framed canvas goes fullscreen, not its item"
+    );
+    assert_eq!(
+        fullscreen_target(&app.ws, canvas.erase()),
+        canvas.erase(),
+        "and anything that frames nothing opens as itself"
     );
 }

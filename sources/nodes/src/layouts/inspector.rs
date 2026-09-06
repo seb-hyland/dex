@@ -8,6 +8,7 @@ use crate::{
     layouts::{
         LayoutChild,
         canvas::layout::{BringCanvasItemToFront, PlaceOnCanvas, SendCanvasItemToBack},
+        canvas::nodes::CanvasNodeChild,
         desktops::AddToBackpack,
         mirror::Mirror,
         vertical::VerticalLayout,
@@ -37,7 +38,7 @@ const LENS_HEADING_LIFE: f64 = 0.2;
 /// Movement below this is noise, not a heading.
 const LENS_MOTION: f32 = 0.5;
 /// A stable egui id: there is only ever one handle.
-const HANDLE_ID: &str = "dex_inspector_handle";
+pub const HANDLE_ID: &str = "dex_inspector_handle";
 
 /**
     A row in an inspector menu.
@@ -62,6 +63,9 @@ pub fn menu_button(ws: WorkspaceActionHandle, label: &str) -> NodeUid<Button> {
 pub struct HandleState {
     pub target: NodeUid,
     pub region: ScreenRegion,
+    /// The layer the target drew on, which is where the lens senses. See
+    /// [`Inspector::draw`].
+    pub layer: egui::LayerId,
     /// Where the pointer was, and the direction it was last moving in.
     pub pointer: Option<ScreenPos>,
     pub heading: Option<Vector>,
@@ -126,14 +130,15 @@ fn settle(
         },
         _ => (None, now),
     };
-    let carry = |target: NodeUid, region: ScreenRegion| HandleState {
+    let carry = |target: NodeUid, region: ScreenRegion, layer: egui::LayerId| HandleState {
         target,
         region,
+        layer,
         pointer,
         heading,
         moved_at,
     };
-    let take = |target: InspectTarget| carry(target.node, target.region);
+    let take = |target: InspectTarget| carry(target.node, target.region, target.layer);
 
     let Some(held) = held else {
         // Nothing showing: the first thing under the pointer takes it.
@@ -144,7 +149,7 @@ fn settle(
     // On the lens, or as good as. Whatever else the pointer is over, it is
     // there to click this.
     if pointer.is_some_and(|p| lens.distance_to(p) <= LENS_GRACE) {
-        return Some(carry(held.target, held.region));
+        return Some(carry(held.target, held.region, held.layer));
     }
 
     // Still on the same node: follow it, in case it moved or resized.
@@ -171,7 +176,7 @@ fn settle(
         false
     };
     if coming {
-        Some(carry(held.target, held.region))
+        Some(carry(held.target, held.region, held.layer))
     } else {
         found.map(take)
     }
@@ -210,7 +215,7 @@ impl Node for Inspector {
         "An Inspector".into()
     }
 
-    fn draw(&self, ctx: DrawContext) -> DrawResult {
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
         let ws = ctx.node.workspace;
 
         // While a menu is open the target is sticky.
@@ -236,22 +241,22 @@ impl Node for Inspector {
 
         let shown = match sticky {
             Some(target) if ws.get_node(target).is_some() => {
-                // Prefer this frame's region; fall back to where it last drew.
-                let region = found
+                // Prefer this frame's placement; fall back to where it last drew.
+                let placed = found
                     .as_ref()
                     .filter(|t| t.node == target)
-                    .map(|t| t.region)
+                    .map(|t| (t.region, t.layer))
                     .or_else(|| {
                         held.as_ref()
                             .filter(|h| h.target == target)
-                            .map(|h| h.region)
+                            .map(|h| (h.region, h.layer))
                     });
-                region.map(|region| (target, region))
+                placed.map(|(region, layer)| (target, region, layer))
             }
-            _ => settled.as_ref().map(|h| (h.target, h.region)),
+            _ => settled.as_ref().map(|h| (h.target, h.region, h.layer)),
         };
 
-        let Some((target, region)) = shown else {
+        let Some((target, region, layer)) = shown else {
             self.handle.val_mut().take();
             if self.inspector.is_some() {
                 ctx.submit_action_for_self::<Self, _>(CloseInspector, "Closed inspector");
@@ -261,52 +266,69 @@ impl Node for Inspector {
 
         // Beside the node, in the margin, like the canvas handle it replaces.
         let handle_region = lens_region(region);
-        // The inspector owns its chrome, so it interacts directly.
-        let resp = ctx
-            .ui
-            .interact(handle_region.into(), Id::new(HANDLE_ID), Sense::CLICK);
+
+        // The lens is painted over everything, and sensed in the plane of the thing it inspects.
+        let handle_min = handle_region.min;
+        let egui_ctx = ctx.ui.ctx().clone();
+        // That layer may carry a pan-and-zoom transform. The lens is placed in
+        // screen coordinates, so it is mapped in; what egui maps back out for
+        // the hit test is then exactly the rectangle that was drawn.
+        let into_layer = |r: egui::Rect| {
+            egui_ctx
+                .layer_transform_from_global(layer)
+                .map_or(r, |t| t * r)
+        };
+        let resp = ctx.on_layer(layer, into_layer(egui_ctx.viewport_rect()), |ctx| {
+            ctx.ui.interact(
+                into_layer(handle_region.into()),
+                Id::new(HANDLE_ID),
+                Sense::CLICK,
+            )
+        });
         let engaged =
             resp.hovered() || resp.is_pointer_button_down_on() || self.inspector.is_some();
 
-        Rect {
-            size: HANDLE_SIZE,
-            corner_radius: theme::RADIUS_MD,
-            fill_color: if engaged {
-                theme::SURFACE_SUNKEN
-            } else {
-                Color::rgba(0, 0, 0, 12)
-            },
-            border: if engaged {
-                theme::border_hover()
-            } else {
-                Stroke::NONE
-            },
-            stroke_kind: StrokeKind::Middle,
-        }
-        .paint(ctx.ui.painter(), handle_region.min);
+        ctx.overlay(|ctx| {
+            Rect {
+                size: HANDLE_SIZE,
+                corner_radius: theme::RADIUS_MD,
+                fill_color: if engaged {
+                    theme::SURFACE_SUNKEN
+                } else {
+                    Color::rgba(0, 0, 0, 12)
+                },
+                border: if engaged {
+                    theme::border_hover()
+                } else {
+                    Stroke::NONE
+                },
+                stroke_kind: StrokeKind::Middle,
+            }
+            .paint(ctx.ui.painter(), handle_min);
 
-        // A magnifying glass: this inspects, it does not move anything.
-        let ink = egui::Color32::from(if engaged {
-            theme::INK
-        } else {
-            theme::INK_FAINT
+            // A magnifying glass: this inspects, it does not move anything.
+            let ink = egui::Color32::from(if engaged {
+                theme::INK
+            } else {
+                theme::INK_FAINT
+            });
+            let lens_radius = 3.6;
+            let lens_centre = handle_min
+                + Vector {
+                    x: HANDLE_SIZE.x * 0.44,
+                    y: HANDLE_SIZE.y * 0.42,
+                };
+            let painter = ctx.ui.painter();
+            painter.circle_stroke(lens_centre.into(), lens_radius, egui::Stroke::new(1.3, ink));
+            let reach = lens_radius * 0.72;
+            painter.line_segment(
+                [
+                    (lens_centre + Vector::splat(reach)).into(),
+                    (lens_centre + Vector::splat(reach + 3.2)).into(),
+                ],
+                egui::Stroke::new(1.3, ink),
+            );
         });
-        let lens_radius = 3.6;
-        let lens_centre = handle_region.min
-            + Vector {
-                x: HANDLE_SIZE.x * 0.44,
-                y: HANDLE_SIZE.y * 0.42,
-            };
-        let painter = ctx.ui.painter();
-        painter.circle_stroke(lens_centre.into(), lens_radius, egui::Stroke::new(1.3, ink));
-        let reach = lens_radius * 0.72;
-        painter.line_segment(
-            [
-                (lens_centre + Vector::splat(reach)).into(),
-                (lens_centre + Vector::splat(reach + 3.2)).into(),
-            ],
-            egui::Stroke::new(1.3, ink),
-        );
 
         // What the sticky path settled on, if the menu overrode the dwell.
         self.handle.set(match settled {
@@ -314,6 +336,7 @@ impl Node for Inspector {
             _ => HandleState {
                 target,
                 region,
+                layer,
                 pointer,
                 heading: None,
                 moved_at: now,
@@ -432,6 +455,11 @@ fn owner_of(ws: &Workspace, target: NodeUid) -> Option<NodeUid> {
         }
         owns
     })
+}
+
+/// What "Open Fullscreen" opens for `target`.
+pub fn fullscreen_target(ws: &Workspace, target: NodeUid) -> NodeUid {
+    ws.send_request(target, CanvasNodeChild).unwrap_or(target)
 }
 
 /// What a copied result takes when nothing recorded where it drew.
@@ -599,10 +627,11 @@ impl Node for PlacementCommands {
                 SendCanvasItemToBack { node: self.target },
             );
         } else if taken(self.fullscreen_button) {
+            let opened = fullscreen_target(ws, self.target);
             ws.submit_action(
                 root.cast::<crate::layouts::desktops::Desktops>(),
                 "Opened fullscreen",
-                crate::layouts::desktops::PushOverride { node: self.target },
+                crate::layouts::desktops::PushOverride { node: opened },
             );
         }
 
@@ -747,6 +776,7 @@ mod tests {
                 ScreenPos { x: 100.0, y: 100.0 },
                 Vector { x: 300.0, y: 300.0 },
             ),
+            layer: egui::LayerId::background(),
             pointer: Some(ScreenPos { x: 250.0, y: 250.0 }),
             heading: None,
             moved_at: 0.0,
@@ -760,6 +790,7 @@ mod tests {
                 ScreenPos { x: 200.0, y: 200.0 },
                 Vector { x: 40.0, y: 40.0 },
             ),
+            layer: egui::LayerId::background(),
         }
     }
 

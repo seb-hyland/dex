@@ -65,9 +65,9 @@ pub struct FileBrowser {
 impl FileBrowser {
     /// The directory a fresh browser starts in.
     fn default_dir() -> PathBuf {
-        std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::current_dir().ok())
+        std::env::current_dir()
+            .ok()
+            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
             .unwrap_or_else(|| PathBuf::from("/"))
     }
 
