@@ -205,10 +205,10 @@ fn every_prototype_option_builds_a_node() {
         "there is no option past the last label"
     );
 
-    for expected in ["Integer", "Float"] {
+    for expected in ["Integer", "Float", "Boolean"] {
         assert!(
             CanvasSidebar::OPTIONS.contains(&expected),
-            "the numeric primitives are offered: {expected}"
+            "the scalar primitives are offered: {expected}"
         );
     }
 }

@@ -8,6 +8,7 @@ use arrow::array::RecordBatch;
 use crate::{
     layouts::{child::LayoutChild, pending::PendingLayout, scroll::ScrollLayout},
     primitives::{
+        boolean::Bool,
         dynamic::DynamicNode,
         nothing::Nothing,
         number::{Float, Integer},
@@ -148,6 +149,9 @@ pub fn node_to_value(node: &dyn Node) -> Option<ScriptValue> {
     if let Some(n) = any.downcast_ref::<Float>() {
         return Some(ScriptValue::Float(n.value));
     }
+    if let Some(b) = any.downcast_ref::<Bool>() {
+        return Some(ScriptValue::Bool(b.value));
+    }
     if let Some(t) = any.downcast_ref::<Table>() {
         return Some(ScriptValue::Table(t.batch().clone()));
     }
@@ -172,7 +176,7 @@ pub fn to_dyn_node_py(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> Arc<dyn Node> {
     }
     // `bool` before `int`: in Python `bool` extracts as `int` too.
     if let Ok(v) = obj.extract::<bool>() {
-        return Arc::new(Label::new(v.to_string()));
+        return Arc::new(Bool::new(v));
     }
     if let Ok(v) = obj.extract::<i64>() {
         return Arc::new(Integer::new(v));

@@ -19,6 +19,7 @@ use crate::{
         vertical_dnd::VerticalDnD,
     },
     primitives::{
+        boolean::Bool,
         checkout,
         file_browser::{BrowseFor, FileBrowser, TakePickedPath},
         interaction::TakeClicked,
@@ -110,10 +111,11 @@ pub struct CanvasSidebar {
 impl CanvasSidebar {
     /// Labels for the option buttons, in order. The button at index `i` inserts
     /// the node produced by [`CanvasSidebar::dispatch`] for that index.
-    pub const OPTIONS: [&'static str; 11] = [
+    pub const OPTIONS: [&'static str; 12] = [
         "Text",
         "Integer",
         "Float",
+        "Boolean",
         "Rect",
         "Circle",
         "Typst",
@@ -215,25 +217,26 @@ impl CanvasSidebar {
             ),
             1 => (Arc::new(Integer::new(0)), Vector { x: 80.0, y: 32.0 }),
             2 => (Arc::new(Float::new(0.0)), Vector { x: 80.0, y: 32.0 }),
-            3 => (Arc::new(CanvasRect), DEFAULT),
-            4 => (
+            3 => (Arc::new(Bool::new(true)), Vector { x: 90.0, y: 28.0 }),
+            4 => (Arc::new(CanvasRect), DEFAULT),
+            5 => (
                 Arc::new(Circle::new(40.0, Color::rgb(120, 170, 220))),
                 Vector { x: 80.0, y: 80.0 },
             ),
-            5 => (
+            6 => (
                 Arc::new(TypstEditor::new(ws)),
                 Vector { x: 280.0, y: 220.0 },
             ),
-            6 => (Arc::new(Lambda::new(ws)), Vector { x: 420.0, y: 340.0 }),
-            7 => (
+            7 => (Arc::new(Lambda::new(ws)), Vector { x: 420.0, y: 340.0 }),
+            8 => (
                 Arc::new(CanvasLambda::new(ws)),
                 Vector { x: 280.0, y: 220.0 },
             ),
-            8 => (
+            9 => (
                 Arc::new(FileBrowser::new(ws)),
                 Vector { x: 320.0, y: 240.0 },
             ),
-            9 => (
+            10 => (
                 Arc::new(Path::polygon(
                     vec![
                         Vector::new(0.0, 0.0),
@@ -246,7 +249,7 @@ impl CanvasSidebar {
                 )),
                 Vector { x: 90.0, y: 90.0 },
             ),
-            10 => (
+            11 => (
                 Arc::new(Path::polyline(
                     vec![Vector::new(0.0, 0.0), Vector::new(140.0, 60.0)],
                     Stroke::new(2.5, Color::rgb(80, 80, 90)),
