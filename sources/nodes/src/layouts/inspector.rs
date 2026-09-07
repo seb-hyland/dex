@@ -7,9 +7,9 @@ use crate::{
     composites::button::Button,
     layouts::{
         LayoutChild,
-        canvas::layout::{BringCanvasItemToFront, PlaceOnCanvas, SendCanvasItemToBack},
+        canvas::layout::{BringCanvasItemToFront, Canvas, PlaceOnCanvas, SendCanvasItemToBack},
         canvas::nodes::CanvasNodeChild,
-        desktops::AddToBackpack,
+        desktops::{AddToBackpack, Desktops, OpenCanvasAsTab},
         mirror::Mirror,
         vertical::VerticalLayout,
     },
@@ -57,6 +57,147 @@ pub fn menu_button(ws: WorkspaceActionHandle, label: &str) -> NodeUid<Button> {
         b.fill_width = true;
     })
 }
+
+/// Strip the article a type name leads with, for use as a name.
+pub fn short_name(type_name: &str) -> String {
+    type_name
+        .strip_prefix("An ")
+        .or_else(|| type_name.strip_prefix("A "))
+        .unwrap_or(type_name)
+        .to_owned()
+}
+
+/// How far an option is inset from the row that opened it.
+const SUBMENU_INDENT: f32 = theme::SPACE_LG;
+/// The gap between one row of a submenu and the next, matching the menu column's.
+const SUBMENU_GAP: f32 = 2.0;
+
+/// A menu row that opens a short list of destinations under it.
+#[utils::portable]
+pub struct SubmenuRow {
+    header: NodeUid<Button>,
+    options: Vec<NodeUid<Button>>,
+    /// Whether the destinations are showing.
+    open: Transient<bool>,
+    /// The option pressed, until its owner takes it.
+    chosen: Transient<usize>,
+}
+
+impl SubmenuRow {
+    /// A row reading `verb`, opening one option per entry in `options`.
+    pub fn build(ws: WorkspaceActionHandle, verb: &str, options: &[&str]) -> NodeUid<SubmenuRow> {
+        let header = menu_button(ws.clone(), &format!("{verb}\u{2026}"));
+        let options = options
+            .iter()
+            .map(|label| {
+                Button::build_with(ws.clone(), Label::new((*label).to_owned()), |b| {
+                    b.label.font = theme::text_small();
+                    b.label.color = theme::INK_MUTED;
+                    b.padding = theme::SPACE_SM;
+                    b.padding_x = theme::SPACE_SM;
+                    b.corner_radius = theme::RADIUS_SM;
+                    b.border = Stroke::NONE;
+                    b.fill_width = true;
+                })
+            })
+            .collect();
+        ws.insert_node(Self {
+            header,
+            options,
+            open: Transient::default(),
+            chosen: Transient::default(),
+        })
+    }
+}
+
+#[utils::dynamic_node(skip)]
+impl Node for SubmenuRow {
+    fn type_name(&self, _ctx: NodeContext) -> String {
+        "A Submenu".into()
+    }
+
+    fn draw(&self, mut ctx: DrawContext) -> DrawResult {
+        let origin = ctx.constraints.pos;
+        let width = ctx
+            .constraints
+            .x
+            .map(|a| a.provided_value())
+            .filter(|w| w.is_finite())
+            .unwrap_or(MENU_WIDTH);
+
+        let mut y = 0.0;
+        let row = |ctx: &mut DrawContext, node: NodeUid, inset: f32, y: &mut f32| {
+            let drawn = ctx.draw_workspace_node(
+                node,
+                DrawConstraints {
+                    pos: origin + Vector { x: inset, y: *y },
+                    x: Some(AxisConstraint::Exactly((width - inset).max(0.0))),
+                    y: None,
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip: false,
+                },
+            );
+            *y += drawn
+                .and_then(|r| r.region())
+                .map(|r| r.size().y)
+                .unwrap_or(0.0)
+                + SUBMENU_GAP;
+        };
+
+        row(&mut ctx, self.header.erase(), 0.0, &mut y);
+        let open = (*self.open.val()).unwrap_or(false);
+        if open {
+            for &option in &self.options {
+                row(&mut ctx, option.erase(), SUBMENU_INDENT, &mut y);
+            }
+        }
+
+        // Taken, so a press fires once: these rows stop being drawn the moment
+        // the menu closes, and a plain read would repeat the last click.
+        let ws = ctx.node.workspace;
+        let taken = |button: NodeUid<Button>| {
+            ws.send_request(button.erase(), TakeClicked)
+                .unwrap_or(false)
+        };
+        if taken(self.header) {
+            self.open.set(!open);
+        }
+        if open {
+            for (i, &option) in self.options.iter().enumerate() {
+                if taken(option) {
+                    self.chosen.set(i);
+                    // A destination chosen is the end of the gesture; leaving
+                    // the list open would have the next menu open on it.
+                    self.open.set(false);
+                }
+            }
+        }
+
+        DrawResult::Complete {
+            region: Some(ScreenRegion::from_min_size(
+                origin,
+                Vector {
+                    x: width,
+                    y: (y - SUBMENU_GAP).max(0.0),
+                },
+            )),
+        }
+    }
+
+    fn on_delete(&self, ctx: NodeContext) {
+        ctx.workspace.delete_node(self.header.erase());
+        for option in &self.options {
+            ctx.workspace.delete_node(option.erase());
+        }
+    }
+}
+
+defhandlers! { SubmenuRow {
+    requests: [
+        // The option pressed since this was last asked, if any.
+        TakeSubmenuChoice => (this, _q): Option<usize> { this.chosen.val_mut().take() },
+    ],
+}}
 
 /// Where the lens sits, and which way the pointer was last seen going.
 #[derive(Clone)]
@@ -443,7 +584,7 @@ fn result_commands(ws: &Workspace, target: NodeUid) -> Option<NodeUid<PlacementC
         .inspectable_rect(target)
         .map(|region| region.size())
         .unwrap_or(DEFAULT_RESULT_SIZE);
-    Some(PlacementCommands::build(ws.action_handle(), target, size))
+    Some(PlacementCommands::for_result(ws, target, size))
 }
 
 /// The node that owns `target`, by the same relation a deep clone follows.
@@ -465,7 +606,32 @@ pub fn fullscreen_target(ws: &Workspace, target: NodeUid) -> NodeUid {
 /// What a copied result takes when nothing recorded where it drew.
 const DEFAULT_RESULT_SIZE: Vector = Vector { x: 160.0, y: 60.0 };
 
-/// Copy and Mirror, onto the canvas or into the backpack, for a node that can belong on a canvas.
+/// The destinations a copy or a mirror can be sent to, in the order they are offered.
+pub const PLACEMENT_DESTINATIONS: [&str; 3] = ["Current canvas", "Backpack", "New desktop"];
+const TO_CANVAS: usize = 0;
+const TO_BACKPACK: usize = 1;
+const TO_DESKTOP: usize = 2;
+
+/// Whether `uid` is a plain [`Canvas`] and not something wrapping one.
+///
+/// The test is on the concrete node rather than on a request, because a
+/// `ComputeCanvas` dereferences to the canvas inside it and would answer every
+/// surface question exactly as a bare one does.
+fn is_canvas(ws: &Workspace, uid: NodeUid) -> bool {
+    ws.get_node(uid)
+        .is_some_and(|node| node.as_ref().as_any_ref().is::<Canvas>())
+}
+
+/// The plain [`Canvas`] behind `target`, if there is one.
+fn canvas_behind(ws: &Workspace, target: NodeUid) -> Option<NodeUid<Canvas>> {
+    if is_canvas(ws, target) {
+        return Some(target.cast::<Canvas>());
+    }
+    let child = ws.send_request(target, CanvasNodeChild)?;
+    is_canvas(ws, child).then(|| child.cast::<Canvas>())
+}
+
+/// Clone and Mirror, onto the canvas or into the backpack, for a node that can belong on a canvas.
 #[utils::dynamic_type]
 #[utils::portable]
 pub struct PlacementCommands {
@@ -474,10 +640,10 @@ pub struct PlacementCommands {
     target: NodeUid,
     /// The size a placed copy should take when it has no canvas layout of its own.
     size: Vector,
-    copy_button: NodeUid<Button>,
-    mirror_button: NodeUid<Button>,
-    keep_copy_button: NodeUid<Button>,
-    keep_mirror_button: NodeUid<Button>,
+    clone_to: NodeUid<SubmenuRow>,
+    mirror_to: NodeUid<SubmenuRow>,
+    /// Whether "Clone to" offers a desktop of its own.
+    to_desktop: bool,
     front_button: Option<NodeUid<Button>>,
     back_button: Option<NodeUid<Button>>,
     /// Opens the target over the whole content area.
@@ -487,37 +653,48 @@ pub struct PlacementCommands {
 
 #[utils::dynamic_methods]
 impl PlacementCommands {
-    /// Build the Copy and Mirror pair for `target`, to sit in its inspector.
+    /// Build the Clone and Mirror pair for `target`, to sit in its inspector.
     pub fn build(
         ws: WorkspaceActionHandle,
         target: NodeUid,
         size: Vector,
     ) -> NodeUid<PlacementCommands> {
-        Self::assemble(ws, target, size, false)
-    }
-
-    /// The same commands for a `target` that is a top-level canvas item.
-    pub fn build_for_canvas_item(
-        ws: WorkspaceActionHandle,
-        target: NodeUid,
-        size: Vector,
-    ) -> NodeUid<PlacementCommands> {
-        Self::assemble(ws, target, size, true)
+        Self::assemble(ws, target, size, false, false)
     }
 }
 
 impl PlacementCommands {
+    /// The same commands for a `target` that is something a node computed.
+    pub fn for_result(ws: &Workspace, target: NodeUid, size: Vector) -> NodeUid<PlacementCommands> {
+        let to_desktop = canvas_behind(ws, target).is_some();
+        Self::assemble(ws.action_handle(), target, size, false, to_desktop)
+    }
+
+    /// The same commands for a `target` that is a top-level canvas item.
+    pub fn build_for_canvas_item(
+        ws: &Workspace,
+        target: NodeUid,
+        size: Vector,
+    ) -> NodeUid<PlacementCommands> {
+        let to_desktop = canvas_behind(ws, target).is_some();
+        Self::assemble(ws.action_handle(), target, size, true, to_desktop)
+    }
+
     fn assemble(
         ws: WorkspaceActionHandle,
         target: NodeUid,
         size: Vector,
         restackable: bool,
+        to_desktop: bool,
     ) -> NodeUid<PlacementCommands> {
         let command = |label: &str| menu_button(ws.clone(), label);
-        let copy_button = command("Copy");
-        let mirror_button = command("Mirror");
-        let keep_copy_button = command("Copy to Backpack");
-        let keep_mirror_button = command("Mirror to Backpack");
+        let destinations = |count: usize| &PLACEMENT_DESTINATIONS[..count];
+        let clone_to = SubmenuRow::build(
+            ws.clone(),
+            "Clone to",
+            destinations(if to_desktop { 3 } else { 2 }),
+        );
+        let mirror_to = SubmenuRow::build(ws.clone(), "Mirror to", destinations(2));
         let front_button = restackable.then(|| command("Bring to Front"));
         let back_button = restackable.then(|| command("Send to Back"));
         // Offered to everything with these commands, not just to canvas items:
@@ -527,10 +704,8 @@ impl PlacementCommands {
         let column = VerticalLayout::build(
             ws.clone(),
             [
-                Some(copy_button.erase()),
-                Some(mirror_button.erase()),
-                Some(keep_copy_button.erase()),
-                Some(keep_mirror_button.erase()),
+                Some(clone_to.erase()),
+                Some(mirror_to.erase()),
                 front_button.map(|b| b.erase()),
                 back_button.map(|b| b.erase()),
                 Some(fullscreen_button.erase()),
@@ -543,10 +718,9 @@ impl PlacementCommands {
         ws.insert_node(Self {
             target,
             size,
-            copy_button,
-            mirror_button,
-            keep_copy_button,
-            keep_mirror_button,
+            clone_to,
+            mirror_to,
+            to_desktop,
             front_button,
             back_button,
             fullscreen_button,
@@ -574,28 +748,20 @@ impl Node for PlacementCommands {
         };
         let root = ws.root();
 
-        if taken(self.copy_button) {
-            let copy = ws.deep_clone(self.target);
-            ws.submit_action(
-                root,
-                "Copied node onto the canvas",
-                PlaceOnCanvas {
-                    node: copy,
-                    size: self.size,
-                },
-            );
-        } else if taken(self.mirror_button) {
-            let mirror = ws.insert_node_dyn(Arc::new(Mirror::new(self.target)));
-            ws.submit_action(
-                root,
-                "Mirrored node onto the canvas",
-                PlaceOnCanvas {
-                    node: mirror,
-                    size: self.size,
-                },
-            );
-        } else if taken(self.keep_copy_button) {
-            ws.submit_action(
+        let chosen = |row: NodeUid<SubmenuRow>| ws.send_request(row, TakeSubmenuChoice).flatten();
+        match chosen(self.clone_to) {
+            Some(TO_CANVAS) => {
+                let copy = ws.deep_clone(self.target);
+                ws.submit_action(
+                    root,
+                    "Cloned node onto the canvas",
+                    PlaceOnCanvas {
+                        node: copy,
+                        size: self.size,
+                    },
+                );
+            }
+            Some(TO_BACKPACK) => ws.submit_action(
                 root,
                 "Kept a copy in the backpack",
                 AddToBackpack {
@@ -603,9 +769,45 @@ impl Node for PlacementCommands {
                     size: self.size,
                     mirror: false,
                 },
-            );
-        } else if taken(self.keep_mirror_button) {
-            ws.submit_action(
+            ),
+            // The surface is cloned, not the item framing it.
+            Some(TO_DESKTOP) => {
+                if let Some(canvas) = canvas_behind(ws, self.target) {
+                    let name = ws
+                        .get_node(canvas.erase())
+                        .map(|node| {
+                            short_name(&node.type_name(NodeContext {
+                                id: canvas.erase(),
+                                workspace: ws,
+                            }))
+                        })
+                        .unwrap_or_else(|| "Canvas".to_owned());
+                    let copy = ws.deep_clone(canvas.erase()).cast::<Canvas>();
+                    ws.submit_action(
+                        root.cast::<Desktops>(),
+                        "Cloned the surface onto a desktop of its own",
+                        OpenCanvasAsTab {
+                            canvas: copy,
+                            name: format!("{name} copy"),
+                        },
+                    );
+                }
+            }
+            _ => {}
+        }
+        match chosen(self.mirror_to) {
+            Some(TO_CANVAS) => {
+                let mirror = ws.insert_node_dyn(Arc::new(Mirror::new(self.target)));
+                ws.submit_action(
+                    root,
+                    "Mirrored node onto the canvas",
+                    PlaceOnCanvas {
+                        node: mirror,
+                        size: self.size,
+                    },
+                );
+            }
+            Some(TO_BACKPACK) => ws.submit_action(
                 root,
                 "Kept a mirror in the backpack",
                 AddToBackpack {
@@ -613,8 +815,11 @@ impl Node for PlacementCommands {
                     size: self.size,
                     mirror: true,
                 },
-            );
-        } else if self.front_button.is_some_and(&taken) {
+            ),
+            _ => {}
+        }
+
+        if self.front_button.is_some_and(&taken) {
             ws.submit_action(
                 root,
                 "Brought the item to the front",
@@ -640,11 +845,9 @@ impl Node for PlacementCommands {
 
     fn on_delete(&self, ctx: NodeContext) {
         ctx.workspace.delete_node(self.column.erase());
+        ctx.workspace.delete_node(self.clone_to.erase());
+        ctx.workspace.delete_node(self.mirror_to.erase());
         for button in [
-            Some(self.copy_button),
-            Some(self.mirror_button),
-            Some(self.keep_copy_button),
-            Some(self.keep_mirror_button),
             self.front_button,
             self.back_button,
             Some(self.fullscreen_button),

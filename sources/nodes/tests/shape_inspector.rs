@@ -96,12 +96,8 @@ fn row_height(ctx: &egui::Context, build: impl FnOnce(&Workspace) -> NodeUid) ->
 */
 fn controls_top(ctx: &egui::Context) -> f32 {
     row_height(ctx, |ws| {
-        PlacementCommands::build_for_canvas_item(
-            ws.action_handle(),
-            NodeUid::nil(),
-            Vector { x: 90.0, y: 90.0 },
-        )
-        .erase()
+        PlacementCommands::build_for_canvas_item(ws, NodeUid::nil(), Vector { x: 90.0, y: 90.0 })
+            .erase()
     }) + ROW_GAP
 }
 

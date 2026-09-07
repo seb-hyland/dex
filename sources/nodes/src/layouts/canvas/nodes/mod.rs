@@ -102,11 +102,8 @@ impl CanvasNodeInspector {
             .send_request(child, CanvasItemDeletable)
             .unwrap_or(true);
         let delete_button = menu_button(ctx.workspace.action_handle(), "Delete");
-        let placement = PlacementCommands::build_for_canvas_item(
-            ctx.workspace.action_handle(),
-            target.erase(),
-            size,
-        );
+        let placement =
+            PlacementCommands::build_for_canvas_item(ctx.workspace, target.erase(), size);
         let child_ctx = NodeContext {
             id: child,
             workspace: ctx.workspace,

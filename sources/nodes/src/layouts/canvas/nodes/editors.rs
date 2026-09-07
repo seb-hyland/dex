@@ -70,7 +70,7 @@ fn placement_commands(ws: &Workspace, target: NodeUid) -> NodeUid<PlacementComma
         .send_request(target, CanvasItemBounds)
         .map(|bounds| bounds.size())
         .unwrap_or(Vector::splat(80.0));
-    PlacementCommands::build_for_canvas_item(ws.action_handle(), target, size)
+    PlacementCommands::build_for_canvas_item(ws, target, size)
 }
 
 fn place_region(ctx: &mut DrawContext, sensor: NodeUid, region: ScreenRegion) {

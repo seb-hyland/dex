@@ -15,7 +15,7 @@ use crate::{
             sidebar::CanvasSidebar,
         },
         horizontal_dnd::{AddChild, Children, HorizontalDnD, RemoveChild, Reorder},
-        inspector::{Inspector, menu_button},
+        inspector::{Inspector, SubmenuRow, TakeSubmenuChoice, menu_button},
         mirror::Mirror,
         vertical::VerticalLayout,
     },
@@ -803,6 +803,17 @@ defhandlers! { Desktops {
                 this.active = copy;
             }
         },
+        /*
+            Show `canvas` on a desktop of its own, and go there.
+
+            For a surface that already exists — one lifted off an item by its
+            inspector, say. The tab takes ownership from here, which is why only
+            a copy is ever handed over: closing the tab deletes what it shows.
+        */
+        OpenCanvasAsTab { canvas: NodeUid<Canvas>, name: String } => (this, s, ctx) {
+            this.add_tab_for(ctx, s.canvas, s.name.clone());
+            this.active = s.canvas;
+        },
         // A new canvas whose items mirror this one's.
         MirrorCanvas { tab: NodeUid } => (this, s, ctx) {
             let ws = ctx.workspace;
@@ -981,14 +992,21 @@ impl DesktopTabView {
     }
 }
 
+/// Where a desktop can be sent, in the order the submenus offer them.
+const DESKTOP_DESTINATIONS: [&str; 2] = ["New desktop", "Backpack"];
+const DESKTOP_TO_TAB: usize = 0;
+const DESKTOP_TO_BACKPACK: usize = 1;
+/// The size a desktop kept in the backpack is placed at, having none of its own.
+const KEPT_DESKTOP_SIZE: Vector = Vector { x: 480.0, y: 320.0 };
+
 /// What a desktop tab offers the inspector.
 #[utils::portable]
 pub struct TabInspector {
     /// The tab these commands act on.
     #[uid_ref]
     tab: NodeUid<DesktopTabView>,
-    clone_button: NodeUid<Button>,
-    mirror_button: NodeUid<Button>,
+    clone_to: NodeUid<SubmenuRow>,
+    mirror_to: NodeUid<SubmenuRow>,
     delete_button: NodeUid<Button>,
     front_button: NodeUid<Button>,
     back_button: NodeUid<Button>,
@@ -1003,8 +1021,8 @@ impl TabInspector {
     fn build(ctx: NodeContext, tab: NodeUid<DesktopTabView>) -> NodeUid<TabInspector> {
         let ws = ctx.workspace.action_handle();
         let command = |label: &str| menu_button(ws.clone(), label);
-        let clone_button = command("Clone desktop");
-        let mirror_button = command("Mirror desktop");
+        let clone_to = SubmenuRow::build(ws.clone(), "Clone to", &DESKTOP_DESTINATIONS);
+        let mirror_to = SubmenuRow::build(ws.clone(), "Mirror to", &DESKTOP_DESTINATIONS);
         let delete_button = command("Delete");
         let front_button = command("Move to front");
         let back_button = command("Move to back");
@@ -1016,8 +1034,8 @@ impl TabInspector {
         let column = VerticalLayout::build(
             ws.clone(),
             vec![
-                clone_button.erase(),
-                mirror_button.erase(),
+                clone_to.erase(),
+                mirror_to.erase(),
                 delete_button.erase(),
                 front_button.erase(),
                 back_button.erase(),
@@ -1030,8 +1048,8 @@ impl TabInspector {
         );
         ws.insert_node(Self {
             tab,
-            clone_button,
-            mirror_button,
+            clone_to,
+            mirror_to,
             delete_button,
             front_button,
             back_button,
@@ -1068,11 +1086,35 @@ impl Node for TabInspector {
             .unwrap_or_default();
         let at = tabs.iter().position(|t| *t == tab);
 
-        if taken(self.clone_button) {
-            ws.submit_action(root, "Cloned desktop", CloneCanvas { tab });
-        } else if taken(self.mirror_button) {
-            ws.submit_action(root, "Mirrored desktop", MirrorCanvas { tab });
-        } else if taken(self.delete_button) {
+        let chosen = |row: NodeUid<SubmenuRow>| ws.send_request(row, TakeSubmenuChoice).flatten();
+        // What goes into the backpack is the *surface*, not the tab showing it.
+        let keep = |mirror: bool| {
+            ws.send_request(self.tab, TabCanvas)
+                .map(|canvas| AddToBackpack {
+                    node: canvas.erase(),
+                    size: KEPT_DESKTOP_SIZE,
+                    mirror,
+                })
+        };
+        let keep_it = |what: &'static str, mirror: bool| {
+            if let Some(action) = keep(mirror) {
+                ws.submit_action(root, what, action);
+            }
+        };
+        match chosen(self.clone_to) {
+            Some(DESKTOP_TO_TAB) => ws.submit_action(root, "Cloned desktop", CloneCanvas { tab }),
+            Some(DESKTOP_TO_BACKPACK) => keep_it("Kept a copy of the desktop", false),
+            _ => {}
+        }
+        match chosen(self.mirror_to) {
+            Some(DESKTOP_TO_TAB) => {
+                ws.submit_action(root, "Mirrored desktop", MirrorCanvas { tab })
+            }
+            Some(DESKTOP_TO_BACKPACK) => keep_it("Kept a mirror of the desktop", true),
+            _ => {}
+        }
+
+        if taken(self.delete_button) {
             ws.submit_action(root, "Closed desktop", CloseCanvas { tab });
         } else if taken(self.front_button) {
             ws.submit_action(root, "Moved desktop to front", MoveTab { tab, to: 0 });
@@ -1108,9 +1150,9 @@ impl Node for TabInspector {
 
     fn on_delete(&self, ctx: NodeContext) {
         ctx.workspace.delete_node(self.column.erase());
+        ctx.workspace.delete_node(self.clone_to.erase());
+        ctx.workspace.delete_node(self.mirror_to.erase());
         for button in [
-            self.clone_button,
-            self.mirror_button,
             self.delete_button,
             self.front_button,
             self.back_button,

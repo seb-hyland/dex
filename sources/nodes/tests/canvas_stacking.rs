@@ -151,16 +151,19 @@ fn only_a_canvas_item_is_offered_the_restacking_commands() {
     let size = Vector { x: 120.0, y: 80.0 };
 
     let plain = PlacementCommands::build(ws.action_handle(), target, size);
-    let on_canvas = PlacementCommands::build_for_canvas_item(ws.action_handle(), target, size);
+    let on_canvas = PlacementCommands::build_for_canvas_item(&ws, target, size);
     ws.process_pending();
 
+    // Each verb is said once, and its destinations hang under it.
     assert_eq!(
         command_labels(&ws, plain),
         vec![
-            "Copy".to_owned(),
-            "Copy to Backpack".to_owned(),
-            "Mirror".to_owned(),
-            "Mirror to Backpack".to_owned(),
+            "Backpack".to_owned(),
+            "Backpack".to_owned(),
+            "Clone to\u{2026}".to_owned(),
+            "Current canvas".to_owned(),
+            "Current canvas".to_owned(),
+            "Mirror to\u{2026}".to_owned(),
             // Offered to everything: a result is exactly what one wants big.
             "Open Fullscreen".to_owned(),
         ],
@@ -169,14 +172,20 @@ fn only_a_canvas_item_is_offered_the_restacking_commands() {
     assert_eq!(
         command_labels(&ws, on_canvas),
         vec![
+            "Backpack".to_owned(),
+            "Backpack".to_owned(),
             "Bring to Front".to_owned(),
-            "Copy".to_owned(),
-            "Copy to Backpack".to_owned(),
-            "Mirror".to_owned(),
-            "Mirror to Backpack".to_owned(),
+            "Clone to\u{2026}".to_owned(),
+            "Current canvas".to_owned(),
+            "Current canvas".to_owned(),
+            "Mirror to\u{2026}".to_owned(),
             "Open Fullscreen".to_owned(),
             "Send to Back".to_owned(),
         ],
         "an item on a surface can be raised and lowered"
+    );
+    assert!(
+        !command_labels(&ws, on_canvas).contains(&"New desktop".to_owned()),
+        "only an item framing a surface can become a desktop"
     );
 }

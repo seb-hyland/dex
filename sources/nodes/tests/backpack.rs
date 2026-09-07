@@ -73,9 +73,11 @@ fn all_nodes(ws: &Workspace) -> Vec<NodeUid> {
 
 /// The on-screen rect of the button labelled `label`, which must be drawing.
 fn button_rect(ws: &Workspace, ctx: &egui::Context, label: &str) -> egui::Rect {
-    let button = all_nodes(ws)
+    // The one that *drew*: a destination like "Backpack" hangs under both the
+    // clone and the mirror submenu, and only the open one is on screen.
+    all_nodes(ws)
         .into_iter()
-        .find(|uid| {
+        .filter(|uid| {
             ws.get_node(*uid).is_some_and(|node| {
                 (*node)
                     .as_any_ref()
@@ -83,15 +85,15 @@ fn button_rect(ws: &Workspace, ctx: &egui::Context, label: &str) -> egui::Rect {
                     .is_some_and(|b| b.label.text == label)
             })
         })
-        .unwrap_or_else(|| panic!("a button labelled {label:?} exists"));
-    // A button's polling falls through to its sensor, which is what egui knows.
-    let sensor = ws
-        .get_node(button)
-        .and_then(|node| node.deref_target())
-        .expect("the button owns a click sensor");
-    ctx.read_response(egui::Id::new(sensor))
-        .unwrap_or_else(|| panic!("the button labelled {label:?} drew this frame"))
-        .rect
+        .find_map(|button| {
+            // A button's polling falls through to its sensor, which is what egui knows.
+            let sensor = ws
+                .get_node(button)
+                .and_then(|node| node.deref_target())
+                .expect("the button owns a click sensor");
+            ctx.read_response(egui::Id::new(sensor)).map(|r| r.rect)
+        })
+        .unwrap_or_else(|| panic!("a button labelled {label:?} drew this frame"))
 }
 
 /// A canvas holding one label, with that item's inspector menu open and settled.
@@ -175,6 +177,12 @@ fn run_command(open: &mut Opened, label: &str) {
     }
 }
 
+/// Open `verb`'s submenu in the inspector and choose `destination` from it.
+fn run_placement(open: &mut Opened, verb: &str, destination: &str) {
+    run_command(open, &format!("{verb}\u{2026}"));
+    run_command(open, destination);
+}
+
 /// The click target of a backpack row, which must be drawing.
 fn row_rect(ws: &Workspace, ctx: &egui::Context, entry: NodeUid) -> egui::Rect {
     let sensor = ws
@@ -224,7 +232,7 @@ fn backpack_list(ws: &Workspace) -> NodeUid<dex_nodes::layouts::VerticalDnD> {
 #[test]
 fn a_copy_kept_in_the_backpack_stamps_out_placements() {
     let mut open = open_the_menu();
-    run_command(&mut open, "Copy to Backpack");
+    run_placement(&mut open, "Clone to", "Backpack");
 
     let kept = entries(&open.ws);
     assert_eq!(kept.len(), 1, "the command kept exactly one entry");
@@ -279,7 +287,7 @@ fn a_mirror_kept_in_the_backpack_places_mirrors_of_the_original() {
         .send_request(open.item, CanvasNodeChild)
         .expect("the canvas item wraps a label");
 
-    run_command(&mut open, "Mirror to Backpack");
+    run_placement(&mut open, "Mirror to", "Backpack");
 
     let kept = entries(&open.ws);
     assert_eq!(kept.len(), 1, "the command kept exactly one entry");
@@ -343,7 +351,7 @@ fn the_backpack_starts_empty() {
 #[test]
 fn double_clicking_a_row_renames_it_instead_of_placing() {
     let mut open = open_the_menu();
-    run_command(&mut open, "Copy to Backpack");
+    run_placement(&mut open, "Clone to", "Backpack");
     let entry = entries(&open.ws)[0];
 
     let canvas = open
@@ -399,7 +407,7 @@ fn a_polygon_offers_the_same_commands_and_comes_back_as_an_editor() {
     );
 
     // Panics if the command is missing, which is the whole point of the test.
-    run_command(&mut open, "Copy to Backpack");
+    run_placement(&mut open, "Clone to", "Backpack");
     let entry = entries(&open.ws)[0];
 
     let canvas = open
