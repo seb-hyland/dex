@@ -2,6 +2,7 @@ use dex_core::prelude::*;
 use dex_core::theme;
 use utils::Transient;
 
+use crate::prelude_prototypes::{self, Offer};
 use crate::{
     composites::{
         button::{Button, SetButtonLabel, SetButtonStyle},
@@ -11,7 +12,7 @@ use crate::{
         Bordered, HorizontalLayout, LayoutChild, ScrollLayout,
         canvas::{
             backpack::BackpackItem,
-            layout::AddCanvasItem,
+            layout::{AddCanvasItem, PlaceOnCanvas},
             nodes::{CanvasNodeChild, shapes::CanvasRect},
         },
         desktops::Desktops,
@@ -60,6 +61,17 @@ fn tab_style(open: bool) -> SetButtonStyle {
     }
 }
 
+/// One node the prelude offered, and the button that stamps it out.
+#[utils::portable]
+pub struct PreludePrototype {
+    /// What the prelude called it.
+    name: String,
+    /// The template itself.
+    template: NodeUid,
+    size: Vector,
+    button: NodeUid<Button>,
+}
+
 #[utils::dynamic_type]
 #[utils::portable]
 pub struct CanvasSidebar {
@@ -78,6 +90,14 @@ pub struct CanvasSidebar {
     /// Where the prelude is checked out for external editing.
     #[dynamic(skip)]
     prelude_checkout: Transient<checkout::Checkout>,
+    /// The nodes the prelude offers, between the primitives and the backpack.
+    #[dynamic(skip)]
+    prototypes: Vec<PreludePrototype>,
+    /// Why the prelude could not be read, if it could not.
+    prelude_error: Option<String>,
+    /// The prelude as last read for what it offers.
+    #[dynamic(skip)]
+    seen_prelude: Transient<String>,
 
     /// The global virtual environment.
     venv: String,
@@ -177,6 +197,9 @@ impl CanvasSidebar {
             backpack,
             python_prelude,
             prelude_checkout: Transient::default(),
+            prototypes: Vec::new(),
+            prelude_error: None,
+            seen_prelude: Transient::default(),
             venv: String::new(),
             venv_button,
             venv_clear_button,
@@ -417,6 +440,8 @@ impl CanvasSidebar {
             }
         }
 
+        self.draw_offered(ctx, origin, size, &section, &mut y);
+
         section(ctx, "Backpack", &mut y);
         let remaining = (size.y - y).max(0.0);
         let kept = ctx
@@ -452,6 +477,110 @@ impl CanvasSidebar {
             y += remaining;
         }
         y
+    }
+
+    /// Draw what the prelude offers, if it offers anything.
+    fn draw_offered(
+        &self,
+        ctx: &mut DrawContext,
+        origin: ScreenPos,
+        size: Vector,
+        section: &impl Fn(&mut DrawContext, &str, &mut f32),
+        y: &mut f32,
+    ) {
+        const GAP: f32 = 10.0;
+        if self.prototypes.is_empty() && self.prelude_error.is_none() {
+            return;
+        }
+        section(ctx, "From the prelude", y);
+
+        // A prelude that will not run says so here: the sidebar is often the
+        // first place anyone looks after editing it.
+        if let Some(error) = &self.prelude_error {
+            let mut label = muted(error);
+            label.color = theme::DANGER;
+            let drawn = ctx.draw_node(
+                &label,
+                DrawConstraints {
+                    pos: origin + Vector { x: 0.0, y: *y },
+                    x: Some(AxisConstraint::AtMost(size.x)),
+                    y: None,
+                    wrap: WrapConstraints::NotAllowed,
+                    should_clip: true,
+                },
+            );
+            *y += drawn.region().map(|r| r.size().y).unwrap_or(0.0) + GAP;
+        }
+
+        if self.prototypes.is_empty() {
+            return;
+        }
+        let offered = HorizontalLayout {
+            children: self
+                .prototypes
+                .iter()
+                .map(|p| LayoutChild::from(p.button))
+                .collect(),
+            spacing: GAP,
+            allow_wrap: true,
+        };
+        let drawn = ctx.draw_node(
+            &offered,
+            DrawConstraints {
+                pos: origin + Vector { x: 0.0, y: *y },
+                x: Some(AxisConstraint::AtMost(size.x)),
+                y: Some(AxisConstraint::AtMost((size.y - *y).max(0.0))),
+                wrap: WrapConstraints::NotAllowed,
+                should_clip: true,
+            },
+        );
+        *y += drawn.region().map(|r| r.size().y).unwrap_or(0.0) + GAP + 4.0;
+
+        let ws = ctx.node.workspace;
+        for prototype in &self.prototypes {
+            if ws
+                .send_request(prototype.button.erase(), TakeClicked)
+                .unwrap_or(false)
+            {
+                // A copy, so the sidebar keeps what it offers and the thing you
+                // placed is yours to change.
+                let copy = ws.deep_clone(prototype.template);
+                ws.submit_action(
+                    self.desktops.erase(),
+                    "Placed a node the prelude offers",
+                    PlaceOnCanvas {
+                        node: copy,
+                        size: prototype.size,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Ask a worker what the prelude offers, when the prelude has changed.
+    fn poll_prelude_prototypes(&self, ctx: NodeContext) {
+        let ws = ctx.workspace;
+        let source = ws
+            .send_request(self.python_prelude, GetCommittedText {})
+            .unwrap_or_default();
+        if self.seen_prelude.val().as_deref() == Some(source.as_str()) {
+            return;
+        }
+        self.seen_prelude.set(source.clone());
+
+        let sidebar = ctx.id.cast::<Self>();
+        ws.cancel_all_tasks_for(ctx.id);
+        ws.submit_task(ComputeTask::new(ctx.id, move || {
+            let (handle, actions) = WorkspaceActionHandle::buffered();
+            let (offers, error) = prelude_prototypes::read(&source);
+            handle.submit_action(
+                sidebar,
+                "Read what the prelude offers",
+                SetPreludePrototypes { offers, error },
+            );
+            drop(handle);
+            actions.try_iter().collect()
+        }));
     }
 
     /// Draw the prelude editor, and honour any request it raised to be
@@ -818,11 +947,16 @@ impl Node for CanvasSidebar {
         // Polled off the draw, so an external edit lands whichever tab is open.
         self.poll_prelude_checkout(ctx);
         self.poll_settings(ctx);
+        self.poll_prelude_prototypes(ctx);
     }
 
     fn on_delete(&self, ctx: NodeContext) {
         for btn in &self.buttons {
             ctx.workspace.delete_node(btn.erase());
+        }
+        for prototype in &self.prototypes {
+            ctx.workspace.delete_node(prototype.template);
+            ctx.workspace.delete_node(prototype.button.erase());
         }
         for tab in &self.tab_buttons {
             ctx.workspace.delete_node(tab.erase());
@@ -973,6 +1107,25 @@ defhandlers! {
                     }
                 }
             },
+            // Take the nodes the prelude offers, replacing what it offered before.
+            SetPreludePrototypes { offers: Vec<Offer>, error: Option<String> } => (this, a, ctx) {
+                let ws = ctx.workspace;
+                for old in ::std::mem::take(&mut this.prototypes) {
+                    ws.delete_node(old.template);
+                    ws.delete_node(old.button.erase());
+                }
+                let handle = ws.action_handle();
+                this.prototypes = a.offers
+                    .iter()
+                    .map(|(name, node, size)| PreludePrototype {
+                        name: name.clone(),
+                        template: handle.insert_node_dyn(node.clone()),
+                        size: *size,
+                        button: Button::build(handle.clone(), Label::new(name.clone())),
+                    })
+                    .collect();
+                this.prelude_error = a.error.clone();
+            },
             // Show one of the sidebar's tabs, and mark it in the strip.
             OpenSidebarTab { tab: usize } => (this, a, ctx) {
                 if a.tab < TABS.len() {
@@ -1031,6 +1184,15 @@ defhandlers! {
             },
             // The list the backpack's entries live in.
             BackpackList => (this, _q): NodeUid<VerticalDnD> { this.backpack },
+            // What the prelude offers, as `(name, template, size)`.
+            PreludeOffers => (this, _q): Vec<(String, NodeUid, Vector)> {
+                this.prototypes
+                    .iter()
+                    .map(|p| (p.name.clone(), p.template, p.size))
+                    .collect()
+            },
+            // Why the prelude could not be read, if it could not.
+            PreludeError => (this, _q): Option<String> { this.prelude_error.clone() },
         ]
     }
 }

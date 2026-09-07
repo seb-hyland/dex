@@ -5,6 +5,7 @@ pub mod argtypes;
 pub mod composites;
 pub mod fonts;
 pub mod layouts;
+pub mod prelude_prototypes;
 pub mod primitives;
 pub mod scripting;
 pub mod settings;
