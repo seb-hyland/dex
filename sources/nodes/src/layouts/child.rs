@@ -122,7 +122,7 @@ impl dex_core::refs::NodeRefs for LayoutChild {
                 }
             }
             LayoutChild::Node(node) => {
-                *node = dex_core::refs::remapped(&**node, map);
+                *node = Arc::from(dex_core::refs::remapped(&**node, map));
             }
         }
     }

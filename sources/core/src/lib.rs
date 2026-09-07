@@ -76,6 +76,18 @@ pub trait Node:
     /// A tick run for every node regardless of whether it is drawn. Allows nodes to compute and sync offscreen.
     fn tick(&self, _ctx: NodeContext) {}
 
+    /**
+        Fold any edit in progress into what this node has committed.
+
+        Run on a copy while it is being made, before its cached state is
+        cleared. A node that edits through a live buffer beside a committed
+        value is worth what the buffer shows — that is what is on screen, and
+        what `GetText` answers — but the buffer is transient and only the value
+        survives being copied. Without this a canvas cloned while someone was
+        part-way through typing came back holding the text they started with.
+    */
+    fn settle(&mut self) {}
+
     fn on_delete(&self, _ctx: NodeContext) {}
 }
 

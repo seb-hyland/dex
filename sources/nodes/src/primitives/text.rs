@@ -332,6 +332,14 @@ impl LabelEditable {
         self.buf.val().clone().unwrap_or_else(|| self.value.clone())
     }
 
+    /// Take whatever is in the edit buffer as the committed value.
+    #[dynamic(skip)] // takes `&mut self`
+    pub fn commit_buffer(&mut self) {
+        if let Some(text) = self.buf.val_mut().take() {
+            self.value = text;
+        }
+    }
+
     /// Overwrite both the committed value and the live edit buffer, so a
     /// wrapper can correct what an edit committed.
     #[dynamic(skip)] // takes `&mut self`
@@ -421,6 +429,10 @@ impl LabelEditable {
 impl Node for LabelEditable {
     fn type_name(&self, _ctx: NodeContext) -> String {
         "An Editable Label".to_owned()
+    }
+
+    fn settle(&mut self) {
+        self.commit_buffer();
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {
@@ -801,6 +813,19 @@ impl CodeEditor {
 impl Node for CodeEditor {
     fn type_name(&self, _ctx: NodeContext) -> String {
         "A Code Editor".to_owned()
+    }
+
+    /**
+        Take what is being typed as the source.
+
+        A code editor commits on focus loss, and cloning a canvas does not take
+        focus away from anything — so a lambda copied while its script was being
+        written came back holding the script it had before.
+    */
+    fn settle(&mut self) {
+        if let Some(text) = self.buf.val_mut().take() {
+            self.value = text;
+        }
     }
 
     fn build_inspector(&self, ctx: NodeContext) -> Option<NodeUid> {

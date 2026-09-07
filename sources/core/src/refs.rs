@@ -124,7 +124,7 @@ impl NodeRefs for Arc<dyn Node> {
     }
 
     fn remap_refs(&mut self, map: &HashMap<NodeUid, NodeUid>) {
-        *self = remapped(&**self, map);
+        *self = Arc::from(remapped(&**self, map));
     }
 }
 
@@ -141,10 +141,11 @@ impl<T: Clone> NodeRefs for utils::Transient<T> {
 ///
 /// The node is treated as a value: this does not register anything or walk
 /// owned children.
-pub fn remapped(node: &dyn Node, map: &HashMap<NodeUid, NodeUid>) -> Arc<dyn Node> {
+pub fn remapped(node: &dyn Node, map: &HashMap<NodeUid, NodeUid>) -> Box<dyn Node> {
     let mut owned = dyn_clone::clone_box(node);
     // A node whose `Clone` shares state duplicates it here, in its own
     // `remap_refs`: this is only ever reached while building a clone.
     owned.remap_refs(map);
-    Arc::from(owned)
+    // Still owned, so the caller can finish settling it before it is shared.
+    owned
 }

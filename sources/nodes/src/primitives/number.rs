@@ -52,6 +52,15 @@ macro_rules! number_node {
                 // It looks like a label, so it takes a label's styling controls.
                 self.field.build_inspector(ctx)
             }
+
+            // Settle through the field, then take what it settled to.
+            fn settle(&mut self) {
+                self.field.commit_buffer();
+                if let Ok(parsed) = self.field.resolved_text().trim().parse::<$ty>() {
+                    self.value = parsed;
+                }
+                self.field.set_text(self.value.to_string());
+            }
         }
 
         defhandlers! { $name {

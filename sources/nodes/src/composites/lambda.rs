@@ -1109,6 +1109,16 @@ impl Node for Lambda {
         }
     }
 
+    fn build_inspector(&self, ctx: NodeContext) -> Option<NodeUid> {
+        Some(
+            crate::composites::upstream::LambdaCommands::build(
+                ctx.workspace.action_handle(),
+                ctx.id,
+            )
+            .erase(),
+        )
+    }
+
     fn tick(&self, ctx: NodeContext) {
         self.poll_checkout(ctx);
         // The command sits in the code editor's own inspector; only its owner
@@ -1859,6 +1869,16 @@ impl Node for CanvasLambda {
         DrawResult::Complete {
             region: Some(ScreenRegion::from_min_size(origin, node_size)),
         }
+    }
+
+    fn build_inspector(&self, ctx: NodeContext) -> Option<NodeUid> {
+        Some(
+            crate::composites::upstream::LambdaCommands::build(
+                ctx.workspace.action_handle(),
+                ctx.id,
+            )
+            .erase(),
+        )
     }
 
     fn tick(&self, ctx: NodeContext) {

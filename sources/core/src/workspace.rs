@@ -460,11 +460,13 @@ impl Workspace {
             let Some(node) = self.registry.get(uid) else {
                 continue;
             };
-            let copy = remapped(&*node, &ids);
+            let mut copy = remapped(&*node, &ids);
+            // Settle any edits in progress first
+            copy.settle();
             // A copy starts with no cached state of its own.
             copy.reset();
             self.registry.push(PushWorkspaceNode {
-                node: copy,
+                node: Arc::from(copy),
                 uid: ids[&uid],
             });
         }
