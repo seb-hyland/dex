@@ -289,13 +289,21 @@ dex_core::defrequest! {
     PreviewStroke { color: Option<Color> } : bool
 }
 
-/// Which of a node's two colours a picker stands for.
+dex_core::defrequest! {
+    /// The far end of a gradient: the counterpart of [`PreviewFill`], which is
+    /// the end it runs from.
+    PreviewFillEnd { color: Option<Color> } : bool
+}
+
+/// Which of a node's colours a picker stands for.
 #[derive(Clone, Copy)]
 pub enum ColorSlot {
     /// The interior, or a label's glyphs.
     Fill,
     /// The outline.
     Stroke,
+    /// Where a gradient interior ends up.
+    FillEnd,
 }
 
 impl ColorSlot {
@@ -307,6 +315,9 @@ impl ColorSlot {
             }
             Self::Stroke => {
                 ws.send_request(target, PreviewStroke { color });
+            }
+            Self::FillEnd => {
+                ws.send_request(target, PreviewFillEnd { color });
             }
         }
     }

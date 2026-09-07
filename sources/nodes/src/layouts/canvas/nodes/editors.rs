@@ -17,7 +17,6 @@ use crate::{
     },
     primitives::{
         checkbox::{Checkbox, IsChecked},
-        color_picker::{ColorPicker, ColorSlot, drop_preview, repicked},
         interaction::{
             ContainsPointer, DragStartPos, InteractionBox, PointerPos, TakeClicked, WasClicked,
             WasDoubleClicked, WasDragged, WasHovered, WasRightClicked,
@@ -25,7 +24,7 @@ use crate::{
         shapes::{
             Anchor, GetAnchors, GetFill, GetRadius, GetStroke, HasEndArrow, HasStartArrow,
             IsPathClosed, IsPathFilled, Path, SetAnchors, SetPathArrows, SetPathClosed,
-            SetPathFill, SetPathFilled, SetPathStrokeColor, SetRadius,
+            SetPathFilled, SetRadius,
         },
     },
 };
@@ -960,7 +959,17 @@ pub struct PathEditorMenu {
     column: NodeUid<VerticalLayout>,
     placement: NodeUid<PlacementCommands>,
     delete_button: NodeUid<Button>,
-    border_picker: NodeUid<ColorPicker>,
+    /**
+        What the path itself offers: its colours, and how its interior runs
+        between them.
+
+        Borrowed rather than rebuilt. This menu used to carry its own Fill and
+        Border swatches, which meant a path's colours were defined in two places
+        and only one of them ever learned about gradients — so a polygon on a
+        canvas, which is every polygon anyone actually makes, had no way to
+        reach them.
+    */
+    path_menu: Option<NodeUid>,
     /// Arrowheads are drawn only on an open path, but offered on any path: a
     /// polygon can be opened, and should not have to be reopened to be armed.
     start_arrow_check: NodeUid<Checkbox>,
@@ -969,7 +978,6 @@ pub struct PathEditorMenu {
     editable_check: Option<NodeUid<Checkbox>>,
     closed_check: Option<NodeUid<Checkbox>>,
     filled_check: Option<NodeUid<Checkbox>>,
-    fill_picker: Option<NodeUid<ColorPicker>>,
     // Line controls.
     convert_button: Option<NodeUid<Button>>,
 }
@@ -983,10 +991,13 @@ impl PathEditorMenu {
     ) -> NodeUid<PathEditorMenu> {
         let h = ws.action_handle();
         let placement = placement_commands(ws, target);
-        let stroke = ws
-            .send_request(child, GetStroke)
-            .unwrap_or(Stroke::new(2.0, Color::BLACK));
-        let border_picker = ColorPicker::build(h.clone(), "Border".to_owned(), stroke.color);
+        let child_ctx = NodeContext {
+            id: child,
+            workspace: ws,
+        };
+        let path_menu = ws
+            .get_node(child)
+            .and_then(|node| node.build_inspector(child_ctx));
         let delete_button = menu_button(h.clone(), "Delete");
 
         let start = ws.send_request(child, HasStartArrow).unwrap_or(false);
@@ -998,36 +1009,31 @@ impl PathEditorMenu {
         let mut editable_check = None;
         let mut closed_check = None;
         let mut filled_check = None;
-        let mut fill_picker = None;
         let mut convert_button = None;
 
         if is_line {
             let cv = menu_button(h.clone(), "Convert to polygon");
             rows.push(start_arrow_check.erase());
             rows.push(end_arrow_check.erase());
-            rows.push(border_picker.erase());
+            rows.extend(path_menu);
             rows.push(cv.erase());
             convert_button = Some(cv);
         } else {
             let editable = ws.send_request(target, PathEditable).unwrap_or(false);
             let closed = ws.send_request(child, IsPathClosed).unwrap_or(false);
             let filled = ws.send_request(child, IsPathFilled).unwrap_or(false);
-            let fill = ws.send_request(child, GetFill).unwrap_or(Color::WHITE);
             let ed = Checkbox::build(h.clone(), "Edit points".to_owned(), editable);
             let cl = Checkbox::build(h.clone(), "Closed".to_owned(), closed);
             let fi = Checkbox::build(h.clone(), "Filled".to_owned(), filled);
-            let fp = ColorPicker::build(h.clone(), "Fill".to_owned(), fill);
             rows.push(ed.erase());
             rows.push(cl.erase());
             rows.push(fi.erase());
-            rows.push(fp.erase());
-            rows.push(border_picker.erase());
+            rows.extend(path_menu);
             rows.push(start_arrow_check.erase());
             rows.push(end_arrow_check.erase());
             editable_check = Some(ed);
             closed_check = Some(cl);
             filled_check = Some(fi);
-            fill_picker = Some(fp);
         }
         rows.push(delete_button.erase());
 
@@ -1039,11 +1045,10 @@ impl PathEditorMenu {
             column,
             placement,
             delete_button,
-            border_picker,
+            path_menu,
             editable_check,
             closed_check,
             filled_check,
-            fill_picker,
             start_arrow_check,
             end_arrow_check,
             convert_button,
@@ -1062,20 +1067,6 @@ impl Node for PathEditorMenu {
         let drawn = ctx.draw_workspace_node(self.column.erase(), constraints);
         let ws = ctx.node.workspace;
         let child = self.child;
-
-        // The picker shows its colour on the path itself while the gesture is
-        // going, and is committed once for the whole drag when it ends.
-        if let Some(stroke) = ws.send_request(child, GetStroke)
-            && let Some(color) = repicked(
-                ws,
-                self.border_picker,
-                child,
-                ColorSlot::Stroke,
-                stroke.color,
-            )
-        {
-            ws.submit_action(child, "Set border colour", SetPathStrokeColor { color });
-        }
 
         // Both ends travel in one action, so poll them together. A box that
         // cannot be read counts as agreeing, so an unanswered request never
@@ -1147,13 +1138,6 @@ impl Node for PathEditorMenu {
         {
             ws.submit_action(child, "Toggled filled", SetPathFilled { filled: on });
         }
-        if let Some(fp) = self.fill_picker
-            && let Some(fill) = ws.send_request(child, GetFill)
-            && let Some(color) = repicked(ws, fp, child, ColorSlot::Fill, fill)
-        {
-            ws.submit_action(child, "Set fill colour", SetPathFill { color });
-        }
-
         if ws
             .send_request(self.delete_button.erase(), TakeClicked)
             .unwrap_or(false)
@@ -1171,22 +1155,17 @@ impl Node for PathEditorMenu {
     }
 
     fn on_delete(&self, ctx: NodeContext) {
-        // Closing mid-gesture would otherwise leave a preview standing, with
-        // nothing left running to clear it.
-        for slot in [ColorSlot::Fill, ColorSlot::Stroke] {
-            drop_preview(ctx.workspace, self.child, slot);
-        }
         ctx.workspace.delete_node(self.column.erase());
         for c in [
             Some(self.placement.erase()),
             Some(self.delete_button.erase()),
-            Some(self.border_picker.erase()),
+            // The path's own menu drops whatever previews it left standing.
+            self.path_menu,
             Some(self.start_arrow_check.erase()),
             Some(self.end_arrow_check.erase()),
             self.editable_check.map(|n| n.erase()),
             self.closed_check.map(|n| n.erase()),
             self.filled_check.map(|n| n.erase()),
-            self.fill_picker.map(|n| n.erase()),
             self.convert_button.map(|n| n.erase()),
         ]
         .into_iter()

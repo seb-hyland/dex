@@ -2,6 +2,7 @@ pub mod boolean;
 pub mod checkbox;
 pub mod checkout;
 pub mod color_picker;
+pub mod drag_number;
 pub mod dropdown;
 pub mod dynamic;
 pub mod file_browser;

@@ -3,12 +3,15 @@ use dex_core::theme;
 use egui::Painter;
 use utils::Transient;
 
+use crate::layouts::LayoutChild;
 use crate::layouts::canvas::nodes::CanvasEditor;
 use crate::layouts::canvas::nodes::editors::{CircleEditor, PathEditor};
 use crate::layouts::vertical::VerticalLayout;
 use crate::primitives::color_picker::{
-    ColorPicker, ColorSlot, PreviewFill, PreviewStroke, drop_preview, repicked,
+    ColorPicker, ColorSlot, PreviewFill, PreviewFillEnd, PreviewStroke, drop_preview, repicked,
 };
+use crate::primitives::drag_number::{DragNumber, DragNumberValue};
+use crate::primitives::dropdown::{Dropdown, DropdownSelection, SetDropdownSelection};
 
 /// A filled, optionally bordered rectangle.
 #[utils::dynamic_type]
@@ -177,6 +180,61 @@ defhandlers! { Circle {
     ],
 } }
 
+/**
+    How a polygon's interior is coloured.
+
+    Every mode starts from [`Path::fill`]; the gradients run from there to
+    [`Path::fill_end`].
+*/
+#[derive(Copy, Debug, Default, PartialEq, Eq)]
+#[utils::dynamic_type]
+#[utils::portable(noop_reset)]
+pub enum FillMode {
+    /// One colour throughout.
+    #[default]
+    Solid,
+    /// A straight ramp across the shape, along [`Path::fill_angle`].
+    Linear,
+    /// A ramp out from the middle: a point of light.
+    Radial,
+}
+
+/// The modes, in the order the inspector offers them.
+pub const FILL_MODES: [FillMode; 3] = [FillMode::Solid, FillMode::Linear, FillMode::Radial];
+
+#[utils::dynamic_methods]
+impl FillMode {
+    pub fn solid() -> Self {
+        Self::Solid
+    }
+    pub fn linear() -> Self {
+        Self::Linear
+    }
+    pub fn radial() -> Self {
+        Self::Radial
+    }
+
+    /// What the inspector calls this mode.
+    pub fn label(&self) -> String {
+        match self {
+            FillMode::Solid => "Solid",
+            FillMode::Linear => "Linear",
+            FillMode::Radial => "Radial",
+        }
+        .to_owned()
+    }
+
+    /// The mode at `index` in the offered order.
+    pub fn at(index: usize) -> FillMode {
+        FILL_MODES.get(index).copied().unwrap_or(FillMode::Solid)
+    }
+
+    /// Where this mode sits in that order.
+    pub fn index(&self) -> usize {
+        FILL_MODES.iter().position(|m| m == self).unwrap_or(0)
+    }
+}
+
 /// One vertex of a [`Path`], with optional cubic-Bézier control handles.
 #[utils::dynamic_type]
 #[utils::portable]
@@ -222,7 +280,14 @@ pub struct Path {
     pub closed: bool,
     /// Whether the interior is filled.
     pub filled: bool,
+    /// The interior colour, and — for a gradient — the end it runs from.
     pub fill: Color,
+    /// How the interior is coloured. See [`FillMode`].
+    pub fill_mode: FillMode,
+    /// Where a gradient interior ends up.
+    pub fill_end: Color,
+    /// Which way a linear ramp runs: degrees clockwise from due right.
+    pub fill_angle: f32,
     pub stroke: Stroke,
     /// Arrowheads at the first / last point (drawn only on an open path).
     pub start_arrow: bool,
@@ -230,6 +295,7 @@ pub struct Path {
 
     /// Colours being dragged out of a picker.
     preview_fill: Transient<Color>,
+    preview_fill_end: Transient<Color>,
     preview_stroke: Transient<Color>,
 }
 
@@ -250,7 +316,11 @@ impl Path {
             stroke,
             start_arrow: false,
             end_arrow: false,
+            fill_mode: FillMode::Solid,
+            fill_end: Color::TRANSPARENT,
+            fill_angle: 0.0,
             preview_fill: Transient::default(),
+            preview_fill_end: Transient::default(),
             preview_stroke: Transient::default(),
         }
     }
@@ -274,7 +344,11 @@ impl Path {
             stroke,
             start_arrow: false,
             end_arrow: false,
+            fill_mode: FillMode::Solid,
+            fill_end: Color::TRANSPARENT,
+            fill_angle: 0.0,
             preview_fill: Transient::default(),
+            preview_fill_end: Transient::default(),
             preview_stroke: Transient::default(),
         }
     }
@@ -316,7 +390,11 @@ impl Path {
             stroke,
             start_arrow: false,
             end_arrow: false,
+            fill_mode: FillMode::Solid,
+            fill_end: Color::TRANSPARENT,
+            fill_angle: 0.0,
             preview_fill: Transient::default(),
+            preview_fill_end: Transient::default(),
             preview_stroke: Transient::default(),
         }
     }
@@ -336,7 +414,11 @@ impl Path {
             stroke,
             start_arrow: false,
             end_arrow: false,
+            fill_mode: FillMode::Solid,
+            fill_end: Color::TRANSPARENT,
+            fill_angle: 0.0,
             preview_fill: Transient::default(),
+            preview_fill_end: Transient::default(),
             preview_stroke: Transient::default(),
         }
     }
@@ -384,6 +466,12 @@ impl Path {
     }
 
     #[dynamic(skip)]
+    /// The far end of a gradient, its colour possibly still being picked.
+    pub fn shown_fill_end(&self) -> Color {
+        self.preview_fill_end.val().unwrap_or(self.fill_end)
+    }
+
+    #[dynamic(skip)]
     /// The outline on show, its colour possibly still being picked.
     pub fn shown_stroke(&self) -> Stroke {
         match *self.preview_stroke.val() {
@@ -392,6 +480,24 @@ impl Path {
                 ..self.stroke
             },
             None => self.stroke,
+        }
+    }
+
+    #[dynamic(skip)]
+    /**
+        The triangles the interior is painted with, placed at `origin`.
+
+        What [`Path::paint`] hands the painter. Separated out so a caller that
+        wants the geometry — to rasterise it, to export it — can have it without
+        a painter to hand.
+    */
+    pub fn fill_mesh(&self, origin: ScreenPos) -> egui::Mesh {
+        let points = self.outline(origin);
+        let from: egui::Color32 = self.shown_fill().into();
+        let to: egui::Color32 = self.shown_fill_end().into();
+        match self.fill_mode {
+            FillMode::Solid => fill_mesh(&points, from),
+            mode => gradient_mesh(&points, mode, self.fill_angle, from, to),
         }
     }
 
@@ -408,9 +514,16 @@ impl Path {
 
         // Fill the interior when asked, closed or not, using ear clipping.
         if self.filled {
-            let fill: egui::Color32 = self.shown_fill().into();
-            if fill.a() > 0 {
-                painter.add(egui::Shape::mesh(fill_mesh(&points, fill)));
+            let from: egui::Color32 = self.shown_fill().into();
+            let to: egui::Color32 = self.shown_fill_end().into();
+            // Nothing to paint when both ends are invisible; a gradient may
+            // still have one end that is, which is what fades an edge out.
+            let visible = match self.fill_mode {
+                FillMode::Solid => from.a() > 0,
+                _ => from.a() > 0 || to.a() > 0,
+            };
+            if visible {
+                painter.add(egui::Shape::mesh(self.fill_mesh(origin)));
             }
         }
         // epaint needs two points to stroke anything, and asserts on fewer.
@@ -509,6 +622,177 @@ fn paint_arrowhead(
         color,
         egui::Stroke::NONE,
     ));
+}
+
+/**
+    How far along the ramp a point sits, from 0 at one end to 1 at the other.
+
+    A linear ramp is an *affine* function of position, which is exactly what a
+    triangle's vertex colours interpolate — so a linear gradient over the ear-
+    clipped mesh is not an approximation, however few triangles it has. A radial
+    one is not affine, which is why [`gradient_mesh`] subdivides for it.
+*/
+#[derive(Clone, Copy)]
+struct Ramp {
+    mode: FillMode,
+    /// Linear: the direction, and where the shape starts and ends along it.
+    axis: egui::Vec2,
+    start: f32,
+    span: f32,
+    /// Radial: the middle, and the distance to the furthest point from it.
+    centre: egui::Pos2,
+    radius: f32,
+}
+
+impl Ramp {
+    /// The ramp `mode` describes over `points`, at `angle` degrees clockwise
+    /// from due right.
+    fn over(points: &[egui::Pos2], mode: FillMode, angle: f32) -> Ramp {
+        let radians = angle.to_radians();
+        let axis = egui::vec2(radians.cos(), radians.sin());
+        let projected: Vec<f32> = points.iter().map(|p| p.to_vec2().dot(axis)).collect();
+        let start = projected.iter().copied().fold(f32::INFINITY, f32::min);
+        let end = projected.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+
+        let bounds = egui::Rect::from_points(points);
+        let centre = bounds.center();
+        let radius = points
+            .iter()
+            .map(|p| (*p - centre).length())
+            .fold(0.0f32, f32::max);
+
+        Ramp {
+            mode,
+            axis,
+            start,
+            span: end - start,
+            centre,
+            radius,
+        }
+    }
+
+    fn at(&self, p: egui::Pos2) -> f32 {
+        let (distance, span) = match self.mode {
+            FillMode::Radial => ((p - self.centre).length(), self.radius),
+            _ => (p.to_vec2().dot(self.axis) - self.start, self.span),
+        };
+        if span <= f32::EPSILON {
+            return 0.0;
+        }
+        (distance / span).clamp(0.0, 1.0)
+    }
+}
+
+/**
+    The colour `t` of the way along the ramp.
+
+    Straight down the middle in *premultiplied* channels, which is both what the
+    ends already are — a `Color32` is premultiplied — and the right space to
+    interpolate in. Mixing unmultiplied channels towards a transparent colour
+    drags the visible half of the ramp towards that colour's hue, so a flame
+    fading out at its tip came back olive on the way rather than simply going.
+*/
+fn blend(from: egui::Color32, to: egui::Color32, t: f32) -> egui::Color32 {
+    let mix = |a: u8, b: u8| {
+        (a as f32 + (b as f32 - a as f32) * t)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    egui::Color32::from_rgba_premultiplied(
+        mix(from.r(), to.r()),
+        mix(from.g(), to.g()),
+        mix(from.b(), to.b()),
+        mix(from.a(), to.a()),
+    )
+}
+
+/// How small a triangle has to get before a radial ramp across it reads as
+/// smooth: a sixteenth of the shape, which is four rounds of halving.
+const RADIAL_STEPS: u32 = 4;
+/**
+    The edge length below which a radial ramp stops being chased.
+
+    A triangle a few points across cannot show a band whatever the ramp is
+    doing, so subdividing it further buys nothing and costs everything: without
+    this, a shape small enough that an eighth of it is under a point subdivides
+    to the depth cap regardless of its size, and a handful of glowing coals came
+    to twenty thousand triangles a frame.
+*/
+const MIN_RADIAL_EDGE: f32 = 4.0;
+
+/// Fill the outline with a ramp from `from` to `to`.
+fn gradient_mesh(
+    points: &[egui::Pos2],
+    mode: FillMode,
+    angle: f32,
+    from: egui::Color32,
+    to: egui::Color32,
+) -> egui::Mesh {
+    let ramp = Ramp::over(points, mode, angle);
+    let flat = fill_mesh(points, from);
+    let mut mesh = egui::Mesh::default();
+
+    // A linear ramp is affine, so the triangles the solid fill already found
+    // carry it exactly; only the vertex colours change.
+    if mode != FillMode::Radial {
+        mesh = flat;
+        for vertex in &mut mesh.vertices {
+            vertex.color = blend(from, to, ramp.at(vertex.pos));
+        }
+        return mesh;
+    }
+
+    // A radial one is not affine, so each triangle is halved until it is small
+    // enough that the straight interpolation across it is close to the curve.
+    let limit = (ramp.radius / 8.0).max(MIN_RADIAL_EDGE);
+    for triangle in flat.indices.chunks_exact(3) {
+        let corners = [
+            flat.vertices[triangle[0] as usize].pos,
+            flat.vertices[triangle[1] as usize].pos,
+            flat.vertices[triangle[2] as usize].pos,
+        ];
+        subdivide(&mut mesh, corners, &ramp, from, to, limit, RADIAL_STEPS);
+    }
+    mesh
+}
+
+/// Add `corners` to `mesh`, halving it first while it is bigger than `limit`.
+fn subdivide(
+    mesh: &mut egui::Mesh,
+    corners: [egui::Pos2; 3],
+    ramp: &Ramp,
+    from: egui::Color32,
+    to: egui::Color32,
+    limit: f32,
+    depth: u32,
+) {
+    let longest = (0..3)
+        .map(|i| (corners[(i + 1) % 3] - corners[i]).length())
+        .fold(0.0f32, f32::max);
+    if depth > 0 && longest > limit {
+        // The four triangles a midpoint split makes: three at the corners and
+        // one inverted in the middle.
+        let mid = |a: egui::Pos2, b: egui::Pos2| a + (b - a) * 0.5;
+        let (ab, bc, ca) = (
+            mid(corners[0], corners[1]),
+            mid(corners[1], corners[2]),
+            mid(corners[2], corners[0]),
+        );
+        for part in [
+            [corners[0], ab, ca],
+            [ab, corners[1], bc],
+            [ca, bc, corners[2]],
+            [ab, bc, ca],
+        ] {
+            subdivide(mesh, part, ramp, from, to, limit, depth - 1);
+        }
+        return;
+    }
+    let base = mesh.vertices.len() as u32;
+    for corner in corners {
+        mesh.colored_vertex(corner, blend(from, to, ramp.at(corner)));
+    }
+    mesh.add_triangle(base, base + 1, base + 2);
 }
 
 /// Triangulate a simple polygon into a filled mesh via ear clipping.
@@ -614,7 +898,7 @@ impl Node for Path {
         }
     }
     fn build_inspector(&self, ctx: NodeContext) -> Option<NodeUid> {
-        Some(PathMenu::build(ctx.workspace, ctx.id, self.filled).erase())
+        Some(PathMenu::build(ctx.workspace, ctx.id).erase())
     }
 }
 
@@ -635,6 +919,31 @@ defhandlers! { Path {
         SetPathFill { color: Color } => (this, a) {
             this.fill = a.color;
         },
+        // Where a gradient interior ends up.
+        SetPathFillEnd { color: Color } => (this, a) {
+            this.fill_end = a.color;
+        },
+        /*
+            How the interior is coloured.
+
+            Turning a gradient on for the first time seeds its far end from the
+            colour already there, so the shape does not blink to transparent
+            while waiting for a second colour to be picked.
+        */
+        SetFillMode { mode: FillMode } => (this, a) {
+            let unset = this.fill_end.a == 0
+                && this.fill_end.r == 0
+                && this.fill_end.g == 0
+                && this.fill_end.b == 0;
+            if a.mode != FillMode::Solid && this.fill_mode == FillMode::Solid && unset {
+                this.fill_end = Color { a: 0, ..this.fill };
+            }
+            this.fill_mode = a.mode;
+        },
+        // Which way a linear ramp runs, in degrees clockwise from due right.
+        SetPathFillAngle { degrees: f32 } => (this, a) {
+            this.fill_angle = a.degrees;
+        },
         SetPathStrokeColor { color: Color } => (this, a) {
             this.stroke.color = a.color;
         },
@@ -654,6 +963,10 @@ defhandlers! { Path {
         IsPathClosed => (this, _q): bool { this.closed },
         IsPathFilled => (this, _q): bool { this.filled },
         GetFill => (this, _q): Color { this.fill },
+        // The far end of a gradient interior, and how the interior is coloured.
+        GetFillEnd => (this, _q): Color { this.fill_end },
+        GetFillMode => (this, _q): FillMode { this.fill_mode },
+        GetFillAngle => (this, _q): f32 { this.fill_angle },
         GetStroke => (this, _q): Stroke { this.stroke },
         HasStartArrow => (this, _q): bool { this.start_arrow },
         HasEndArrow => (this, _q): bool { this.end_arrow },
@@ -663,6 +976,13 @@ defhandlers! { Path {
             match q.color {
                 Some(color) => this.preview_fill.set(color),
                 None => *this.preview_fill.val_mut() = None,
+            }
+            true
+        },
+        PreviewFillEnd => (this, q): bool {
+            match q.color {
+                Some(color) => this.preview_fill_end.set(color),
+                None => *this.preview_fill_end.val_mut() = None,
             }
             true
         },
@@ -781,6 +1101,157 @@ mod tests {
         assert!((out[0].x).abs() < 1e-3);
     }
 
+    /// A square, as the outline of one comes out.
+    fn square(side: f32) -> Vec<egui::Pos2> {
+        vec![
+            egui::pos2(0.0, 0.0),
+            egui::pos2(side, 0.0),
+            egui::pos2(side, side),
+            egui::pos2(0.0, side),
+        ]
+    }
+
+    const BLACK: egui::Color32 = egui::Color32::from_rgb(0, 0, 0);
+    const WHITE: egui::Color32 = egui::Color32::from_rgb(255, 255, 255);
+
+    /// A solid fill is one colour, however the shape was cut up.
+    #[test]
+    fn a_solid_fill_is_one_colour_throughout() {
+        let mesh = fill_mesh(&square(100.0), BLACK);
+        assert!(!mesh.vertices.is_empty());
+        assert!(mesh.vertices.iter().all(|v| v.color == BLACK));
+    }
+
+    /**
+        A linear ramp is affine, so vertex colours carry it exactly: the near
+        edge is the colour it starts from and the far edge the one it ends at,
+        whatever the triangulation did in between. No subdivision needed, and
+        none done — this is what makes the linear case free.
+    */
+    #[test]
+    fn a_linear_ramp_runs_from_one_edge_to_the_other() {
+        let points = square(100.0);
+        for (angle, near, far) in [
+            // Due right: the left edge starts it, the right edge ends it.
+            (0.0f32, egui::pos2(0.0, 0.0), egui::pos2(100.0, 0.0)),
+            // A quarter turn on, which on a screen is downwards.
+            (90.0, egui::pos2(0.0, 0.0), egui::pos2(0.0, 100.0)),
+            // And back the other way.
+            (180.0, egui::pos2(100.0, 0.0), egui::pos2(0.0, 0.0)),
+        ] {
+            let mesh = gradient_mesh(&points, FillMode::Linear, angle, BLACK, WHITE);
+            let at = |p: egui::Pos2| {
+                mesh.vertices
+                    .iter()
+                    .find(|v| (v.pos - p).length() < 0.5)
+                    .unwrap_or_else(|| panic!("no vertex at {p:?} for {angle} degrees"))
+                    .color
+            };
+            assert_eq!(at(near).r(), 0, "{angle} degrees starts black");
+            assert_eq!(at(far).r(), 255, "{angle} degrees ends white");
+        }
+        // The triangulation is untouched: the ramp rides on the flat mesh.
+        let flat = fill_mesh(&points, BLACK);
+        let ramped = gradient_mesh(&points, FillMode::Linear, 0.0, BLACK, WHITE);
+        assert_eq!(
+            ramped.indices.len(),
+            flat.indices.len(),
+            "an affine ramp needs no extra triangles"
+        );
+    }
+
+    /**
+        A ramp with a transparent end fades out without changing hue.
+
+        The ends of a ramp are premultiplied — everything in egui is — and
+        interpolating them as though they were not both darkens the visible half
+        and drags it towards whatever the far end's nominal colour happens to
+        be. A flame fading to nothing came back olive.
+    */
+    #[test]
+    fn a_ramp_into_nothing_keeps_its_colour() {
+        let gold = egui::Color32::from_rgb(250, 178, 62);
+        // The far end is invisible, so only its *alpha* should tell.
+        let gone = egui::Color32::from_rgba_unmultiplied(128, 30, 28, 0);
+        let mesh = gradient_mesh(&square(100.0), FillMode::Linear, 0.0, gold, gone);
+
+        let near = mesh
+            .vertices
+            .iter()
+            .find(|v| v.pos.x < 1.0)
+            .expect("a vertex at the near edge");
+        assert_eq!(
+            (near.color.r(), near.color.g(), near.color.b()),
+            (gold.r(), gold.g(), gold.b()),
+            "the near end is the colour it was given"
+        );
+
+        // A linear ramp has no vertices in between — that is the point of it —
+        // so the middle of the fade is read off a radial one, which does.
+        let mesh = gradient_mesh(&square(100.0), FillMode::Radial, 0.0, gold, gone);
+        let partly: Vec<_> = mesh
+            .vertices
+            .iter()
+            .filter(|v| (60..=200).contains(&v.color.a()))
+            .collect();
+        assert!(!partly.is_empty(), "the fade has a middle");
+        for v in partly {
+            // Undoing the premultiply must give back the colour it started as.
+            let unmultiplied = v.color.r() as f32 * 255.0 / v.color.a() as f32;
+            assert!(
+                (unmultiplied - gold.r() as f32).abs() < 14.0,
+                "half-faded gold is still gold: {:?} reads as {unmultiplied}",
+                v.color
+            );
+        }
+    }
+
+    /**
+        A radial ramp is not affine, so it is subdivided until straight
+        interpolation across a triangle is close enough to the curve.
+
+        The test is the one that matters for a point of light: the middle is the
+        colour it starts from, the rim the one it ends at, and somewhere between
+        the two there are vertices holding the values in between — which a
+        four-triangle square could not have produced.
+    */
+    #[test]
+    fn a_radial_ramp_lights_the_middle() {
+        let points = square(100.0);
+        let mesh = gradient_mesh(&points, FillMode::Radial, 0.0, BLACK, WHITE);
+
+        let flat = fill_mesh(&points, BLACK);
+        assert!(
+            mesh.indices.len() > flat.indices.len() * 8,
+            "the curve was chased with subdivision: {} triangles against {}",
+            mesh.indices.len() / 3,
+            flat.indices.len() / 3
+        );
+
+        let nearest = |p: egui::Pos2| {
+            mesh.vertices
+                .iter()
+                .min_by(|a, b| (a.pos - p).length().total_cmp(&(b.pos - p).length()))
+                .expect("the mesh has vertices")
+        };
+        assert!(
+            nearest(egui::pos2(50.0, 50.0)).color.r() < 20,
+            "the middle is the colour it starts from"
+        );
+        // A corner of the square is exactly the furthest point from the middle.
+        assert_eq!(
+            nearest(egui::pos2(0.0, 0.0)).color.r(),
+            255,
+            "and the far corner is where it ends up"
+        );
+        assert!(
+            mesh.vertices
+                .iter()
+                .any(|v| (40..=210).contains(&v.color.r())),
+            "with the values in between actually present"
+        );
+    }
+
     /// The handles mirror each other at every anchor, so the outline is smooth
     /// across the joins rather than kinked at the cardinal points.
     #[test]
@@ -793,39 +1264,78 @@ mod tests {
     }
 }
 
-/// A [`Path`]'s inspector: the colours it is drawn in.
+/**
+    A [`Path`]'s inspector: the colours it is drawn in, and how the interior
+    runs between them.
+
+    Every control is built once and the *rows* are chosen afresh each frame from
+    what the path currently is. The inspector rebuilds its menu when the lens
+    moves to another node and at no other time, so a menu that decided its own
+    contents at build time could not answer for a choice made inside it: picking
+    a gradient would leave nowhere to pick the colour it runs to until the whole
+    menu had been closed and opened again.
+*/
 #[utils::portable]
 pub struct PathMenu {
     #[uid_ref]
     target: NodeUid<Path>,
-    column: NodeUid<VerticalLayout>,
     stroke_picker: NodeUid<ColorPicker>,
-    fill_picker: Option<NodeUid<ColorPicker>>,
+    /// The interior's controls, shown while the shape is filled: the mode, the
+    /// colour it starts from, and — for a gradient — where it ends up.
+    fill_picker: NodeUid<ColorPicker>,
+    mode_picker: NodeUid<Dropdown>,
+    fill_end_picker: NodeUid<ColorPicker>,
+    /// Shown only for a linear ramp: a radial one has no direction to set.
+    angle: NodeUid<DragNumber>,
 }
 
 impl PathMenu {
-    fn build(ws: &Workspace, target: NodeUid, filled: bool) -> NodeUid<PathMenu> {
+    fn build(ws: &Workspace, target: NodeUid) -> NodeUid<PathMenu> {
         let h = ws.action_handle();
-        // Seeded from the path as it stands, so the swatch opens showing the
+        // Seeded from the path as it stands, so a swatch opens showing the
         // colour it is about to change rather than a default.
         let stroke = ws.send_request(target, GetStroke).unwrap_or(Stroke::NONE);
-        let stroke_picker = ColorPicker::build(h.clone(), "Stroke".into(), stroke.color);
-        let fill_picker = filled.then(|| {
-            let fill = ws
-                .send_request(target, GetFill)
-                .unwrap_or(Color::TRANSPARENT);
-            ColorPicker::build(h.clone(), "Fill".into(), fill)
-        });
+        let fill = ws
+            .send_request(target, GetFill)
+            .unwrap_or(Color::TRANSPARENT);
+        let end = ws
+            .send_request(target, GetFillEnd)
+            .unwrap_or(Color::TRANSPARENT);
+        let mode = ws.send_request(target, GetFillMode).unwrap_or_default();
+        let degrees = ws.send_request(target, GetFillAngle).unwrap_or(0.0);
 
-        let mut rows = vec![stroke_picker.erase()];
-        rows.extend(fill_picker.map(NodeUid::erase));
-        let column = VerticalLayout::build(h, rows, theme::SPACE_XS);
+        let mode_picker =
+            Dropdown::build(h.clone(), FILL_MODES.iter().map(FillMode::label).collect());
+        ws.submit_action(
+            mode_picker,
+            "Showed the interior's mode",
+            SetDropdownSelection {
+                index: mode.index(),
+            },
+        );
         ws.insert_node(Self {
             target: target.cast(),
-            column,
-            stroke_picker,
-            fill_picker,
+            stroke_picker: ColorPicker::build(h.clone(), "Stroke".into(), stroke.color),
+            fill_picker: ColorPicker::build(h.clone(), "Fill".into(), fill),
+            mode_picker,
+            fill_end_picker: ColorPicker::build(h.clone(), "Fill to".into(), end),
+            angle: DragNumber::build_with(h, degrees, 0.0, 360.0, |control| {
+                control.wraps = true;
+                control.prefix = "Angle ".to_owned();
+                control.suffix = "\u{00b0}".to_owned();
+            }),
         })
+    }
+
+    /// Everything the path owns, for tearing the menu down.
+    fn controls(&self) -> [NodeUid; 5] {
+        [
+            self.stroke_picker.erase(),
+            self.fill_picker.erase(),
+            self.mode_picker.erase(),
+            self.fill_end_picker.erase(),
+            self.angle.erase(),
+        ]
     }
 }
 
@@ -836,10 +1346,25 @@ impl Node for PathMenu {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        let constraints = ctx.constraints;
-        let drawn = ctx.draw_workspace_node(self.column.erase(), constraints);
         let ws = ctx.node.workspace;
         let target = self.target.erase();
+        let filled = ws.send_request(target, IsPathFilled).unwrap_or(false);
+        let mode = ws.send_request(target, GetFillMode).unwrap_or_default();
+        let gradient = filled && mode != FillMode::Solid;
+
+        let rows = [
+            Some(self.stroke_picker.erase()),
+            filled.then(|| self.mode_picker.erase()),
+            filled.then(|| self.fill_picker.erase()),
+            gradient.then(|| self.fill_end_picker.erase()),
+            (gradient && mode == FillMode::Linear).then(|| self.angle.erase()),
+        ];
+        let column = VerticalLayout::new(
+            rows.into_iter().flatten().map(LayoutChild::Id).collect(),
+            theme::SPACE_XS,
+        );
+        let constraints = ctx.constraints;
+        let drawn = ctx.draw_node(&column, constraints);
 
         if let Some(stroke) = ws.send_request(target, GetStroke)
             && let Some(color) = repicked(
@@ -852,26 +1377,47 @@ impl Node for PathMenu {
         {
             ws.submit_action(target, "Set stroke colour", SetPathStrokeColor { color });
         }
-        if let Some(picker) = self.fill_picker
+        if filled
             && let Some(fill) = ws.send_request(target, GetFill)
-            && let Some(color) = repicked(ws, picker, target, ColorSlot::Fill, fill)
+            && let Some(color) = repicked(ws, self.fill_picker, target, ColorSlot::Fill, fill)
         {
             ws.submit_action(target, "Set fill colour", SetPathFill { color });
         }
+        if gradient
+            && let Some(end) = ws.send_request(target, GetFillEnd)
+            && let Some(color) = repicked(ws, self.fill_end_picker, target, ColorSlot::FillEnd, end)
+        {
+            ws.submit_action(
+                target,
+                "Set the gradient's far end",
+                SetPathFillEnd { color },
+            );
+        }
+        if filled && let Some(index) = ws.send_request(self.mode_picker, DropdownSelection) {
+            let chosen = FillMode::at(index);
+            if ws.send_request(target, GetFillMode) != Some(chosen) {
+                ws.submit_action(target, "Set the fill mode", SetFillMode { mode: chosen });
+            }
+        }
+        if gradient
+            && mode == FillMode::Linear
+            && let Some(degrees) = ws.send_request(self.angle, DragNumberValue)
+            && ws.send_request(target, GetFillAngle) != Some(degrees)
+        {
+            ws.submit_action(target, "Turned the gradient", SetPathFillAngle { degrees });
+        }
 
-        drawn.unwrap_or(DrawResult::Complete { region: None })
+        drawn
     }
 
     fn on_delete(&self, ctx: NodeContext) {
         // The menu is going away mid-gesture if a preview is still showing; drop it.
-        drop_preview(ctx.workspace, self.target.erase(), ColorSlot::Stroke);
-        if self.fill_picker.is_some() {
-            drop_preview(ctx.workspace, self.target.erase(), ColorSlot::Fill);
+        let target = self.target.erase();
+        for slot in [ColorSlot::Stroke, ColorSlot::Fill, ColorSlot::FillEnd] {
+            drop_preview(ctx.workspace, target, slot);
         }
-        ctx.workspace.delete_node(self.column.erase());
-        ctx.workspace.delete_node(self.stroke_picker.erase());
-        if let Some(picker) = self.fill_picker {
-            ctx.workspace.delete_node(picker.erase());
+        for control in self.controls() {
+            ctx.workspace.delete_node(control);
         }
     }
 }
