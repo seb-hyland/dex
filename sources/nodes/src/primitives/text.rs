@@ -256,6 +256,8 @@ pub struct LabelEditable {
 
     pub singleline: bool,
     pub shrink_to_text: bool,
+    /// Whether an empty field shows a short rule where its text would go.
+    pub underline_when_empty: bool,
 
     pub interactive: bool,
     /// Grab focus when this node becomes interactive and lock back to non-interactive on focus loss.
@@ -273,7 +275,39 @@ impl LabelEditable {
     pub fn shown_color(&self) -> Color {
         self.preview_color.val().unwrap_or(self.color)
     }
+
+    /// The narrowest an empty field is allowed to be. A rule to write on needs
+    /// far less room than a caret hunting for one.
+    fn min_width(&self, row_h: f32) -> f32 {
+        if self.underline_when_empty {
+            EMPTY_RULE_WIDTH
+        } else {
+            row_h
+        }
+    }
+
+    /// Whether the rule marking an empty field should be drawn.
+    fn wants_rule(&self) -> bool {
+        self.underline_when_empty && self.resolved_text().is_empty()
+    }
+
+    /// Draw that rule along the bottom of `region`.
+    fn paint_rule(&self, ctx: &DrawContext, region: ScreenRegion) {
+        let y = region.max.y - EMPTY_RULE_DROP;
+        ctx.ui.painter().line_segment(
+            [
+                egui::pos2(region.min.x, y),
+                egui::pos2(region.max.x.max(region.min.x + EMPTY_RULE_WIDTH), y),
+            ],
+            egui::Stroke::new(theme::HAIRLINE, egui::Color32::from(theme::LINE_STRONG)),
+        );
+    }
 }
+
+/// How wide an empty field marked with a rule comes out, and how far above its
+/// foot the rule sits.
+const EMPTY_RULE_WIDTH: f32 = 16.0;
+const EMPTY_RULE_DROP: f32 = 2.0;
 
 #[utils::dynamic_methods]
 impl LabelEditable {
@@ -283,6 +317,7 @@ impl LabelEditable {
             buf: Transient::default(),
             singleline: true,
             shrink_to_text: true,
+            underline_when_empty: false,
             interactive: true,
             auto_lock: false,
             font: Font::proportional(theme::TEXT_LG),
@@ -336,7 +371,7 @@ impl LabelEditable {
         };
 
         const CARET_PADDING: f32 = 2.0;
-        let min_w = row_h;
+        let min_w = self.min_width(row_h);
         let mut block_w = exact_w.unwrap_or_else(|| {
             if self.shrink_to_text {
                 (content_w + CARET_PADDING).max(min_w)
@@ -371,6 +406,10 @@ impl LabelEditable {
         ctx.ui
             .painter()
             .galley(text_pos, galley, self.shown_color().into());
+        let region = ScreenRegion::from_min_size(origin, size);
+        if self.wants_rule() {
+            self.paint_rule(&ctx, region);
+        }
 
         DrawResult::Complete {
             region: Some(ScreenRegion::from_min_size(origin, size)),
@@ -408,7 +447,9 @@ impl Node for LabelEditable {
         };
 
         // Horizontal fit --------------------------------------------------
-        let min_w = row_h; // if field is empty, make a square the height of one row
+        // An empty field is as narrow as it is allowed to be: a square the
+        // height of a row, or just the rule that marks one.
+        let min_w = self.min_width(row_h);
         const CARET_PADDING: f32 = 2.0; // padding size so cursor remains visible
         let mut block_w = exact_w.unwrap_or_else(|| {
             if self.shrink_to_text {
@@ -451,6 +492,11 @@ impl Node for LabelEditable {
         let origin = ctx.constraints.pos;
 
         let rect = Rect::from_min_size(origin.into(), size.into());
+        // Under the field rather than over it, so a caret sitting on the rule
+        // is still the thing you can see.
+        if self.wants_rule() {
+            self.paint_rule(&ctx, ScreenRegion::from_min_size(origin, size));
+        }
 
         let mut buf_mut = self.buf.val_mut_or_else(|| self.value.clone());
         let editor_id = ctx.widget_id();

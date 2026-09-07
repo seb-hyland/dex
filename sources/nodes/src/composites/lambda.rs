@@ -4,8 +4,10 @@ use dex_core::theme;
 use egui::{Id, Pos2};
 use utils::Transient;
 
+use crate::argtypes::{ArgSpec, ArgType, TypeFault, arg_type_labels, check_arg_types, describe};
 use crate::layouts::desktops::{Desktops, PythonPrelude};
 use crate::primitives::checkout;
+use crate::primitives::dropdown::{Dropdown, DropdownSelection};
 use crate::scripting::{
     DataflowOutput, ScriptOutput, ScriptValue, ValueDelegate, is_valid_ident, resolve_arg,
     run_script,
@@ -94,6 +96,9 @@ const CONNECTION_MARK_INSET: f32 = 1.0;
 /// over all the wires and not merely over its own.
 const WIRE_LAYER: &str = "lambda_wires";
 const MARK_LAYER: &str = "lambda_wire_marks";
+/// A wire carrying the wrong kind of thing. Redder than the port it runs from,
+/// and no more transparent than an ordinary wire, so the fault reads at a glance.
+const FAULT_WIRE: Color = Color::rgba(200, 60, 60, 200);
 /// The drop candidate under a live drag, distinct from a settled connection.
 const CANDIDATE_COLOR: Color = Color {
     r: 40,
@@ -149,6 +154,8 @@ pub struct ConnectionPort {
     /// Wired to a node that lives elsewhere on the canvas.
     #[uid_ref]
     connected: Option<NodeUid>,
+    /// Whether what is wired here is not what the argument asked for.
+    faulty: bool,
     drag_sensor: NodeUid<InteractionBox>,
     drag_pos: Transient<ScreenPos>,
 }
@@ -164,6 +171,7 @@ impl ConnectionPort {
     pub fn empty(ws: WorkspaceActionHandle) -> ConnectionPort {
         Self {
             connected: None,
+            faulty: false,
             drag_sensor: ws.insert_node(InteractionBox::sensing(false, false, true)),
             drag_pos: Transient::default(),
         }
@@ -177,8 +185,11 @@ impl Node for ConnectionPort {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        let wire_color = Color::rgba(176, 202, 224, 150);
-        let port_color = theme::ACCENT_STRONG;
+        let (wire_color, port_color) = if self.faulty {
+            (FAULT_WIRE, theme::DANGER)
+        } else {
+            (Color::rgba(176, 202, 224, 150), theme::ACCENT_STRONG)
+        };
 
         let outer_radius = 4.0;
         let port_center = ctx.constraints.pos
@@ -303,13 +314,31 @@ defhandlers! { ConnectionPort {
     actions: [
         SetConnection { target: Option<NodeUid> } => (this, s) {
             this.connected = s.target;
+            // A fresh wire has not been checked yet, so it does not carry the
+            // last one's verdict until the check that follows says so.
+            this.faulty = false;
+        },
+        // Mark, or clear, the argument's type fault. See [`ConnectionPort::faulty`].
+        SetPortFault { faulty: bool } => (this, s) {
+            this.faulty = s.faulty;
         },
     ],
     requests: [
         // The node this port is wired to, if any.
         ConnectedTarget => (this, _q): Option<NodeUid> { this.connected },
+        // Whether this wire is carrying the wrong kind of thing.
+        PortFaulty => (this, _q): bool { this.faulty },
     ],
 }}
+
+/**
+    The type an argument's row is set in.
+
+    An editable label comes up a step larger than a plain one, and the row is
+    made of both — so everything in it is told which of the two it is, rather
+    than half of it being a size smaller by default.
+*/
+const ARG_FONT: Font = Font::proportional(theme::TEXT_LG);
 
 #[utils::dynamic_type]
 #[utils::portable]
@@ -317,6 +346,10 @@ pub struct LambdaArg {
     label: NodeUid<LabelEditable>,
     param_name: NodeUid<LabelEditable>,
     port: NodeUid<ConnectionPort>,
+    /// What this argument will accept, picked from a list.
+    kind_picker: NodeUid<Dropdown>,
+    /// What the two written kinds are finished with: a type name, or a test.
+    detail: NodeUid<LabelEditable>,
 }
 
 #[utils::dynamic_methods]
@@ -338,8 +371,28 @@ impl LambdaArg {
         port: NodeUid,
         name: String,
     ) -> NodeUid<LambdaArg> {
-        let label = ws.insert_node(LabelEditable::new("label".to_owned()));
-        let param_name = ws.insert_node(LabelEditable::new(name));
+        // Every field in the row is a word in a sentence, so an empty one shows
+        // a rule to write on rather than a caret's worth of blank square.
+        let field = |text: String| {
+            let mut label = LabelEditable::new(text);
+            label.underline_when_empty = true;
+            ws.insert_node(label)
+        };
+        let label = field("label".to_owned());
+        let param_name = field(name);
+        /*
+            A declaration reads as part of the argument's own line, not as a
+            control docked beside it: the row's own type and ink, no frame, no
+            padding, and only as wide as the word it is showing.
+        */
+        let kind_picker = ws.insert_node({
+            let mut picker = Dropdown::new(arg_type_labels());
+            picker.font = ARG_FONT;
+            picker.boxed = false;
+            picker.shrink_to_text = true;
+            picker
+        });
+        let detail = field(String::new());
         ws.insert_node_at(
             port.cast::<ConnectionPort>(),
             ConnectionPort::empty(ws.clone()),
@@ -350,9 +403,21 @@ impl LambdaArg {
                 label,
                 param_name,
                 port: port.cast(),
+                kind_picker,
+                detail,
             },
         );
         arg
+    }
+}
+
+impl LambdaArg {
+    /// What this argument is currently declared to be.
+    fn kind(&self, ws: &Workspace) -> ArgType {
+        ArgType::at(
+            ws.send_request(self.kind_picker, DropdownSelection)
+                .unwrap_or(0),
+        )
     }
 }
 
@@ -365,12 +430,37 @@ impl Node for LambdaArg {
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
         const ARG_LABEL_GAP: f32 = theme::SPACE_SM;
         const PORT_GAP: f32 = theme::SPACE_LG;
+        /// The declaration is set close to the brackets holding it.
+        const DECL_GAP: f32 = 0.0;
 
+        let kind = self.kind(ctx.node.workspace);
+        // The punctuation between the row's parts is the row's own text, not
+        // chrome around it: one size and one colour all the way across.
+        let word = |text: &str| {
+            let mut label = Label::new(text.to_owned());
+            label.font = ARG_FONT;
+            LayoutChild::Node(Arc::new(label))
+        };
+        // `(any)`, or `(some pyarrow.Table)`: the kind, and what finishes it.
+        let declaration = HorizontalLayout {
+            children: [
+                Some(word("(")),
+                Some(LayoutChild::from(self.kind_picker)),
+                kind.takes_detail().then(|| LayoutChild::from(self.detail)),
+                Some(word(")")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            spacing: DECL_GAP,
+            allow_wrap: false,
+        };
         let fields = HorizontalLayout {
             children: vec![
                 LayoutChild::from(self.label),
-                LayoutChild::Node(Arc::new(Label::new(":".to_owned()))),
+                word(":"),
                 LayoutChild::from(self.param_name),
+                LayoutChild::Node(Arc::new(declaration)),
             ],
             spacing: ARG_LABEL_GAP,
             allow_wrap: false,
@@ -391,6 +481,8 @@ impl Node for LambdaArg {
         ctx.workspace.delete_node(self.label.erase());
         ctx.workspace.delete_node(self.param_name.erase());
         ctx.workspace.delete_node(self.port.erase());
+        ctx.workspace.delete_node(self.kind_picker.erase());
+        ctx.workspace.delete_node(self.detail.erase());
     }
 }
 
@@ -414,6 +506,22 @@ defhandlers! { LambdaArg {
             let target = ctx.workspace.send_request(this.port, ConnectedTarget).flatten();
             (name, this.port.erase(), target)
         },
+        /*
+            What this argument is called, which port carries it, and what it was
+            declared to be: the kind, and whatever finishes it.
+
+            Separate from [`ArgInput`] rather than folded into it, because that
+            one is the dataflow protocol a script walks and this is a claim
+            about types that only the checker reads.
+        */
+        ArgDeclaration => (this, _q, ctx): (String, NodeUid, ArgType, String) {
+            let ws = ctx.workspace;
+            let name = ws.send_request(this.param_name, GetText).unwrap_or_default();
+            let detail = ws.send_request(this.detail, GetText).unwrap_or_default();
+            (name, this.port.erase(), this.kind(ws), detail)
+        },
+        // The dropdown that says what this argument accepts.
+        ArgKindPicker => (this, _q): NodeUid { this.kind_picker.erase() },
     ],
 }}
 
@@ -577,12 +685,84 @@ defhandlers! { LambdaArgs {
                 .filter_map(|arg| ctx.workspace.send_request(*arg, ArgInput))
                 .collect()
         },
+        // Every argument's declaration, in order. See [`ArgDeclaration`].
+        ArgDeclarations => (this, _q, ctx): Vec<(String, NodeUid, ArgType, String)> {
+            this.args
+                .iter()
+                .filter_map(|arg| ctx.workspace.send_request(*arg, ArgDeclaration))
+                .collect()
+        },
         // The arguments themselves, for a caller that needs to address one.
         ArgNodes => (this, _q): Vec<NodeUid> {
             this.args.iter().map(|a| a.erase()).collect()
         },
     ],
 }}
+
+/**
+    What each argument is called, what it is wired to, and what it was declared
+    to be.
+
+    Enough that any change worth re-checking on shows up as a difference, and
+    nothing that changes on its own from one frame to the next.
+*/
+type ArgShape = Vec<(String, Option<NodeUid>, ArgType, String)>;
+
+/// The same, and what each argument was worth when it was last looked at.
+type CheckedArgs = Vec<(String, Option<NodeUid>, ArgType, String, u64)>;
+
+/// What `port` was declared to be, from a list of declarations.
+fn declaration_for(
+    declarations: &[(String, NodeUid, ArgType, String)],
+    port: NodeUid,
+) -> (ArgType, String) {
+    declarations
+        .iter()
+        .find(|(_, declared, _, _)| *declared == port)
+        .map(|(_, _, kind, detail)| (*kind, detail.clone()))
+        .unwrap_or((ArgType::Any, String::new()))
+}
+
+/**
+    Every argument of `args`, resolved and paired with its declaration.
+
+    Unwired ones included, holding nothing. They seed no global and a script
+    never sees them — but "nothing is wired to it" is the most useful thing a
+    check can say about an argument that was asked to be a table, and it can
+    only say it if it is told the argument is there.
+*/
+fn arg_specs(ws: &Workspace, args: NodeUid<LambdaArgs>) -> Vec<ArgSpec> {
+    let declarations = ws.send_request(args, ArgDeclarations).unwrap_or_default();
+    ws.send_request(args, DataflowInputs)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(name, _, _)| is_valid_ident(name))
+        .map(|(name, port, target)| {
+            let (kind, detail) = declaration_for(&declarations, port);
+            ArgSpec {
+                name,
+                port,
+                kind,
+                detail,
+                value: target.map(|target| resolve_arg(ws, target).value),
+            }
+        })
+        .collect()
+}
+
+/// Say on every one of `specs` whether it is among `faults`, so a wire that has
+/// come right is cleared in the same pass that reddens one that has not.
+fn report_faults(handle: &WorkspaceActionHandle, specs: &[ArgSpec], faults: &[TypeFault]) {
+    for spec in specs {
+        handle.submit_action(
+            spec.port.cast::<ConnectionPort>(),
+            "Marked the argument's type",
+            SetPortFault {
+                faulty: faults.iter().any(|fault| fault.port == spec.port),
+            },
+        );
+    }
+}
 
 #[utils::dynamic_type]
 #[utils::portable]
@@ -598,6 +778,17 @@ pub struct Lambda {
     /// Last-seen value version of each wired upstream node, so a change re-fires this lambda.
     #[dynamic(skip)]
     seen_deps: Transient<std::collections::HashMap<NodeUid, u64>>,
+
+    /**
+        The arguments' shape as last seen: what each is called, what it is wired
+        to, and what it was declared to be.
+
+        Watched separately from the values, because a change here is a change to
+        what this lambda *is* — a rewiring, a rename, a new declaration — and
+        none of it moves a version on anything upstream.
+    */
+    #[dynamic(skip)]
+    seen_shape: Transient<ArgShape>,
 
     /// Where the script is checked out for external editing.
     #[dynamic(skip)]
@@ -629,6 +820,7 @@ impl Lambda {
             update_button: run_button(ws.clone()),
             output,
             seen_deps: Transient::default(),
+            seen_shape: Transient::default(),
             checkout: Transient::default(),
         }
     }
@@ -647,6 +839,7 @@ impl Lambda {
             update_button,
             output,
             seen_deps: Transient::default(),
+            seen_shape: Transient::default(),
             checkout: Transient::default(),
         }
     }
@@ -662,20 +855,14 @@ impl Lambda {
             return;
         };
 
-        // Resolve each argument to a typed `name = value` pair.
-        let bindings = workspace
-            .send_request(self.args, ArgBindings)
-            .unwrap_or_default();
-        let mut args: Vec<(String, ScriptValue)> = Vec::new();
-        for (name, target) in bindings {
-            if !is_valid_ident(&name) {
-                continue;
-            }
-            if let Some(target) = target {
-                let value = resolve_arg(workspace, target).value;
-                args.push((name, value));
-            }
-        }
+        // Each argument, resolved, and carrying what it was declared to be.
+        let specs = arg_specs(workspace, self.args);
+        // Only the wired ones reach the script: an unwired argument binds no
+        // name, and the check above says so before the script can trip over it.
+        let args: Vec<(String, ScriptValue)> = specs
+            .iter()
+            .filter_map(|spec| Some((spec.name.clone(), spec.value.clone()?)))
+            .collect();
 
         // Show the previous output under a pending marker while recomputing.
         let previous = workspace
@@ -708,12 +895,26 @@ impl Lambda {
         let output = self.output;
         let task = ComputeTask::new(ctx.id, move || {
             let (handle, actions) = WorkspaceActionHandle::buffered();
-            match run_script(&source, &py_prelude, &handle, &args, graph) {
-                Ok(ScriptOutput::Nothing) => handle.insert_node_at_dyn(output, Arc::new(Nothing)),
-                Ok(ScriptOutput::Node(node)) => handle.insert_node_at_dyn(output, node),
-                Ok(ScriptOutput::Handle(uid)) => handle.commit_output(output, uid),
-                Err(e) => {
-                    handle.insert_node_at_dyn(output, Arc::new(ErrorLayout::message(e.to_string())))
+            /*
+                The arguments are checked before the script is handed them, so a
+                mistyped one is reported as itself rather than as whatever the
+                script made of it four lines in — and the wire carrying it is
+                reddened, which says which *node* is wrong.
+            */
+            let faults = check_arg_types(&py_prelude, &specs);
+            report_faults(&handle, &specs, &faults);
+            if !faults.is_empty() {
+                handle
+                    .insert_node_at_dyn(output, Arc::new(ErrorLayout::message(describe(&faults))));
+            } else {
+                match run_script(&source, &py_prelude, &handle, &args, graph) {
+                    Ok(ScriptOutput::Nothing) => {
+                        handle.insert_node_at_dyn(output, Arc::new(Nothing))
+                    }
+                    Ok(ScriptOutput::Node(node)) => handle.insert_node_at_dyn(output, node),
+                    Ok(ScriptOutput::Handle(uid)) => handle.commit_output(output, uid),
+                    Err(e) => handle
+                        .insert_node_at_dyn(output, Arc::new(ErrorLayout::message(e.to_string()))),
                 }
             }
             drop(handle);
@@ -780,6 +981,31 @@ impl Lambda {
                 value: pulled.source,
             },
         );
+    }
+
+    /**
+        Whether the arguments' shape has changed since this was last asked.
+
+        Nothing to compare against on the first tick, so a lambda that has never
+        run is not made to run merely by being looked at.
+    */
+    fn poll_arg_shape(&self, ctx: NodeContext) -> bool {
+        let ws = ctx.workspace;
+        let declarations = ws
+            .send_request(self.args, ArgDeclarations)
+            .unwrap_or_default();
+        let shape: ArgShape = ws
+            .send_request(self.args, DataflowInputs)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, port, target)| {
+                let (kind, detail) = declaration_for(&declarations, port);
+                (name, target, kind, detail)
+            })
+            .collect();
+        let previous = self.seen_shape.val().clone();
+        self.seen_shape.set(shape.clone());
+        previous.is_some_and(|previous| previous != shape)
     }
 
     /// Poll wired nodes; returns `true` if any dependency's version has changed since last check.
@@ -895,8 +1121,12 @@ impl Node for Lambda {
         {
             self.edit_externally(ctx);
         }
-        // Re-fire when a wired dependency's value changed.
-        if self.poll_dependencies(ctx) {
+        // Re-fire when a wired dependency's value changed, or when the
+        // arguments themselves did. Both are polled, never short-circuited:
+        // each keeps its own record, and a skipped poll is a missed change.
+        let values_moved = self.poll_dependencies(ctx);
+        let shape_changed = self.poll_arg_shape(ctx);
+        if values_moved || shape_changed {
             self.run_update(ctx);
         }
     }
@@ -1352,6 +1582,14 @@ pub struct OutputProxy {
     /// owns both this and the canvas.
     #[uid_ref]
     canvas: NodeUid<ComputeCanvas>,
+    /**
+        What is wrong with the lambda's arguments, if anything.
+
+        A canvas lambda has no script to fail, so this is where a failed
+        declaration lands: the result reads as an error rather than as a value,
+        and stands for nothing, which fails the checks downstream of it in turn.
+    */
+    fault: Option<String>,
 }
 
 #[utils::dynamic_methods]
@@ -1360,7 +1598,10 @@ impl OutputProxy {
         ws: WorkspaceActionHandle,
         canvas: NodeUid<ComputeCanvas>,
     ) -> NodeUid<OutputProxy> {
-        ws.insert_node(Self { canvas })
+        ws.insert_node(Self {
+            canvas,
+            fault: None,
+        })
     }
 }
 
@@ -1371,13 +1612,16 @@ impl Node for OutputProxy {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
+        let constraints = ctx.constraints;
+        if let Some(fault) = &self.fault {
+            return ctx.draw_node(&ErrorLayout::message(fault.clone()), constraints);
+        }
         let ws = ctx.node.workspace;
         let text = ws
             .send_request(self.canvas, OutputConnected)
             .flatten()
             .map(|node| resolve_arg(ws, node).value.display())
             .unwrap_or_else(|| "(no output)".to_owned());
-        let constraints = ctx.constraints;
         ctx.draw_node(&Label::new(text), constraints)
     }
 
@@ -1398,10 +1642,20 @@ impl Node for OutputProxy {
 }
 
 defhandlers! { OutputProxy {
+    actions: [
+        // Say what is wrong with the lambda's arguments, or that nothing is.
+        SetOutputFault { message: Option<String> } => (this, s) {
+            this.fault = s.message;
+        },
+    ],
     extern_requests: [
-        // The proxy is worth exactly what the pin is wired to.
+        // The proxy is worth exactly what the pin is wired to — unless the
+        // arguments never made it in, in which case it is worth nothing.
         ValueDelegate => (this, _q, ctx): Option<NodeUid> {
-            ctx.workspace.send_request(this.canvas, OutputConnected).flatten()
+            match this.fault {
+                Some(_) => None,
+                None => ctx.workspace.send_request(this.canvas, OutputConnected).flatten(),
+            }
         },
     ],
 }}
@@ -1417,6 +1671,16 @@ pub struct CanvasLambda {
     /// What a consumer wires to, so binding the lambda and binding its result
     /// are different gestures.
     output: NodeUid<OutputProxy>,
+
+    /**
+        The arguments as last checked: their shape, and what each was worth.
+
+        A canvas lambda runs no script, so nothing else would ever notice a
+        declaration going unmet. This is what keeps the check to the frames
+        where something actually changed.
+    */
+    #[dynamic(skip)]
+    seen_args: Transient<CheckedArgs>,
 }
 
 #[utils::dynamic_methods]
@@ -1443,6 +1707,7 @@ impl CanvasLambda {
             open_button: Button::build(ws.clone(), Label::new("Open".to_owned())),
             compute_canvas,
             output: OutputProxy::build(ws.clone(), compute_canvas),
+            seen_args: Transient::default(),
         }
     }
 
@@ -1458,7 +1723,64 @@ impl CanvasLambda {
             open_button,
             compute_canvas,
             output,
+            seen_args: Transient::default(),
         }
+    }
+}
+
+impl CanvasLambda {
+    /**
+        Re-check the arguments whenever anything about them changes.
+
+        Still a worker's job even with no script to run: two of the eight kinds
+        need the interpreter, and the prelude with it, so what the check found
+        comes back as actions rather than as a stalled frame.
+    */
+    fn poll_arg_types(&self, ctx: NodeContext) {
+        let ws = ctx.workspace;
+        let declarations = ws
+            .send_request(self.args, ArgDeclarations)
+            .unwrap_or_default();
+        let mut signature: CheckedArgs = Vec::new();
+        for (name, port, target) in ws
+            .send_request(self.args, DataflowInputs)
+            .unwrap_or_default()
+        {
+            let (kind, detail) = declaration_for(&declarations, port);
+            let resolved = target.map(|t| resolve_arg(ws, t));
+            // A source still recomputing is not worth checking; wait for it to
+            // settle rather than complain about the gap it leaves behind.
+            if resolved.as_ref().is_some_and(|r| r.pending) {
+                return;
+            }
+            let version = resolved.map(|r| r.version).unwrap_or(0);
+            signature.push((name, target, kind, detail, version));
+        }
+        if self.seen_args.val().as_ref() == Some(&signature) {
+            return;
+        }
+        self.seen_args.set(signature);
+
+        let specs = arg_specs(ws, self.args);
+        let prelude = ws
+            .send_request(ws.root().cast::<Desktops>(), PythonPrelude)
+            .unwrap_or_default();
+        let output = self.output;
+        ws.cancel_all_tasks_for(ctx.id);
+        ws.submit_task(ComputeTask::new(ctx.id, move || {
+            let (handle, actions) = WorkspaceActionHandle::buffered();
+            let faults = check_arg_types(&prelude, &specs);
+            report_faults(&handle, &specs, &faults);
+            handle.submit_action(
+                output,
+                "Reported the arguments' types",
+                SetOutputFault {
+                    message: (!faults.is_empty()).then(|| describe(&faults)),
+                },
+            );
+            drop(handle);
+            actions.try_iter().collect()
+        }));
     }
 }
 
@@ -1562,6 +1884,8 @@ impl Node for CanvasLambda {
                 SyncParams { entries: desired },
             );
         }
+
+        self.poll_arg_types(ctx);
     }
 
     fn on_delete(&self, ctx: NodeContext) {

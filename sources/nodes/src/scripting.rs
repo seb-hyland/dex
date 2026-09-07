@@ -363,26 +363,7 @@ fn run_python(
         globals.set_item("__name__", "__main__").map_err(map_err)?;
         globals.set_item("dex", &dex_mod).map_err(map_err)?;
 
-        // Seed each argument as a global.
-        for (name, value) in args {
-            match value {
-                ScriptValue::Str(s) => globals.set_item(name, s),
-                ScriptValue::Int(i) => globals.set_item(name, *i),
-                ScriptValue::Float(f) => globals.set_item(name, *f),
-                ScriptValue::Bool(b) => globals.set_item(name, *b),
-                ScriptValue::Node(uid) => {
-                    let handle = Bound::new(py, NodeHandle(*uid)).map_err(map_err)?;
-                    globals.set_item(name, handle)
-                }
-                ScriptValue::Table(rb) => {
-                    use arrow::pyarrow::ToPyArrow;
-                    let obj = rb.to_pyarrow(py).map_err(map_err)?;
-                    globals.set_item(name, obj)
-                }
-                ScriptValue::Nothing => globals.set_item(name, ()),
-            }
-            .map_err(map_err)?;
-        }
+        seed_globals(py, &globals, args).map_err(map_err)?;
 
         // Run the prelude into the shared namespace, then the source.
         let prelude = CString::new(prelude)?;
@@ -398,6 +379,39 @@ fn run_python(
         let result = transform.call0().map_err(map_err)?;
         Ok(extract_python(&result))
     })
+}
+
+/**
+    Seed each argument as a global, as the script will see it.
+
+    Shared with the argument-type checks, so what a check looks at is the same
+    object the script is about to be handed.
+*/
+pub fn seed_globals(
+    py: pyo3::Python<'_>,
+    globals: &pyo3::Bound<'_, pyo3::types::PyDict>,
+    args: &[(String, ScriptValue)],
+) -> pyo3::PyResult<()> {
+    use pyo3::prelude::*;
+    for (name, value) in args {
+        match value {
+            ScriptValue::Str(s) => globals.set_item(name, s),
+            ScriptValue::Int(i) => globals.set_item(name, *i),
+            ScriptValue::Float(f) => globals.set_item(name, *f),
+            ScriptValue::Bool(b) => globals.set_item(name, *b),
+            ScriptValue::Node(uid) => {
+                let handle = Bound::new(py, NodeHandle(*uid))?;
+                globals.set_item(name, handle)
+            }
+            ScriptValue::Table(rb) => {
+                use arrow::pyarrow::ToPyArrow;
+                let obj = rb.to_pyarrow(py)?;
+                globals.set_item(name, obj)
+            }
+            ScriptValue::Nothing => globals.set_item(name, ()),
+        }?;
+    }
+    Ok(())
 }
 
 /// Whether `name` is a valid script identifier (so it can be seeded as a global).

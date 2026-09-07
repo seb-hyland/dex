@@ -36,6 +36,10 @@ fn click(ws: &mut Workspace, ctx: &egui::Context, pos: egui::Pos2) {
     frame(ws, ctx, vec![egui::Event::PointerMoved(pos)]);
     frame(ws, ctx, vec![button_event(pos, true)]);
     frame(ws, ctx, vec![button_event(pos, false)]);
+    // Two quiet frames, not one: egui answers for a widget from the last frame
+    // it was registered in, so one frame after something stops being drawn it
+    // can still be asked where it is.
+    frame(ws, ctx, vec![]);
     frame(ws, ctx, vec![]);
 }
 
@@ -113,6 +117,14 @@ fn the_list_stays_shut_until_the_row_is_pressed() {
     );
 }
 
+/// Where the option at `index` drew, if the list is open.
+fn option_rect(placed: &Placed, index: usize) -> Option<egui::Rect> {
+    placed
+        .ctx
+        .read_response(egui::Id::new(placed.boolean).with(("dex_bool_choice", index)))
+        .map(|r| r.rect)
+}
+
 /// Opening the list and pressing the other value takes it.
 #[test]
 fn choosing_the_other_value_takes_it() {
@@ -120,9 +132,10 @@ fn choosing_the_other_value_takes_it() {
     let header = placed.rect.center();
     click(&mut placed.ws, &placed.ctx, header);
 
-    // The rows hang under the header, one control-height each: "True" then
-    // "False", so the second one is two heights below the header's middle.
-    let false_row = header + egui::vec2(0.0, placed.rect.height() * 1.5);
+    // Asked for rather than guessed at: the list stands off its own row and
+    // sits on a panel with a margin, so where a row lands is the list's
+    // business and not this test's.
+    let false_row = option_rect(&placed, 1).expect("the list is open").center();
     click(&mut placed.ws, &placed.ctx, false_row);
 
     assert_eq!(
@@ -130,7 +143,11 @@ fn choosing_the_other_value_takes_it() {
         Some(false),
         "the value chosen from the list is the one it holds"
     );
-    // And the list is shut again, so the next press lands on the header.
+    assert!(
+        option_rect(&placed, 1).is_none(),
+        "and the list is put away"
+    );
+    // So a press where it used to be does not choose all over again.
     click(&mut placed.ws, &placed.ctx, false_row);
     assert_eq!(
         placed.ws.send_request(placed.boolean, GetBool),

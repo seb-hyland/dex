@@ -112,7 +112,12 @@ fn every_message_is_reachable_by_name() {
     println!("actions  ({}) -> {actions:?}", actions.len());
 
     // A sample spanning several defining modules.
-    for expected in ["Selected", "GetText", "ArgBindings", "ConnectedTarget"] {
+    for expected in [
+        "DropdownSelection",
+        "GetText",
+        "ArgBindings",
+        "ConnectedTarget",
+    ] {
         assert!(
             requests.contains(&expected),
             "request {expected} unregistered"
