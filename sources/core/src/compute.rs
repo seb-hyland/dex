@@ -185,8 +185,8 @@ impl ComputeScheduler {
                     }
                 }
 
-                // Inform the scheduler that this task has been completed
-                ctx.complete_tx.send(()).expect("Sends should not fail");
+                // Tell the scheduler this task is done — if it is still there to be told.
+                let _ = ctx.complete_tx.send(());
             }
         }
     }

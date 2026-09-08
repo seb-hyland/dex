@@ -641,9 +641,9 @@ fn the_explorer_drives_a_view_on_a_plane() {
         .unwrap_or_default();
     assert_eq!(
         front.len(),
-        2,
-        "its title and its readout in front, both at their own size whatever \
-         the plane is zoomed to"
+        3,
+        "its title, its figures and its readout in front, all at their own size \
+         whatever the plane is zoomed to"
     );
     let behind = ws
         .send_request(
@@ -714,10 +714,11 @@ fn the_explorer_picks_its_layout_from_the_columns() {
     // Univariate over a categorical column: how often each category occurs.
     assert_eq!(kind(&ws), "bars", "it opens univariate on the first column");
 
-    // Univariate over a continuous one: every row at its value.
+    // Univariate over a continuous one: every row at its value, with the shape
+    // of the column drawn around them.
     choose(&mut ws, x_dd, 3);
     drawn(&mut ws, &ctx);
-    assert_eq!(kind(&ws), "strip");
+    assert_eq!(kind(&ws), "violin");
 
     // Bivariate follows the pair — the whole matrix, not just the numeric
     // corner of it.
@@ -1001,7 +1002,14 @@ fn the_explorer_s_picture_pans_and_zooms() {
         eprintln!("no pyarrow in this interpreter; skipping");
         return;
     }
-    let (mut ws, root) = built("def transform():\n    return build_explorer(dex.ws)\n");
+    // A scatter, because that is one of the two kinds worth a plane: a mark per
+    // row, always more of it than fits. A bar chart is drawn straight into its
+    // box, and has nothing to pan.
+    let (mut ws, root) = built(
+        "def transform():\n    \
+             return build_explorer(dex.ws, mode='Bivariate',\n                 \
+                                   x='body_mass_g', y='flipper_mm')\n",
+    );
     let ctx = context();
     drawn(&mut ws, &ctx);
 
@@ -1508,5 +1516,499 @@ def transform():
     assert_eq!(
         dex_nodes::scripting::node_to_value(&*node).map(|v| v.display()),
         Some("ok".to_owned())
+    );
+}
+
+/// A plane is drawn only for the layouts that earn one.
+///
+/// A scatter or a violin has a mark per row: there is always more of it than
+/// fits. A bar chart has a mark per category — it is exactly as big as it needs
+/// to be, and a plane would add a gesture that does nothing.
+#[test]
+fn only_the_layouts_worth_panning_get_a_plane() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let checks = r#"
+def transform():
+    wants = {name: layout.WANTS_PLANE for (name, layout) in LAYOUTS_BY_KIND.items()}
+    assert wants["scatter"] and wants["violin"], wants
+    assert not wants["bars"] and not wants["heatmap"], wants
+    return "ok"
+"#;
+    assert_eq!(checked(checks), "ok");
+
+    // And the explorer follows it: a bar chart draws straight into its box, so
+    // zooming over it does nothing at all.
+    let (mut ws, root) = built(
+        "def transform():\n    \
+             return build_explorer(dex.ws, mode='Univariate', x='species')\n",
+    );
+    let ctx = context();
+    drawn(&mut ws, &ctx);
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, Encoding())['kind']"
+        ),
+        "bars",
+    );
+    let mark = |ws: &Workspace| {
+        ask(
+            ws,
+            root,
+            "'%.1f,%.1f' % dex.snapshot.send_request(target, DrawnPoint(0))",
+        )
+    };
+    let before = mark(&ws);
+    let over = egui::pos2(400.0, 320.0);
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(over)]);
+    for _ in 0..3 {
+        frame(&mut ws, &ctx, vec![egui::Event::Zoom(2.0)]);
+    }
+    drawn(&mut ws, &ctx);
+    assert_eq!(
+        mark(&ws),
+        before,
+        "there is no plane under a bar chart, so there is nothing to zoom"
+    );
+
+    // It also draws its own axes, because there is no plane to draw them.
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "str(dex.snapshot.send_request(target, SetChrome(True)))"
+        ),
+        "True",
+        "a view drawn straight into a box draws its own decoration"
+    );
+}
+
+/// Category captions are all drawn or none: never a row of truncated stumps.
+#[test]
+fn crowded_category_captions_are_dropped_rather_than_truncated() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    // Painted text that is one of the sample's species names.
+    let named = |ws: &mut Workspace, ctx: &egui::Context| -> usize {
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN);
+        let out = ctx.clone().run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |c| {
+                egui::CentralPanel::default().show(c, |ui| ws.draw_frame(ui, screen));
+            },
+        );
+        fn walk(shape: &egui::Shape, seen: &mut usize) {
+            match shape {
+                egui::Shape::Vec(inner) => inner.iter().for_each(|s| walk(s, seen)),
+                egui::Shape::Text(t)
+                    if ["Adelie", "Gentoo", "Chinstrap"].contains(&t.galley.text().trim()) =>
+                {
+                    *seen += 1;
+                }
+                _ => {}
+            }
+        }
+        let mut seen = 0;
+        out.shapes.iter().for_each(|c| walk(&c.shape, &mut seen));
+        seen
+    };
+
+    // Three categories across a wide plot: room for all of them.
+    let (mut ws, _root) = built(
+        "def transform():\n    \
+             return build_plot(dex.ws, Bars, x='species')\n",
+    );
+    let ctx = context();
+    drawn(&mut ws, &ctx);
+    assert!(named(&mut ws, &ctx) >= 3, "three names, and room for them");
+
+    // Now the case that made this necessary: many categories with long names,
+    // so the slots are a few pixels each. None of them fits, so none is drawn —
+    // a stump that looks like a word is worse than no word, and the bar itself
+    // still names its rows when hovered.
+    let crowded = r#"
+def many():
+    names = ["Pseudomonadota subspecies %02d" % i for i in range(30)]
+    return {"taxon": [names[i % len(names)] for i in range(240)]}
+
+
+def transform():
+    return build_plot(dex.ws, Bars, many(), x="taxon")
+"#;
+    let (mut ws, _root) = built(crowded);
+    drawn(&mut ws, &ctx);
+    let long_names = |ws: &mut Workspace, ctx: &egui::Context| -> usize {
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN);
+        let out = ctx.clone().run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |c| {
+                egui::CentralPanel::default().show(c, |ui| ws.draw_frame(ui, screen));
+            },
+        );
+        fn walk(shape: &egui::Shape, seen: &mut usize) {
+            match shape {
+                egui::Shape::Vec(inner) => inner.iter().for_each(|s| walk(s, seen)),
+                egui::Shape::Text(t) if t.galley.text().starts_with("Pseudomonadota") => {
+                    *seen += 1;
+                }
+                _ => {}
+            }
+        }
+        let mut seen = 0;
+        out.shapes.iter().for_each(|c| walk(&c.shape, &mut seen));
+        seen
+    };
+    assert_eq!(
+        long_names(&mut ws, &ctx),
+        0,
+        "thirty long names in one axis: none drawn rather than thirty stumps"
+    );
+}
+
+/// Univariate means one column, whatever the other dropdown happens to show.
+///
+/// The regression: the violin swapped x and y so a category would end up on x,
+/// and in univariate mode that pulled in whatever the second dropdown was left
+/// on — turning one distribution into a page of them, split by a column nobody
+/// had chosen for the purpose.
+#[test]
+fn a_univariate_view_uses_only_the_one_column() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, root) = built(
+        // A y column is deliberately set, and univariate must ignore it.
+        "def transform():\n    \
+             return build_explorer(dex.ws, mode='Univariate',\n                 \
+                                   x='body_mass_g', y='species')\n",
+    );
+    let ctx = context();
+    drawn(&mut ws, &ctx);
+
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, Encoding())['kind']"
+        ),
+        "violin",
+        "a continuous column on its own is a violin of its values"
+    );
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, Encoding())['x']"
+        ),
+        "body_mass_g",
+        "the column that was chosen"
+    );
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, Encoding())['y']"
+        ),
+        "None",
+        "and nothing on the second channel, so it is one distribution"
+    );
+
+    // One band, not one per species: the readout names only the column plotted.
+    let label = ask(
+        &ws,
+        root,
+        "dex.snapshot.send_request(target, PointLabel(0))",
+    );
+    assert!(
+        label.contains("body_mass_g") && !label.contains("species"),
+        "the mark is described by the one column it was placed by: {label}"
+    );
+}
+
+/// The record in the click overlay is a real table, seated without a second
+/// frame around it.
+#[test]
+fn the_row_table_is_seated_without_its_own_border() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, root) = built(
+        "def transform():\n    \
+             return build_plot(dex.ws, Scatter, x='body_mass_g', y='flipper_mm')\n",
+    );
+    let ctx = context();
+    drawn(&mut ws, &ctx);
+    let _ = ask(
+        &ws,
+        root,
+        "dex.snapshot.send_request(target, SetSelection(3))",
+    );
+    drawn(&mut ws, &ctx);
+    ws.process_pending();
+    drawn(&mut ws, &ctx);
+
+    let table = ws
+        .live_ids()
+        .into_iter()
+        .find_map(|uid| {
+            ws.get_node(uid).and_then(|node| {
+                (*node)
+                    .as_any_ref()
+                    .downcast_ref::<dex_nodes::primitives::table::Table>()
+                    .map(|t| t.bordered)
+            })
+        })
+        .expect("the selected row became a table");
+    assert!(
+        !table,
+        "no frame of its own: the card it sits in is already one, and two \
+         borders a pixel apart read as a mistake"
+    );
+}
+
+/// Every view is titled, whether or not it is on a plane.
+///
+/// The furniture around a picture should be the same furniture: what differs
+/// between a bar chart and a scatter is the picture, not whether it says what
+/// it is. A planed view gets its title from `PlotTitle` in the foreground; one
+/// drawn straight into a box draws the same words itself.
+#[test]
+fn every_view_says_what_it_is() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let titled = |ws: &mut Workspace, ctx: &egui::Context, want: &str| -> bool {
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN);
+        let out = ctx.clone().run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |c| {
+                egui::CentralPanel::default().show(c, |ui| ws.draw_frame(ui, screen));
+            },
+        );
+        fn walk(shape: &egui::Shape, want: &str, seen: &mut bool) {
+            match shape {
+                egui::Shape::Vec(inner) => inner.iter().for_each(|s| walk(s, want, seen)),
+                egui::Shape::Text(t) if t.galley.text().contains(want) => *seen = true,
+                _ => {}
+            }
+        }
+        let mut seen = false;
+        out.shapes
+            .iter()
+            .for_each(|c| walk(&c.shape, want, &mut seen));
+        seen
+    };
+
+    // A bar chart is drawn straight into its box: no plane, so it titles itself.
+    let (mut ws, _root) = built(
+        "def transform():\n    \
+             return build_explorer(dex.ws, mode='Univariate', x='species')\n",
+    );
+    let ctx = context();
+    drawn(&mut ws, &ctx);
+    assert!(
+        titled(&mut ws, &ctx, "Bars of species"),
+        "the bar chart says what it is"
+    );
+
+    // A scatter is on a plane, and says the same kind of thing from in front.
+    let (mut ws, _root) = built(
+        "def transform():\n    \
+             return build_explorer(dex.ws, mode='Bivariate',\n                 \
+                                   x='body_mass_g', y='flipper_mm')\n",
+    );
+    drawn(&mut ws, &ctx);
+    assert!(
+        titled(&mut ws, &ctx, "Scatter of body_mass_g"),
+        "and so does the scatter"
+    );
+}
+
+/// The same sweep, but *drawn* — which is where the failures actually are.
+///
+/// A Python error mid-draw is painted as an `ErrorLayout` rather than raised,
+/// so a layout that divides by zero on an empty column looks like a plot that
+/// simply has nothing in it. Nothing short of drawing every combination and
+/// looking for that node finds it.
+#[test]
+fn every_layout_draws_an_awkward_table_without_erroring() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let tables = [
+        ("empty", "{'a': [], 'b': []}"),
+        ("one row", "{'a': [1.0], 'b': ['x']}"),
+        ("one category", "{'a': [1.0, 2.0, 3.0], 'b': ['only'] * 3}"),
+        ("all null", "{'a': [None] * 3, 'b': [None] * 3}"),
+        ("constant", "{'a': [5.0] * 3, 'b': ['p', 'q', 'r']}"),
+        ("single column", "{'a': [1.0, 2.0, 3.0, 4.0]}"),
+        ("one distinct", "{'a': [2.0, 2.0], 'b': ['p', 'p']}"),
+    ];
+    let layouts = [
+        "Scatter",
+        "Bars",
+        "Strip",
+        "Violin",
+        "Heatmap",
+        "Scatter3D",
+        "Phylogeny",
+        "Circos",
+    ];
+
+    // A draw error is *painted*, not registered — `draw_error` hands the
+    // message straight to `ctx.draw_node`, so nothing lands in the workspace to
+    // look for afterwards. The text on the screen is the only evidence.
+    let painted_error = |ws: &mut Workspace, ctx: &egui::Context| -> Option<String> {
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN);
+        let out = ctx.clone().run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |c| {
+                egui::CentralPanel::default().show(c, |ui| ws.draw_frame(ui, screen));
+            },
+        );
+        fn walk(shape: &egui::Shape, found: &mut Option<String>) {
+            match shape {
+                egui::Shape::Vec(inner) => inner.iter().for_each(|s| walk(s, found)),
+                egui::Shape::Text(t)
+                    if t.galley.text().contains("draw error")
+                        || t.galley.text().contains("Traceback") =>
+                {
+                    *found = Some(t.galley.text().to_owned());
+                }
+                _ => {}
+            }
+        }
+        let mut found = None;
+        out.shapes.iter().for_each(|c| walk(&c.shape, &mut found));
+        found
+    };
+
+    let mut broken: Vec<String> = Vec::new();
+    for (name, columns) in tables {
+        for layout in layouts {
+            let (mut ws, _root) = built(&format!(
+                "def transform():\n    return build_plot(dex.ws, {layout}, {columns})\n"
+            ));
+            let ctx = context();
+            drawn(&mut ws, &ctx);
+            if let Some(message) = painted_error(&mut ws, &ctx) {
+                broken.push(format!("{name} / {layout}: {message}"));
+                continue;
+            }
+            // And with a row selected, which is what opens the overlay and
+            // slices the record out into a table of its own.
+            let _ = ask(
+                &ws,
+                _root,
+                "dex.snapshot.send_request(target, SetSelection(0))",
+            );
+            drawn(&mut ws, &ctx);
+            ws.process_pending();
+            if let Some(message) = painted_error(&mut ws, &ctx) {
+                broken.push(format!("{name} / {layout}, selected: {message}"));
+            }
+        }
+    }
+    assert!(
+        broken.is_empty(),
+        "layouts that error while drawing:\n{}",
+        broken.join("\n")
+    );
+}
+
+/// The explorer, walked through every mode and column pair on an awkward table.
+///
+/// Changing what is shown does not rebuild the view: it *becomes* the layout
+/// the data calls for, keeping its node, its sensor and its place. Which means
+/// a layout can be handed state a different layout left behind, and the way to
+/// find out whether that matters is to walk every pairing and look at what is
+/// painted afterwards.
+#[test]
+fn the_explorer_survives_being_walked_through_every_pairing() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, root) = built("def transform():\n    return build_explorer(dex.ws)\n");
+    let ctx = context();
+    drawn(&mut ws, &ctx);
+
+    use dex_core::refs::NodeRefs;
+    let mut owned = Vec::new();
+    ws.get_node(root)
+        .unwrap()
+        .owned_refs(&mut |uid| owned.push(uid));
+    let (mode_dd, x_dd, y_dd) = (owned[0], owned[1], owned[2]);
+    let choose = |ws: &mut Workspace, dd: NodeUid, index: usize| {
+        ws.submit_action_dyn(Action {
+            dest: dd,
+            description: "choose".into(),
+            body: Box::new(dex_nodes::primitives::dropdown::SetDropdownSelection { index }),
+        });
+        ws.process_pending();
+    };
+
+    let mut broken: Vec<String> = Vec::new();
+    // Six columns in the sample: three categorical, three continuous.
+    for mode in 0..2 {
+        choose(&mut ws, mode_dd, mode);
+        for x in 0..6 {
+            for y in 0..6 {
+                choose(&mut ws, x_dd, x);
+                choose(&mut ws, y_dd, y);
+                drawn(&mut ws, &ctx);
+                let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN);
+                let out = ctx.clone().run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(screen),
+                        ..Default::default()
+                    },
+                    |c| {
+                        egui::CentralPanel::default().show(c, |ui| ws.draw_frame(ui, screen));
+                    },
+                );
+                fn walk(shape: &egui::Shape, found: &mut Option<String>) {
+                    match shape {
+                        egui::Shape::Vec(inner) => inner.iter().for_each(|s| walk(s, found)),
+                        egui::Shape::Text(t) if t.galley.text().contains("draw error") => {
+                            *found = Some(t.galley.text().to_owned());
+                        }
+                        _ => {}
+                    }
+                }
+                let mut found = None;
+                out.shapes.iter().for_each(|c| walk(&c.shape, &mut found));
+                if let Some(message) = found {
+                    broken.push(format!("mode {mode}, x {x}, y {y}: {message}"));
+                }
+            }
+        }
+    }
+    assert!(
+        broken.is_empty(),
+        "pairings that error:\n{}",
+        broken.join("\n")
     );
 }

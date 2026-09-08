@@ -175,9 +175,9 @@ fn it_builds_a_tree_on_a_plane() {
         .unwrap_or_default();
     assert_eq!(
         foreground.len(),
-        2,
-        "its title and its readout pinned in front, both drawn at their own \
-         size rather than scaling with the tree"
+        3,
+        "its title, its figures and its readout pinned in front, all drawn at \
+         their own size rather than scaling with the tree"
     );
 }
 

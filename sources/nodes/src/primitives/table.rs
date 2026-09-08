@@ -209,6 +209,8 @@ impl ArrowData {
 pub struct Table {
     data: ArrowData,
     pub striped: bool,
+    /// Whether it draws its own frame around itself.
+    pub bordered: bool,
 }
 
 impl Table {
@@ -217,6 +219,7 @@ impl Table {
         Self {
             data,
             striped: true,
+            bordered: true,
         }
     }
 
@@ -268,6 +271,10 @@ impl Node for Table {
         };
         let scroll = ScrollLayout::horizontal(LayoutChild::Node(Arc::new(widget)))
             .with_id_salt(ctx.widget_id());
+        let constraints = ctx.constraints;
+        if !self.bordered {
+            return ctx.draw_node(&scroll, constraints);
+        }
         let bordered = Bordered {
             child: LayoutChild::Node(Arc::new(scroll)),
             padding: theme::SPACE_MD,
@@ -276,12 +283,16 @@ impl Node for Table {
             border_width: 1.0,
             border_color: theme::LINE,
         };
-        let constraints = ctx.constraints;
         ctx.draw_node(&bordered, constraints)
     }
 }
 
-defhandlers! { Table {} }
+defhandlers! { Table {
+    actions: [
+        // Whether it draws its own frame. See [`Table::bordered`].
+        SetTableBordered { on: bool } => (this, a) { this.bordered = a.on; },
+    ],
+}}
 
 /// The body of a [`Table`], backed by [`egui_extras::Table`].
 #[utils::portable]

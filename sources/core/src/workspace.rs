@@ -1109,13 +1109,43 @@ impl<'ctx> DrawContext<'ctx> {
         result
     }
 
-    /// Host raw egui widgets in a `Ui` bounded and clipped to `region`, returning the region they actually occupied.
+    /**
+        Host raw egui widgets in a `Ui` bounded and clipped to `region`,
+        returning the region they actually occupied.
+
+        The widgets are claimed as an `Area` over exactly `region`. egui decides
+        which *layer* the pointer is over by looking at the areas registered on
+        each, and a layer with none is passed over. A canvas registers an
+        area for its items for this reason.
+
+        Claimed over `region` and nothing more: a claim the size of the viewport
+        would take the pointer from everything drawn under it, which is most of
+        what a surface is for.
+    */
     pub fn host_widgets(
         &mut self,
         region: ScreenRegion,
         add: impl FnOnce(&mut Ui),
     ) -> ScreenRegion {
         let rect: Rect = region.into();
+        let clip = rect.intersect(self.ui.clip_rect());
+        if !self.measuring() && !clip.is_negative() {
+            let layer = self.ui.layer_id();
+
+            // The area has to *be* this layer, not a fresh one beside it: egui
+            // asks which layer the pointer is over, and an area registered
+            // under some other id says nothing about the layer these widgets
+            // are actually drawn on.
+            egui::Area::new(layer.id)
+                .order(layer.order)
+                .fixed_pos(clip.min)
+                .movable(false)
+                .constrain(false)
+                .show(self.ui.ctx(), |ui| {
+                    ui.set_clip_rect(clip);
+                    ui.allocate_rect(clip, egui::Sense::hover());
+                });
+        }
         self.ui
             .scope_builder(
                 UiBuilder::new()
@@ -1123,7 +1153,6 @@ impl<'ctx> DrawContext<'ctx> {
                     .layout(Layout::top_down(Align::Min)),
                 |ui| {
                     // Intersect with the inherited clip, so an unbounded `region` paints only within the real viewport.
-                    let clip = rect.intersect(ui.clip_rect());
                     ui.set_clip_rect(clip);
                     add(ui);
                     ScreenRegion::from(ui.min_rect())

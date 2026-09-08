@@ -88,6 +88,8 @@ PLOT_SCALE = "dex.plot.scale"
 PLOT_NAME = "dex.plot.name"
 KEPT_NODE = "dex.plot.kept_node"
 KEEP_NODE = "dex.plot.keep_node"
+PLOT_STATS = "dex.plot.stats"
+SET_CHROME = "dex.plot.set_chrome"
 SET_SELECTION = "dex.plot.set_selection"
 SET_ENCODING = "dex.plot.set_encoding"
 
@@ -95,7 +97,7 @@ SET_ENCODING = "dex.plot.set_encoding"
 PROTOCOL = (
     ROW_KEYS, DRAWN_POINTS, DRAWN_POINT, ROW_VALUES, SOURCE_TABLE, ENCODING,
     POINT_LABEL, SELECTION, HOVER_ROW, ROW_TABLE, PLOT_SCALE, PLOT_NAME,
-    KEPT_NODE, KEEP_NODE,
+    KEPT_NODE, KEEP_NODE, PLOT_STATS, SET_CHROME,
     SET_SELECTION, SET_ENCODING,
 )
 
@@ -256,6 +258,33 @@ class KeepNode(dex.Request):
     def __init__(self, key, node):
         self.key = key
         self.node = node
+
+
+class PlotStats(dex.Request):
+    """The numbers a view worked out about what it drew, as lines of text.
+
+    `["n = 90", "r = +0.874", "slope = 0.153"]`. Answered rather than drawn,
+    because on a plane they belong in front of the picture: a panel of figures
+    is a reading of the data, not part of it, and one drawn into the plane
+    shrinks away the moment anybody zooms out.
+    """
+
+    name = PLOT_STATS
+
+
+class SetChrome(dex.Request):
+    """Say whether a view draws its own decoration. Answers what it settled on.
+
+    Off when something else is doing it — the axes, title and figures around a
+    view on a plane are nodes of their own, so that they hold their size while
+    the picture behind them moves. On when the view is drawn straight into a box
+    and there is nowhere else for them to go.
+    """
+
+    name = SET_CHROME
+
+    def __init__(self, on):
+        self.on = on
 
 
 class SetSelection(dex.Request):
@@ -850,8 +879,12 @@ FOOT = 34.0
 TOP = 26.0
 MARGIN = 14.0
 
-#: How much room the row table gets in the click overlay.
-ROW_TABLE_H = 62.0
+#: How much room the row table gets in the click overlay: a header, a row, and
+#: the scroll bar a wide record needs to reach the rest of its columns.
+ROW_TABLE_H = 76.0
+#: How wide the click overlay is, before its readout asks for more. Wide enough
+#: for a few columns of a record; a wider one scrolls inside its own table.
+ROW_CARD_W = 460.0
 #: How many points a violin's density curve is sampled at. Enough to read as a
 #: curve, few enough that a wide table stays cheap.
 VIOLIN_STEPS = 48
@@ -885,6 +918,13 @@ class Plot:
     #: panned by dragging it, and a view that takes that gesture takes it from
     #: the plane. `Scatter3D` is the exception, and turns instead.
     SENSES_DRAG = False
+    #: Whether this layout is worth putting on a pan/zoom plane.
+    #:
+    #: A picture with as many marks as the table has rows is: there is always
+    #: more of it than fits, and zooming into a crowded corner is how you read
+    #: it. A picture with one mark per *category* is not — it is as big as it
+    #: needs to be, and a plane would only add a gesture that does nothing.
+    WANTS_PLANE = False
 
     def __init__(self, frame, sensor, **encoding):
         self.frame = frame
@@ -907,6 +947,8 @@ class Plot:
         # How this frame mapped data onto the plane; `None` for a layout with no
         # cartesian mapping. Published by `publish_axis`, read by `PlotScale`.
         self._scale = None
+        # The figures this frame worked out. Published by `publish_stats`.
+        self._stats = []
         # The one-row `Table` node the overlay shows, and which row it is for.
         self._row_table = None
         self._row_table_for = None
@@ -925,6 +967,7 @@ class Plot:
         state["_local_pos"] = {}
         state["_screen_pos"] = {}
         state["_scale"] = None
+        state["_stats"] = []
         return state
 
     def owned_nodes(self):
@@ -1006,6 +1049,11 @@ class Plot:
         if tag == KEEP_NODE:
             self._kept.setdefault(req.key, req.node)
             return self._kept[req.key]
+        if tag == PLOT_STATS:
+            return list(self._stats)
+        if tag == SET_CHROME:
+            self.chrome = bool(req.on)
+            return self.chrome
         if tag == SET_SELECTION:
             row = req.row_id
             self.selected = row if (row is not None and self.frame.row(row)) else None
@@ -1069,6 +1117,22 @@ class Plot:
         point = ctx.to_global(dex.ScreenPos.new(cx, cy))
         self._screen_pos[row] = (point.x, point.y)
 
+    def paint_title(self, ctx, x, y, w):
+        """This view's name, centred over it — the same words `PlotTitle` shows
+        when a plane is drawing the furniture instead."""
+        caption = self.type_name()
+        if not caption:
+            return
+        (cw, _ch) = measure(ctx, caption, TITLE_FONT, bold=True)
+        text(ctx, caption, x + (w - cw) / 2.0, y + 4.0, TITLE_FONT, INK, bold=True)
+
+    def publish_stats(self, ctx, x, y, w, lines):
+        """Say what this frame worked out, and draw it if it is this view's to
+        draw. See `PlotStats`."""
+        self._stats = list(lines)
+        if self.chrome:
+            stats_card(ctx, x, y, w, lines)
+
     def publish_axis(self, ctx, x_axis=None, y_axis=None):
         """Say how this frame maps data onto the plane, and draw the axes if
         they are this view's to draw.
@@ -1110,6 +1174,12 @@ class Plot:
 
         if self.frame.n and w > 40.0 and h > 40.0:
             self.paint(ctx, x, y, w, h)
+            # A view drawn straight into a box titles itself, because the plane
+            # that would otherwise have done it is not there. Every view is
+            # titled the same way either way round: what differs between a bar
+            # chart and a scatter should be the picture, not the furniture.
+            if self.chrome:
+                self.paint_title(ctx, x, y, w)
         elif not self.frame.n:
             text(ctx, "nothing to plot", x + MARGIN, y + MARGIN, TITLE_FONT, FAINT)
 
@@ -1178,6 +1248,10 @@ class Plot:
             self._row_table_for = None
             return None
         self._row_table = ws.insert_node_dyn(sliced)
+        # No frame of its own: it is seated inside a card that is already one,
+        # and two borders a pixel apart read as a mistake rather than a nesting.
+        ws.submit_action(self._row_table, dex.SetTableBordered(False),
+                         "Seated the row in the readout")
         self._row_table_for = row
         return self._row_table
 
@@ -1185,8 +1259,7 @@ class Plot:
         """How big the click overlay comes out: the readout over the row."""
         lines = ["Row %d" % row] + self.point_label(row).split(", ")
         (cw, ch) = card_size(ctx, lines, READOUT_FONT)
-        width = max(cw, 260.0)
-        return (lines, width, ch + ROW_TABLE_H + 8.0)
+        return (lines, max(cw, ROW_CARD_W), ch + ROW_TABLE_H + 8.0)
 
     def draw_overlay(self, ctx, x, y, w, h, row):
         """The whole record, pinned to the bottom-right: the hover readout, and
@@ -1303,6 +1376,31 @@ def category_scale(labels, p0, p1, title):
     }
 
 
+#: The fewest characters of a category name worth showing. Below this a caption
+#: says nothing that hovering the bar does not say better.
+MIN_CAPTION_CHARS = 3
+
+
+def captions_fit(ctx, labels, slot):
+    """Whether every one of these will fit in a slot that wide.
+
+    All or none, deliberately. Truncating each to whatever fits turns a crowded
+    axis into a row of stumps that look like words and are not — and dropping
+    only *some* leaves a scattering that reads as if the rest were missing
+    rather than as if none were shown. When they do not fit, nothing is drawn
+    and the mark itself is hovered or clicked to name it.
+    """
+    room = slot - 4.0
+    if room <= 0.0:
+        return False
+    for label in labels:
+        label = str(label)
+        shortest = label[:MIN_CAPTION_CHARS]
+        if measure(ctx, shortest, TICK_FONT)[0] > room:
+            return False
+    return True
+
+
 def x_caption(ctx, caption, cx, baseline, slot):
     """A category caption under the axis, truncated to the slot it has."""
     caption = str(caption)
@@ -1335,6 +1433,7 @@ class Scatter(Plot):
 
     KIND = "scatter"
     CHANNELS = ("x", "y", "color")
+    WANTS_PLANE = True
 
     def paint(self, ctx, x, y, w, h):
         (xc, yc) = (self.enc["x"], self.enc["y"])
@@ -1386,7 +1485,7 @@ class Scatter(Plot):
             stats.append("r = %+.3f" % r)
         if fit is not None:
             stats.append("slope = %.3g" % fit[0])
-        stats_card(ctx, x, y, w, stats)
+        self.publish_stats(ctx, x, y, w, stats)
 
     def point_inks(self, rows):
         """One colour per drawn row: by the `color` column if there is one."""
@@ -1416,6 +1515,7 @@ class Bars(Plot):
         (lo, hi, step) = nice_bounds(0, max(counts))
         axis = ValueAxis(x, y, w, h, 0.0, hi, step, "count of %s" % column)
         slot = axis.width() / len(levels)
+        named = captions_fit(ctx, levels, slot)
         self.publish_axis(
             ctx,
             x_axis=category_scale(levels, axis.left, axis.right, column),
@@ -1427,7 +1527,7 @@ class Bars(Plot):
             top = axis.to_y(counts[j])
             ink = category_color(j)
             rect(ctx, cx - bar_w / 2.0, top, bar_w, axis.bottom - top, ink)
-            if self.chrome:
+            if self.chrome and named:
                 x_caption(ctx, level, cx, axis.bottom, slot)
             caption = str(counts[j])
             text(ctx, caption, cx - measure(ctx, caption, TICK_FONT)[0] / 2.0,
@@ -1477,6 +1577,7 @@ class Strip(Plot):
         (lo, hi, step) = nice_bounds(min(every), max(every))
         axis = ValueAxis(x, y, w, h, lo, hi, step, value_col)
         slot = axis.width() / len(groups)
+        named = captions_fit(ctx, [label for (label, _) in groups], slot)
         self.publish_axis(
             ctx,
             x_axis=category_scale([label for (label, _) in groups],
@@ -1502,16 +1603,17 @@ class Strip(Plot):
                 cy = axis.to_y(v)
                 dot(ctx, jx, cy, POINT_R, ink)
                 self.record(ctx, i, jx, cy)
-            if len(groups) > 1 and self.chrome:
+            if len(groups) > 1 and self.chrome and named:
                 x_caption(ctx, label, cx, axis.bottom, slot)
             mean = sum(values) / len(values)
             caption = "μ %.4g" % mean
             text(ctx, caption, cx - measure(ctx, caption, TICK_FONT)[0] / 2.0,
                  axis.top - 2.0, TICK_FONT, INK)
 
-        stats_card(ctx, x, y, w,
-                   ["%d group%s" % (len(groups), "" if len(groups) == 1 else "s"),
-                    "n = %d" % len(every)])
+        self.publish_stats(
+            ctx, x, y, w,
+            ["%d group%s" % (len(groups), "" if len(groups) == 1 else "s"),
+             "n = %d" % len(every)])
 
     def paint_violin(self, ctx, axis, cx, half, values, ink):
         """The density of `values`, mirrored about `cx`.
@@ -1544,6 +1646,7 @@ class Violin(Strip):
 
     KIND = "violin"
     VIOLIN = True
+    WANTS_PLANE = True
 
 
 class Heatmap(Plot):
@@ -1585,7 +1688,7 @@ class Heatmap(Plot):
 
         for (r, ylevel) in enumerate(ylevels):
             cy0 = top + r * cell_h
-            if self.chrome:
+            if self.chrome and cell_h >= TICK_FONT + 2.0:
                 (lw, lh) = measure(ctx, str(ylevel), TICK_FONT)
                 text(ctx, str(ylevel), grid_x - 6.0 - lw,
                      cy0 + cell_h / 2.0 - lh / 2.0, TICK_FONT, FAINT)
@@ -1604,7 +1707,7 @@ class Heatmap(Plot):
                 for i in cell_rows.get((r, c), []):
                     self.record(ctx, i, centre[0], centre[1])
 
-        if self.chrome:
+        if self.chrome and captions_fit(ctx, xlevels, cell_w):
             for (c, xlevel) in enumerate(xlevels):
                 x_caption(ctx, xlevel, grid_x + c * cell_w + cell_w / 2.0, bottom, cell_w)
 
@@ -1612,7 +1715,7 @@ class Heatmap(Plot):
         stats = ["n = %d" % total]
         if v is not None:
             stats.append("Cramér's V = %.3f" % v)
-        stats_card(ctx, x, y, w, stats)
+        self.publish_stats(ctx, x, y, w, stats)
 
 
 # ======================================================================
@@ -1742,6 +1845,7 @@ def plot_on_plane(ws, plot, size=PLANE_SIZE, name=None):
     canvas = on_plane(ws, body, size, name or plot.type_name())
     adopt(ws, canvas, PlotAxes(canvas, body), dex.Layer.background())
     adopt(ws, canvas, PlotTitle(canvas, body), dex.Layer.foreground())
+    adopt(ws, canvas, PlotStatsPanel(canvas, body), dex.Layer.foreground())
     adopt(ws, canvas, PlotChrome(body), dex.Layer.foreground())
     return canvas
 
@@ -1901,6 +2005,10 @@ class PlotAxes(PlaneChrome):
         if not labels:
             return
         (p0, p1) = (axis["p0"], axis["p1"])
+        slot = abs(p1 - p0) / len(labels) * zoom
+        if not captions_fit(ctx, labels, slot):
+            self.paint_title(ctx, base, w, h, channel, axis.get("title"))
+            return
         slot = (p1 - p0) / len(labels)
         for (i, label) in enumerate(labels):
             at_plane = p0 + slot * (i + 0.5)
@@ -1961,6 +2069,29 @@ class PlotTitle(PlaneChrome):
         return self.nothing()
 
 
+class PlotStatsPanel(PlaneChrome):
+    """The view's figures, in front of it.
+
+    A panel of numbers is a reading of the data rather than part of it, so it
+    holds its size and its corner while the picture moves under it. Which is
+    also the only way it stays readable: drawn into the plane it would be
+    illegible zoomed out and enormous zoomed in.
+    """
+
+    def type_name(self):
+        return "Plot Figures"
+
+    def draw(self, ctx):
+        base = ctx.constraints
+        w = base.x.provided_value() if base.x is not None else None
+        if w is None:
+            return self.nothing()
+        lines = ctx.node.workspace.send_request(self.plot, PlotStats()) or []
+        if lines:
+            stats_card(ctx, base.pos.x, base.pos.y - TOP, w, lines)
+        return self.nothing()
+
+
 class PlotChrome:
     """A view's readout, pinned in the plane's foreground.
 
@@ -1990,20 +2121,35 @@ class PlotChrome:
         hovered = ws.send_request(self.plot, HoverRow())
         selected = ws.send_request(self.plot, Selection())
         if hovered is not None:
-            self.draw_hover(ctx, ws, x, y, w, hovered)
+            self.draw_hover(ctx, ws, x, y, w, h, hovered)
         if selected is not None:
             self.draw_row(ctx, ws, x, y, w, h, selected)
         return dex.DrawResult.Complete(
             region=dex.ScreenRegion.from_min_size(base.pos, dex.Vector.new(w, h)))
 
-    def draw_hover(self, ctx, ws, x, y, w, row):
-        """What the pointer is over, along the top of the plane."""
+    def draw_hover(self, ctx, ws, x, y, w, h, row):
+        """What the pointer is over, beside the mark it is over.
+
+        Beside the mark rather than in a corner: a readout in a fixed corner
+        makes you look away from the thing you are pointing at to read what it
+        is, and then back again to check you are still on it. The view answers
+        `DrawnPoint` in screen coordinates, so the card can follow the mark
+        wherever the plane has moved it — while staying its own size, which is
+        why it is drawn here and not down in the picture.
+        """
         label = ws.send_request(self.plot, PointLabel(row))
-        if not label:
+        at_screen = ws.send_request(self.plot, DrawnPoint(row))
+        if not label or at_screen is None:
             return
+        (mx, my) = to_local(ctx, at_screen)
         lines = ["row %d" % row] + label.split(", ")
         (cw, ch) = card_size(ctx, lines, READOUT_FONT)
-        card(ctx, x + w - cw - 8.0, y + 8.0, cw, ch, lines, READOUT_FONT, INK, PANEL_EDGE)
+        ring(ctx, mx, my, POINT_R + 4.0, INK, 1.5)
+        # Up and to the right of the mark, folded back inside the viewport at
+        # its edges so it is never half off the screen.
+        left = min(max(mx + 12.0, x + 4.0), x + w - cw - 4.0)
+        top = min(max(my - ch - 10.0, y + 4.0), y + h - ch - 4.0)
+        card(ctx, left, top, cw, ch, lines, READOUT_FONT, INK, PANEL_EDGE)
 
     def draw_row(self, ctx, ws, x, y, w, h, row):
         """The selected record, along the bottom: the readout, then the row.
@@ -2015,7 +2161,7 @@ class PlotChrome:
         label = ws.send_request(self.plot, PointLabel(row)) or ""
         lines = ["Row %d" % row] + [s for s in label.split(", ") if s]
         (cw, ch) = card_size(ctx, lines, READOUT_FONT)
-        width = max(cw, min(w - 16.0, 420.0))
+        width = min(w - 16.0, max(cw, ROW_CARD_W))
         height = ch + ROW_TABLE_H
         left = x + w - width - 8.0
         top = y + h - height - 8.0
@@ -2754,7 +2900,7 @@ class Scatter3D(Plot):
 
         text(ctx, " / ".join(self.enc[c] for c in ("x", "y", "z")),
              x + MARGIN, y + MARGIN, TICK_FONT, FAINT)
-        stats_card(ctx, x, y, w, ["n = %d" % len(points), "drag to turn"])
+        self.publish_stats(ctx, x, y, w, ["n = %d" % len(points), "drag to turn"])
 
     def paint_frame(self, ctx, cx, cy, scale):
         """The unit cube, so the cloud has something to be turned against."""
@@ -3143,8 +3289,9 @@ EXPLORER_PLOT_SIZE = (1400.0, 1000.0)
 def layout_for(frame, mode, x, y):
     """Which layout a view of these columns in this mode comes to.
 
-    Univariate: a continuous column is a strip of its values, a categorical one
-    a count of its categories. Bivariate follows the pair — the whole matrix,
+    Univariate: a continuous column is a violin of its values — every row a
+    point, with the density around them saying what shape the column is — and a
+    categorical one is a count of its categories. Bivariate follows the pair — the whole matrix,
     not just the numeric corner of it:
 
       * continuous x continuous -> a scatter, with the least-squares line;
@@ -3152,7 +3299,10 @@ def layout_for(frame, mode, x, y):
       * categorical x categorical -> a heatmap of the contingency table.
     """
     if mode == "Univariate" or not y or x == y:
-        return Strip if frame.is_continuous(x) else Bars
+        # A violin rather than a bare strip: the points are still all there, and
+        # the density around them says what the shape of the column is, which a
+        # column of dots leaves you to guess at.
+        return Violin if frame.is_continuous(x) else Bars
     (kx, ky) = (frame.is_continuous(x), frame.is_continuous(y))
     if kx and ky:
         return Scatter
@@ -3164,33 +3314,45 @@ def layout_for(frame, mode, x, y):
 def explorer_channels(frame, mode, x, y):
     """`(kind, channels)` for a view of these columns.
 
-    A violin splits a continuous column *by* a categorical one, so whichever way
-    round they were chosen, the category goes on x and the measure on y. Putting
-    that here rather than in the layout means the dropdowns can stay in the
-    order the reader chose them.
+    Univariate means *one* column, so the second channel is left unset whatever
+    the other dropdown happens to be showing — a violin with a `y` is a violin
+    split by `x`, and filling that in from a column nobody chose for the purpose
+    turns one distribution into a page of them.
+
+    Bivariate, a violin splits a continuous column *by* a categorical one, so
+    whichever way round the two were chosen the category goes on `x` and the
+    measure on `y`. Putting that here rather than in the layout means the
+    dropdowns stay in the order the reader picked them.
     """
     layout = layout_for(frame, mode, x, y)
+    if mode == "Univariate" or not y or x == y:
+        return (layout.KIND, {"x": x, "y": None})
     if layout is Violin and frame.is_continuous(x):
         (x, y) = (y, x)
-    channels = {"x": x, "y": y if layout in (Scatter, Violin, Heatmap) else None}
-    return (layout.KIND, channels)
+    return (layout.KIND, {"x": x, "y": y})
 
 
 class DataExplorer:
     """A control bar, and the view it drives, on a plane of its own.
 
-    Three nodes deep, and each split earns its place. The picture is a `Plot`,
-    so it can be asked the protocol directly and its sensor covers it and
-    nothing else — a sensor takes every click over it, and one stretched across
-    the panel would swallow the presses meant for the dropdowns. The plot sits
-    on a `Canvas`, so a table with ten thousand points is a big picture you move
-    around rather than a small one with everything on top of everything else.
-    And the readout rides in that canvas's foreground, so it stays its own size
-    however far the picture is magnified.
+    The picture is a `Plot`, so it can be asked the protocol directly and its
+    sensor covers it and nothing else — a sensor takes every click over it, and
+    one stretched across the panel would swallow the presses meant for the
+    dropdowns.
 
-    Changing mode or columns does not rebuild any of that. The view *becomes*
-    the layout the data calls for, in place — same node, same canvas item, same
-    readout pointing at it. See `Plot.become`.
+    **Whether it goes on a plane depends on what it is.** A scatter or a violin
+    has a mark per *row*: there is always more of it than fits, and zooming into
+    a crowded corner is how you read it. A bar chart or a heatmap has a mark per
+    *category* — it is exactly as big as it needs to be, and a plane would only
+    add a gesture that does nothing and chrome that floats over a picture which
+    was not going anywhere. So the plane is drawn for the first kind, and the
+    view is drawn straight into the box for the second, where it draws its own
+    axes because there is nowhere else for them to go.
+
+    Changing mode or columns rebuilds none of it. The view *becomes* the layout
+    the data calls for, in place — same node, same canvas item, same chrome
+    pointing at it — and the explorer simply draws a different one of the two.
+    See `Plot.become`.
     """
 
     def __init__(self, frame, mode_dd, x_dd, y_dd, canvas, plot):
@@ -3238,7 +3400,10 @@ class DataExplorer:
             return dex.DrawResult.Complete(region=None)
         (x, y) = (base.pos.x, base.pos.y)
 
-        rect(ctx, x, y, w, h, PANEL, PANEL_EDGE)
+        # A ground, but no rule around it: whatever is showing this — a lambda's
+        # output slot, a canvas item — has already drawn its own edge, and a
+        # second one just inside it reads as a mistake.
+        rect(ctx, x, y, w, h, PANEL)
         if not self.frame.columns:
             text(ctx, "no columns to explore", x + MARGIN, y + MARGIN, TITLE_FONT, FAINT)
         else:
@@ -3249,10 +3414,27 @@ class DataExplorer:
             pw = w - 2.0 * MARGIN
             ph = h - (CONTROL_H + CONTROL_GAP) - MARGIN
             if pw > 40.0 and ph > 40.0:
-                # The plane, not the plot: drag it to pan, alt-scroll to zoom.
-                ctx.draw_node(self.canvas, at(px, py, pw, ph))
+                self.draw_view(ctx, px, py, pw, ph)
         return dex.DrawResult.Complete(
             region=dex.ScreenRegion.from_min_size(base.pos, dex.Vector.new(w, h)))
+
+    def draw_view(self, ctx, x, y, w, h):
+        """The picture: on its plane, or straight into the box.
+
+        The view is the same node either way. What changes is who draws the
+        axes, the title and the figures — the plane's own chrome, or the view
+        itself — so it is told which as it is drawn.
+        """
+        ws = ctx.node.workspace
+        kind = (ws.send_request(self.plot, Encoding()) or {}).get("kind") or ""
+        layout = LAYOUTS_BY_KIND.get(kind)
+        on_a_plane = bool(layout and layout.WANTS_PLANE)
+        ws.send_request(self.plot, SetChrome(not on_a_plane))
+        if on_a_plane:
+            # The plane, not the plot: drag it to pan, alt-scroll to zoom.
+            ctx.draw_node(self.canvas, at(x, y, w, h))
+        else:
+            ctx.draw_inspectable_node(self.plot, at(x, y, w, h))
 
     def mode(self, ws):
         index = ws.send_request(self.mode_dd, dex.DropdownSelection())
@@ -3342,6 +3524,7 @@ def build_explorer(ws, source=None, mode=None, x=None, y=None):
                       what="Placed the view")
     adopt(ws, canvas, PlotAxes(canvas, plot), dex.Layer.background())
     adopt(ws, canvas, PlotTitle(canvas, plot), dex.Layer.foreground())
+    adopt(ws, canvas, PlotStatsPanel(canvas, plot), dex.Layer.foreground())
     adopt(ws, canvas, PlotChrome(plot), dex.Layer.foreground())
     return DataExplorer(frame, mode_dd, x_dd, y_dd, canvas, plot)
 
