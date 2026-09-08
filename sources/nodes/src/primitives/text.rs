@@ -7,10 +7,10 @@ use utils::Transient;
 use crate::composites::button::Button;
 use crate::layouts::vertical::VerticalLayout;
 use crate::primitives::checkbox::{Checkbox, IsChecked};
-use crate::primitives::drag_number::{DragNumber, DragNumberValue};
 use crate::primitives::color_picker::{
     ColorPicker, ColorSlot, PreviewFill, drop_preview, repicked,
 };
+use crate::primitives::drag_number::{DragNumber, DragNumberValue};
 use crate::primitives::icon::Glyph;
 use crate::primitives::interaction::TakeClicked;
 
@@ -600,6 +600,14 @@ impl Node for LabelEditable {
             job.keep_trailing_whitespace = true;
             ui.ctx().fonts_mut(|fonts| fonts.layout_job(job))
         };
+
+        // A single line is centred in its box; a paragraph starts at top and flows down.
+        // `desired_rows(1)` stops egui from messing with vertical placement.
+        let vertical = if self.singleline {
+            Align::Center
+        } else {
+            Align::Min
+        };
         let editor = if self.singleline {
             TextEdit::singleline(&mut *buf_mut)
         } else {
@@ -608,11 +616,12 @@ impl Node for LabelEditable {
         .id(editor_id)
         .frame(Frame::NONE)
         .margin(Margin::ZERO)
+        .desired_rows(1)
         .font(self.font.font_id_in(ctx.ui.ctx()))
         .text_color(self.shown_color().into())
         .layouter(&mut layouter)
         .horizontal_align(halign)
-        .vertical_align(Align::Center)
+        .vertical_align(vertical)
         .desired_width(block_w);
 
         if self.auto_lock {
