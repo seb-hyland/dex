@@ -9,8 +9,8 @@ use crate::layouts::desktops::{Desktops, PythonPrelude};
 use crate::primitives::checkout;
 use crate::primitives::dropdown::{Dropdown, DropdownSelection, SetDropdownSelection};
 use crate::scripting::{
-    DataflowOutput, ScriptOutput, ScriptValue, ValueDelegate, is_valid_ident, resolve_arg,
-    run_script,
+    DataflowOutput, ScriptArg, ScriptOutput, ValueDelegate, is_valid_ident, resolve_arg,
+    run_script_with,
 };
 
 use crate::{
@@ -22,7 +22,7 @@ use crate::{
             nodes::{CanvasItemDeletable, CanvasNode, shapes::SectionDivider},
         },
         error::ErrorLayout,
-        pending::PendingLayout,
+        pending::{self, PendingLayout},
     },
     primitives::{
         icon::Glyph,
@@ -492,19 +492,17 @@ impl Node for LambdaArg {
 
 defhandlers! { LambdaArg {
     actions: [
-        /*
-            Declare what this argument accepts.
-
-            The kind lives in a dropdown, and the dropdown's id is minted inside
-            `build_with` — so a caller assembling a lambda has no way to reach
-            it. Which it needs: a lambda offered ready-made should arrive
-            declaring what to wire into it, not saying `any`.
-        */
-        SetArgKind { kind: ArgType } => (this, s, ctx) {
+        // Declare what this argument accepts.
+        SetArgKind { kind: ArgType, detail: String } => (this, s, ctx) {
             ctx.workspace.submit_action(
                 this.kind_picker,
                 "Declared an argument's type",
                 SetDropdownSelection { index: s.kind.index() },
+            );
+            ctx.workspace.submit_action(
+                this.detail,
+                "Wrote an argument's declaration",
+                SetText { value: s.detail },
             );
         },
     ],
@@ -764,15 +762,28 @@ fn arg_specs(ws: &Workspace, args: NodeUid<LambdaArgs>) -> Vec<ArgSpec> {
         .filter(|(name, _, _)| is_valid_ident(name))
         .map(|(name, port, target)| {
             let (kind, detail) = declaration_for(&declarations, port);
+            let resolved = target.map(|target| resolve_arg(ws, target));
             ArgSpec {
                 name,
                 port,
                 kind,
                 detail,
-                value: target.map(|target| resolve_arg(ws, target).value),
+                // The leaf, not the wire's target: a pin or an output proxy
+                // stands for something else, and the something else is what a
+                // script that writes back has to name.
+                source: resolved.as_ref().and_then(|resolved| resolved.leaf),
+                value: resolved.map(|resolved| resolved.value),
             }
         })
         .collect()
+}
+
+/// Whether any wired argument is still being recomputed upstream. A lambda does not run on a value that is about to change.
+fn inputs_pending(ws: &Workspace, args: NodeUid<LambdaArgs>) -> bool {
+    ws.send_request(args, ArgBindings)
+        .unwrap_or_default()
+        .into_iter()
+        .any(|(_name, target)| target.is_some_and(|target| resolve_arg(ws, target).pending))
 }
 
 /// Say on every one of `specs` whether it is among `faults`, so a wire that has
@@ -800,9 +811,9 @@ pub struct Lambda {
     /// The node this lambda computes. A stable id whose content is recomputed.
     output: NodeUid,
 
-    /// Last-seen value version of each wired upstream node, so a change re-fires this lambda.
+    /// Last-seen value version of each wired upstream node, so a change re-fires this lambda. [`None`] for a pending source.
     #[dynamic(skip)]
-    seen_deps: Transient<std::collections::HashMap<NodeUid, u64>>,
+    seen_deps: Transient<std::collections::HashMap<NodeUid, Option<u64>>>,
 
     /**
         The arguments' shape as last seen: what each is called, what it is wired
@@ -873,6 +884,11 @@ impl Lambda {
     fn run_update(&self, ctx: NodeContext) {
         let workspace = ctx.workspace;
 
+        // Nothing happens while a source is recomputing.
+        if inputs_pending(workspace, self.args) {
+            return;
+        }
+
         // Cancel any in-flight computation first.
         workspace.cancel_all_tasks_for(ctx.id);
 
@@ -884,28 +900,17 @@ impl Lambda {
         let specs = arg_specs(workspace, self.args);
         // Only the wired ones reach the script: an unwired argument binds no
         // name, and the check above says so before the script can trip over it.
-        let args: Vec<(String, ScriptValue)> = specs
-            .iter()
-            .filter_map(|spec| Some((spec.name.clone(), spec.value.clone()?)))
-            .collect();
+        let args: Vec<ScriptArg> = specs.iter().filter_map(ArgSpec::as_script_arg).collect();
 
-        // Show the previous output under a pending marker while recomputing.
+        // Show the previous output under a pending marker while recomputing —
+        // over what the output *settled* to, so the marker is one deep however
+        // many runs it took to get here.
         let previous = workspace
             .get_node(self.output)
             .unwrap_or_else(|| Arc::new(Nothing));
-        let new_pending = if previous.as_any_ref().is::<PendingLayout>() {
-            // Child already displayed pending
-            previous
-        } else {
-            Arc::new(PendingLayout {
-                child: LayoutChild::Node(previous),
-            })
-        };
         workspace.action_handle().insert_node_at_dyn(
             self.output,
-            Arc::new(PendingLayout {
-                child: LayoutChild::Node(new_pending),
-            }),
+            Arc::new(PendingLayout::new(pending::settled(previous))),
         );
 
         let py_prelude = ctx
@@ -932,7 +937,7 @@ impl Lambda {
                 handle
                     .insert_node_at_dyn(output, Arc::new(ErrorLayout::message(describe(&faults))));
             } else {
-                match run_script(&source, &py_prelude, &handle, &args, graph) {
+                match run_script_with(&source, &py_prelude, &handle, &args, graph) {
                     Ok(ScriptOutput::Nothing) => {
                         handle.insert_node_at_dyn(output, Arc::new(Nothing))
                     }
@@ -1053,16 +1058,16 @@ impl Lambda {
         for (_name, target) in bindings {
             let Some(uid) = target else { continue };
             let resolved = resolve_arg(workspace, uid);
-            // Don't sample a source that is recomputing; wait for it to settle.
-            if resolved.pending {
-                continue;
-            }
+            // A source mid-recompute is not sampled — there is nothing there to
+            // sample — but it is recorded as pending rather than skipped, so
+            // that settling reads as the change it is.
+            let now = (!resolved.pending).then_some(resolved.version);
             if let Some(&prev) = seen.get(&uid)
-                && prev != resolved.version
+                && prev != now
             {
                 changed = true;
             }
-            seen.insert(uid, resolved.version);
+            seen.insert(uid, now);
         }
         changed
     }

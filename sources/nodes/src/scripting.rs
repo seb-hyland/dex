@@ -95,6 +95,8 @@ dex_core::defrequest!(
 pub struct ResolvedArg {
     /// The leaf's value, if it is a value-bearing node.
     pub value: ScriptValue,
+    /// The node the value was read from, once the delegation chain ran out.
+    pub leaf: Option<NodeUid>,
     /// A change token — differs iff the resolved value changed.
     pub version: u64,
     /// Whether the delegation chain passed through a pending marker.
@@ -119,10 +121,11 @@ pub fn resolve_arg(ws: &Workspace, start: NodeUid) -> ResolvedArg {
     }
     // A value-bearing leaf resolves to its value; the empty node to nothing;
     // any other node to a reference the script can use as a node.
-    let value = ws
-        .get_node(cur)
+    let leaf = ws.get_node(cur);
+    let value = leaf
+        .as_ref()
         .map(|n| {
-            node_to_value(&*n).unwrap_or_else(|| {
+            node_to_value(&**n).unwrap_or_else(|| {
                 if n.as_ref().as_any_ref().is::<Nothing>() {
                     ScriptValue::Nothing
                 } else {
@@ -133,8 +136,183 @@ pub fn resolve_arg(ws: &Workspace, start: NodeUid) -> ResolvedArg {
         .unwrap_or(ScriptValue::Nothing);
     ResolvedArg {
         value: if pending { ScriptValue::Nothing } else { value },
+        leaf: leaf.map(|_| cur),
         version: ws.version_of(cur),
         pending,
+    }
+}
+
+/// One argument as the script sees it: the value, and where it was read from.
+#[derive(Clone)]
+pub struct ScriptArg {
+    pub name: String,
+    pub value: ScriptValue,
+    /// The node the value was read from, or [`None`] when nothing was.
+    pub source: Option<NodeUid>,
+}
+
+impl ScriptArg {
+    /// An argument carrying a value and naming no node, for a caller that has
+    /// only the value — every test, and anything not driven by a lambda's wires.
+    pub fn detached(name: String, value: ScriptValue) -> ScriptArg {
+        ScriptArg {
+            name,
+            value,
+            source: None,
+        }
+    }
+}
+
+/// `dex.args` inside a transform: each argument's name, and the node it came from.
+#[pyo3::pyclass(name = "Args")]
+pub struct ScriptArgs {
+    sources: std::collections::BTreeMap<String, NodeUid>,
+}
+
+impl ScriptArgs {
+    /// The table for `args`, keeping only those that named a node.
+    fn new(args: &[ScriptArg]) -> ScriptArgs {
+        ScriptArgs {
+            sources: args
+                .iter()
+                .filter_map(|arg| Some((arg.name.clone(), arg.source?)))
+                .collect(),
+        }
+    }
+
+    /// The one place a miss is reported, so both spellings fail the same way.
+    fn lookup(&self, name: &str) -> pyo3::PyResult<NodeHandle> {
+        self.sources
+            .get(name)
+            .copied()
+            .map(NodeHandle)
+            .ok_or_else(|| {
+                let known = self
+                    .sources
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                pyo3::exceptions::PyKeyError::new_err(match known.is_empty() {
+                    true => format!("no argument named `{name}`; this transform has none wired"),
+                    false => format!("no argument named `{name}`; wired arguments are: {known}"),
+                })
+            })
+    }
+}
+
+#[pyo3::pymethods]
+impl ScriptArgs {
+    fn __getattr__(&self, name: &str) -> pyo3::PyResult<NodeHandle> {
+        self.lookup(name)
+    }
+
+    fn __getitem__(&self, name: &str) -> pyo3::PyResult<NodeHandle> {
+        self.lookup(name)
+    }
+
+    fn __contains__(&self, name: &str) -> bool {
+        self.sources.contains_key(name)
+    }
+
+    fn __len__(&self) -> usize {
+        self.sources.len()
+    }
+
+    /// The names that name a node, so a script can iterate rather than guess.
+    fn keys(&self) -> Vec<String> {
+        self.sources.keys().cloned().collect()
+    }
+
+    /// The node behind `name`, or `default` when there is none.
+    #[pyo3(signature = (name, default=None))]
+    fn get(&self, name: &str, default: Option<NodeHandle>) -> Option<NodeHandle> {
+        self.sources.get(name).copied().map(NodeHandle).or(default)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Args({})", self.keys().join(", "))
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    dex_dynamic::DynamicBinding {
+        name: "Args",
+        register_python: |m| {
+            use pyo3::types::PyModuleMethods;
+            m.add_class::<ScriptArgs>()
+        },
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    dex_core::stubs::StubClass {
+        name: "Args",
+        doc: "Each of this transform's arguments, and the node its value was read from.",
+        fields: &[],
+        constructible: false,
+        variants: &[],
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    dex_core::stubs::StubGlobal {
+        name: "args",
+        ty: "Args",
+        doc: "The node behind each argument, for a transform that means to write back.",
+    }
+}
+
+/*
+    Both spellings are declared, so an editor accepts `dex.args.n` as readily as
+    `dex.args["n"]`. A checker reads `__getattr__` as "this class has whatever
+    attribute you name", which is the truth here: the names are the transform's
+    own parameters, and no stub can know them ahead of time.
+*/
+dex_dynamic::__rt::inventory::submit! {
+    dex_core::stubs::StubMethod {
+        owner: "Args",
+        name: "__getattr__",
+        doc: "The node the argument called `name` read its value from.",
+        params: &[dex_core::stubs::StubField { name: "name", ty: "String" }],
+        returns: "NodeUid",
+        is_static: false,
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    dex_core::stubs::StubMethod {
+        owner: "Args",
+        name: "__getitem__",
+        doc: "The node the argument called `name` read its value from.",
+        params: &[dex_core::stubs::StubField { name: "name", ty: "String" }],
+        returns: "NodeUid",
+        is_static: false,
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    dex_core::stubs::StubMethod {
+        owner: "Args",
+        name: "keys",
+        doc: "The names that name a node, so a script can iterate rather than guess.",
+        params: &[],
+        returns: "Vec<String>",
+        is_static: false,
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    dex_core::stubs::StubMethod {
+        owner: "Args",
+        name: "get",
+        doc: "The node behind `name`, or `default` when there is none.",
+        params: &[
+            dex_core::stubs::StubField { name: "name", ty: "String" },
+            dex_core::stubs::StubField { name: "default", ty: "Option<NodeUid>" },
+        ],
+        returns: "Option<NodeUid>",
+        is_static: false,
     }
 }
 
@@ -330,12 +508,32 @@ impl From<NulError> for ScriptError {
 
 /**
     Run `source` as Python with `handle` as context and `args` seeded as globals.
+
+    For a caller holding values and nothing else. A lambda, which knows what
+    node each value came from, wants [`run_script_with`] instead — `dex.args` is
+    empty here, since there is nothing to put in it.
 */
 pub fn run_script(
     source: &str,
     py_prelude: &str,
     handle: &WorkspaceActionHandle,
     args: &[(String, ScriptValue)],
+    graph: GraphSnapshot,
+) -> Result<ScriptOutput, ScriptError> {
+    let args: Vec<ScriptArg> = args
+        .iter()
+        .map(|(name, value)| ScriptArg::detached(name.clone(), value.clone()))
+        .collect();
+    run_python(source, py_prelude, handle, &args, graph)
+}
+
+/// Run `source` with arguments that know where they came from, so `dex.args`
+/// can name a node for each one.
+pub fn run_script_with(
+    source: &str,
+    py_prelude: &str,
+    handle: &WorkspaceActionHandle,
+    args: &[ScriptArg],
     graph: GraphSnapshot,
 ) -> Result<ScriptOutput, ScriptError> {
     run_python(source, py_prelude, handle, args, graph)
@@ -345,7 +543,7 @@ fn run_python(
     source: &str,
     prelude: &str,
     handle: &WorkspaceActionHandle,
-    args: &[(String, ScriptValue)],
+    args: &[ScriptArg],
     graph: GraphSnapshot,
 ) -> Result<ScriptOutput, ScriptError> {
     use pyo3::prelude::*;
@@ -362,6 +560,9 @@ fn run_python(
         let snapshot =
             Bound::new(py, dex_core::snapshot::PySnapshot::new(graph)).map_err(map_err)?;
         dex_mod.add("snapshot", snapshot).map_err(map_err)?;
+        // Where each argument's value was read from, for a script that writes back.
+        let arg_table = Bound::new(py, ScriptArgs::new(args)).map_err(map_err)?;
+        dex_mod.add("args", arg_table).map_err(map_err)?;
 
         let globals = PyDict::new(py);
         // Present the exec namespace as the `__main__` module.
@@ -395,10 +596,10 @@ fn run_python(
 pub fn seed_globals(
     py: pyo3::Python<'_>,
     globals: &pyo3::Bound<'_, pyo3::types::PyDict>,
-    args: &[(String, ScriptValue)],
+    args: &[ScriptArg],
 ) -> pyo3::PyResult<()> {
     use pyo3::prelude::*;
-    for (name, value) in args {
+    for ScriptArg { name, value, .. } in args {
         match value {
             ScriptValue::Str(s) => globals.set_item(name, s),
             ScriptValue::Int(i) => globals.set_item(name, *i),

@@ -12,7 +12,7 @@
 
 use dex_core::prelude::*;
 
-use crate::scripting::{ScriptValue, seed_globals};
+use crate::scripting::{ScriptArg, ScriptValue, seed_globals};
 
 /// What an argument will accept, in the order the dropdown offers them.
 #[derive(Copy, Debug, Default, PartialEq, Eq)]
@@ -107,6 +107,19 @@ pub struct ArgSpec {
     pub detail: String,
     /// What is wired to it, or [`None`] when nothing is.
     pub value: Option<ScriptValue>,
+    /// The node the value was read from, for a script that means to write back.
+    pub source: Option<NodeUid>,
+}
+
+impl ArgSpec {
+    /// This argument as the script will see it.
+    pub fn as_script_arg(&self) -> Option<ScriptArg> {
+        Some(ScriptArg {
+            name: self.name.clone(),
+            value: self.value.clone()?,
+            source: self.source,
+        })
+    }
 }
 
 /// An argument that is not what it was asked to be.
@@ -227,10 +240,7 @@ fn check_in_python(prelude: &str, all: &[ArgSpec], deferred: &[&ArgSpec]) -> Vec
     use pyo3::types::PyDict;
     use std::ffi::CString;
 
-    let seeds: Vec<(String, ScriptValue)> = all
-        .iter()
-        .filter_map(|spec| Some((spec.name.clone(), spec.value.clone()?)))
-        .collect();
+    let seeds: Vec<ScriptArg> = all.iter().filter_map(ArgSpec::as_script_arg).collect();
 
     Python::attach(|py| {
         let globals = PyDict::new(py);

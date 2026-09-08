@@ -24,6 +24,9 @@ fn spec(kind: ArgType, detail: &str, value: ScriptValue) -> ArgSpec {
         kind,
         detail: detail.to_owned(),
         value: Some(value),
+        // A declaration is checked against the value, never against where it
+        // came from, so these say nothing about a source.
+        source: None,
     }
 }
 

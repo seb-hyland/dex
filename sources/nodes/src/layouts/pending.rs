@@ -22,6 +22,23 @@ impl PendingLayout {
     }
 }
 
+/// What `node` shows with any pending marker taken off it.
+pub fn settled(node: Arc<dyn Node>) -> LayoutChild {
+    let mut child = LayoutChild::Node(node);
+    loop {
+        let LayoutChild::Node(inner) = &child else {
+            return child;
+        };
+        // `as_ref` first: `AsAny` is blanket-implemented, so asking the `Arc`
+        // downcasts the *handle* and never matches what it points at.
+        let Some(pending) = inner.as_ref().as_any_ref().downcast_ref::<PendingLayout>() else {
+            return child;
+        };
+        let inner = pending.child.clone();
+        child = inner;
+    }
+}
+
 #[utils::dynamic_node]
 impl Node for PendingLayout {
     fn type_name(&self, _ctx: NodeContext) -> String {

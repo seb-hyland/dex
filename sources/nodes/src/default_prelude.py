@@ -3587,7 +3587,7 @@ def build_explorer_lambda(ws):
     port = dex.NodeUid.mint()
     dex.LambdaArg.build_with(ws, arg, port, EXPLORER_ARG_LABEL, EXPLORER_ARG)
     ws.submit_action(args, dex.AddArgAt(arg), "Added the table argument")
-    ws.submit_action(arg, dex.SetArgKind(dex.ArgType.Table), "Declared it a table")
+    ws.submit_action(arg, dex.SetArgKind(dex.ArgType.Table, ""), "Declared it a table")
     return lam
 
 
