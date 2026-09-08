@@ -7,6 +7,7 @@
 use dex_core::prelude::*;
 use dex_core::theme;
 use dex_nodes::primitives::checkbox::Checkbox;
+use dex_nodes::primitives::drag_number::DragNumber;
 use dex_nodes::primitives::text::{Label, LabelEditable};
 
 const SCREEN: egui::Vec2 = egui::vec2(1200.0, 900.0);
@@ -254,6 +255,63 @@ fn an_editable_label_takes_the_same_styling() {
     assert!(
         styled.font.bold,
         "the shared styling actions reach an editable label too"
+    );
+}
+
+/// Dragging the size control resizes the label's text, and reads back from the
+/// label, so it starts showing whatever size the label already is.
+#[test]
+fn the_size_control_resizes_the_label() {
+    dex_nodes::scripting::init_python();
+    let ctx = egui::Context::default();
+
+    let mut ws = Workspace::new_empty();
+    let mut small = Label::new("Hello".to_owned());
+    small.font.size = 20.0;
+    let label = ws.insert_node_now(small);
+    ws.process_pending();
+    inspecting(&mut ws, label.erase());
+    frame(&mut ws, &ctx, vec![]);
+
+    // The size control is the one draggable number the inspector owns.
+    let drag = ws
+        .live_ids()
+        .into_iter()
+        .find(|uid| {
+            ws.get_node(*uid)
+                .is_some_and(|node| (*node).as_any_ref().is::<DragNumber>())
+        })
+        .expect("the inspector offers a size control");
+    // It senses through a sensor of its own, which is the rect egui knows.
+    let mut sensor = None;
+    ws.get_node(drag)
+        .expect("the control is live")
+        .owned_refs(&mut |child| sensor = Some(child));
+    let rect = ctx
+        .read_response(egui::Id::new(sensor.expect("the control owns a sensor")))
+        .expect("the size control drew")
+        .rect;
+
+    let start = label_of(&ws, label).font.size;
+    assert_eq!(start, 20.0, "it starts at the label's own size");
+
+    // Press on the control and drag to the right: bigger.
+    let from = rect.center();
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(from)]);
+    frame(&mut ws, &ctx, vec![button(from, true)]);
+    let to = egui::pos2(from.x + 60.0, from.y);
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(to)]);
+    frame(&mut ws, &ctx, vec![button(to, false)]);
+    // The drag sets the control, then the inspector reads it back to the label
+    // a frame later, then that lands: settle through all three.
+    for _ in 0..3 {
+        frame(&mut ws, &ctx, vec![]);
+    }
+
+    assert!(
+        label_of(&ws, label).font.size > start,
+        "dragging the size control to the right grows the text (was {start}, now {})",
+        label_of(&ws, label).font.size
     );
 }
 

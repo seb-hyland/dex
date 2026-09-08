@@ -1304,8 +1304,9 @@ impl PathMenu {
         let mode = ws.send_request(target, GetFillMode).unwrap_or_default();
         let degrees = ws.send_request(target, GetFillAngle).unwrap_or(0.0);
 
+        // In-flow, not floating.
         let mode_picker =
-            Dropdown::build(h.clone(), FILL_MODES.iter().map(FillMode::label).collect());
+            Dropdown::build_inline(h.clone(), FILL_MODES.iter().map(FillMode::label).collect());
         ws.submit_action(
             mode_picker,
             "Showed the interior's mode",

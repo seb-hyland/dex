@@ -7,6 +7,7 @@ use utils::Transient;
 use crate::composites::button::Button;
 use crate::layouts::vertical::VerticalLayout;
 use crate::primitives::checkbox::{Checkbox, IsChecked};
+use crate::primitives::drag_number::{DragNumber, DragNumberValue};
 use crate::primitives::color_picker::{
     ColorPicker, ColorSlot, PreviewFill, drop_preview, repicked,
 };
@@ -84,6 +85,9 @@ defhandlers! { Label {
         SetItalic { on: bool } => (this, s) { this.font.italic = s.on },
         SetUnderline { on: bool } => (this, s) { this.font.underline = s.on },
         SetSingleline { on: bool } => (this, s) { this.singleline = s.on },
+        SetTextSize { size: f32 } => (this, s) {
+            this.font.size = s.size.clamp(MIN_TEXT_SIZE, MAX_TEXT_SIZE)
+        },
         SetTextColor { color: Color } => (this, s) { this.color = s.color },
     ],
     requests: [
@@ -686,6 +690,7 @@ defhandlers! { LabelEditable {
         SetItalic => (this, s) { this.font.italic = s.on },
         SetUnderline => (this, s) { this.font.underline = s.on },
         SetSingleline => (this, s) { this.singleline = s.on },
+        SetTextSize => (this, s) { this.font.size = s.size.clamp(MIN_TEXT_SIZE, MAX_TEXT_SIZE) },
         SetTextColor => (this, s) { this.color = s.color },
     ],
     requests: [
@@ -716,6 +721,7 @@ pub struct TextStyle {
     pub italic: bool,
     pub underline: bool,
     pub singleline: bool,
+    pub size: f32,
     pub color: Color,
 }
 
@@ -726,10 +732,15 @@ impl TextStyle {
             italic: font.italic,
             underline: font.underline,
             singleline,
+            size: font.size,
             color,
         }
     }
 }
+
+/// The range the size control keeps a label's text within.
+pub const MIN_TEXT_SIZE: f32 = 6.0;
+pub const MAX_TEXT_SIZE: f32 = 400.0;
 
 /// Styling controls for a [`Label`] or a [`LabelEditable`].
 #[utils::portable]
@@ -741,6 +752,7 @@ pub struct TextStyleInspector {
     italic: NodeUid<Checkbox>,
     underline: NodeUid<Checkbox>,
     singleline: NodeUid<Checkbox>,
+    size: NodeUid<DragNumber>,
     color: NodeUid<ColorPicker>,
     column: NodeUid<VerticalLayout>,
 }
@@ -754,6 +766,18 @@ impl TextStyleInspector {
         let italic = tick("Italic", style.italic);
         let underline = tick("Underline", style.underline);
         let singleline = tick("Single line", style.singleline);
+        // Dragged rather than typed, and shown to the whole point: a couple of
+        // points either way is what fits a label to its box.
+        let size = DragNumber::build_with(
+            ws.clone(),
+            style.size,
+            MIN_TEXT_SIZE,
+            MAX_TEXT_SIZE,
+            |control| {
+                control.prefix = "Size ".to_owned();
+                control.step = 0.5;
+            },
+        );
         let color = ColorPicker::build(ws.clone(), "Colour".to_owned(), style.color);
 
         let column = VerticalLayout::build(
@@ -764,6 +788,7 @@ impl TextStyleInspector {
                 underline.erase(),
                 singleline.erase(),
                 color.erase(),
+                size.erase(),
             ],
             3.0,
         );
@@ -773,6 +798,7 @@ impl TextStyleInspector {
             italic,
             underline,
             singleline,
+            size,
             color,
             column,
         })
@@ -811,6 +837,11 @@ impl Node for TextStyleInspector {
             if let Some(on) = changed(self.singleline, style.singleline) {
                 ws.submit_action(target, "Set the label's wrapping", SetSingleline { on });
             }
+            if let Some(size) = ws.send_request(self.size, DragNumberValue)
+                && (size - style.size).abs() > f32::EPSILON
+            {
+                ws.submit_action(target, "Set the label's size", SetTextSize { size });
+            }
             if let Some(color) = repicked(ws, self.color, target, ColorSlot::Fill, style.color) {
                 ws.submit_action(target, "Recoloured the label", SetTextColor { color });
             }
@@ -826,6 +857,7 @@ impl Node for TextStyleInspector {
         for tick in [self.bold, self.italic, self.underline, self.singleline] {
             ctx.workspace.delete_node(tick.erase());
         }
+        ctx.workspace.delete_node(self.size.erase());
         ctx.workspace.delete_node(self.color.erase());
     }
 }

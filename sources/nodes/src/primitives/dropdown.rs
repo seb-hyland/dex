@@ -271,6 +271,75 @@ pub fn draw_open_list(
     }
 }
 
+/// Draw the open list of `options` in-flow beneath `header`, on the current layer.
+pub fn draw_inline_list(
+    ctx: &mut DrawContext,
+    header: ScreenRegion,
+    options: &[String],
+    style: RowStyle,
+    salt: &'static str,
+) -> (ListOutcome, f32) {
+    // The rows take their padding but wear no frame of their own: the menu they
+    // sit in is the surround, and a border apiece would read as a stack of
+    // little controls rather than one list.
+    let listed = RowStyle {
+        boxed: false,
+        padded: true,
+        ..style
+    };
+    let row_h = options
+        .iter()
+        .map(|word| row_height(ctx, word, listed))
+        .fold(0.0f32, f32::max);
+    let width = header.size().x;
+    let top = header.max.y + LIST_GAP;
+
+    let pointer: Option<ScreenPos> = ctx.ui.ctx().pointer_latest_pos().map(Into::into);
+    let mut chosen = None;
+    let mut within = false;
+    for (i, word) in options.iter().enumerate() {
+        let row = ScreenRegion::from_min_size(
+            ScreenPos {
+                x: header.min.x,
+                y: top + i as f32 * row_h,
+            },
+            Vector { x: width, y: row_h },
+        );
+        let hovered = pointer.is_some_and(|p| row.contains(p));
+        paint_row(ctx, row, word, listed, hovered, false);
+        let hit = ctx
+            .ui
+            .interact(row.into(), ctx.widget_id().with((salt, i)), Sense::CLICK);
+        if hit.hovered() {
+            ctx.set_cursor(CursorIcon::PointingHand);
+        }
+        if hit.clicked() {
+            chosen = Some(i);
+        }
+        within |= hit.hovered() || hit.is_pointer_button_down_on();
+    }
+
+    let list_h = LIST_GAP + row_h * options.len() as f32;
+    // A press anywhere on the header-and-list block keeps the list up; anywhere
+    // else puts it away, the same rule the overlay list follows.
+    let block = ScreenRegion::from_min_size(
+        header.min,
+        Vector {
+            x: width,
+            y: header.size().y + list_h,
+        },
+    );
+    within |= pointer.is_some_and(|p| block.contains(p));
+    let pressed_away = ctx.ui.ctx().input(|i| i.pointer.any_pressed()) && !within;
+    (
+        ListOutcome {
+            chosen,
+            dismissed: chosen.is_some() || pressed_away,
+        },
+        list_h,
+    )
+}
+
 /// A list of named choices, holding the one taken.
 #[utils::dynamic_type]
 #[utils::portable]
@@ -290,6 +359,8 @@ pub struct Dropdown {
         width of `any satisfying` on the strength of a choice nobody made.
     */
     pub shrink_to_text: bool,
+    /// Whether the open list drops in-flow, beneath the row.
+    pub inline: bool,
 
     /// Whether the list is showing. A gesture in progress, not something a
     /// saved workspace should come back wearing.
@@ -309,6 +380,7 @@ impl Dropdown {
             color: theme::INK,
             boxed: true,
             shrink_to_text: false,
+            inline: false,
             open: Transient::default(),
             chosen: Transient::default(),
         }
@@ -317,6 +389,15 @@ impl Dropdown {
     /// Build one into `ws`, for an owner that addresses it by id.
     pub fn build(ws: WorkspaceActionHandle, options: Vec<String>) -> NodeUid<Dropdown> {
         ws.insert_node(Self::new(options))
+    }
+
+    /// The same, dropping its list in-flow: for a dropdown inside a menu that is
+    /// itself a popup. See [`Dropdown::inline`].
+    pub fn build_inline(ws: WorkspaceActionHandle, options: Vec<String>) -> NodeUid<Dropdown> {
+        ws.insert_node(Self {
+            inline: true,
+            ..Self::new(options)
+        })
     }
 }
 
@@ -396,8 +477,25 @@ impl Node for Dropdown {
             self.open.set(!open);
         }
 
+        // The list floats over everything by default, but drops in-flow inside
+        // a popup menu, where it also grows the region this reports so the menu
+        // lays its other rows out below it.
+        let mut region = header;
         if open {
-            let outcome = draw_open_list(&mut ctx, header, &self.options, style, "dex_dropdown");
+            let outcome = if self.inline {
+                let (outcome, list_h) =
+                    draw_inline_list(&mut ctx, header, &self.options, style, "dex_dropdown");
+                region = ScreenRegion::from_min_size(
+                    header.min,
+                    Vector {
+                        x: header.size().x,
+                        y: header.size().y + list_h,
+                    },
+                );
+                outcome
+            } else {
+                draw_open_list(&mut ctx, header, &self.options, style, "dex_dropdown")
+            };
             if outcome.dismissed {
                 self.open.set(false);
             }
@@ -411,7 +509,7 @@ impl Node for Dropdown {
         }
 
         DrawResult::Complete {
-            region: Some(header),
+            region: Some(region),
         }
     }
 }
