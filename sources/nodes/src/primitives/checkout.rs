@@ -85,14 +85,27 @@ impl Checkout {
     `(name, python type)` — a lambda passes its wired arguments, a prelude
     passes none.
 */
-pub fn open(key: &str, source: &str, globals: &[(String, String)]) -> std::io::Result<Checkout> {
-    let checkout = write(key, source, globals)?;
+pub fn open(
+    key: &str,
+    source: &str,
+    globals: &[(String, String)],
+    prelude: &str,
+) -> std::io::Result<Checkout> {
+    let checkout = write(key, source, globals, prelude)?;
     open_in_editor(checkout.main_file())?;
     Ok(checkout)
 }
 
+/// What the workspace's prelude is called inside a checkout.
+const PRELUDE_MODULE: &str = "dex_prelude";
+
 /// Write a checkout without opening it.
-pub fn write(key: &str, source: &str, globals: &[(String, String)]) -> std::io::Result<Checkout> {
+pub fn write(
+    key: &str,
+    source: &str,
+    globals: &[(String, String)],
+    prelude: &str,
+) -> std::io::Result<Checkout> {
     let dir = std::env::temp_dir().join(format!("dex-checkout-{key}"));
     std::fs::create_dir_all(&dir)?;
 
@@ -100,6 +113,12 @@ pub fn write(key: &str, source: &str, globals: &[(String, String)]) -> std::io::
     // API and there is no generated file to keep in step.
     std::fs::write(dir.join("dex.pyi"), dex_core::stubs_gen::render())?;
     std::fs::write(dir.join("pyrightconfig.json"), pyright_config())?;
+
+    // The prelude, laid beside it as a module. A script runs *under* the
+    // prelude, so every name it defines is already in scope — but an editor
+    // opening the file on its own has no way to know that, and would mark a
+    // library the workspace supplies as a page of undefined names.
+    std::fs::write(dir.join(format!("{PRELUDE_MODULE}.py")), prelude)?;
 
     let file = dir.join("main.py");
     let contents = with_injected(source, globals);
@@ -175,7 +194,10 @@ pub fn poll(checkout: &Checkout) -> Option<Pulled> {
     imports are derived from them.
 */
 fn header(globals: &[(String, String)]) -> Vec<String> {
-    let mut lines = vec![format!("import dex  {MARKER}")];
+    let mut lines = vec![
+        format!("import dex  {MARKER}"),
+        format!("from {PRELUDE_MODULE} import *  {MARKER}"),
+    ];
 
     // Only pull in modules the declarations actually mention, so the header
     // does not carry an unused import for every script.

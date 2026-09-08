@@ -34,12 +34,53 @@ pub fn venv_generation() -> u64 {
 
 /// The environment a script should be read against.
 pub fn effective_venv() -> Option<PathBuf> {
-    if let Some(configured) = venv() {
-        return Some(configured);
+    venv().or_else(default_venv)
+}
+
+/// The environment to use when nobody has chosen one. An activated environment first, then `./.venv`.
+pub fn default_venv() -> Option<PathBuf> {
+    default_venv_in(
+        std::env::current_dir().ok().as_deref(),
+        std::env::var_os("VIRTUAL_ENV")
+            .map(PathBuf::from)
+            .as_deref(),
+    )
+}
+
+/// The choice [`default_venv`] makes, with its two inputs handed in — so the
+/// rule can be checked without reaching into the process's own environment.
+///
+/// `.venv` is looked for in `dir` and then in each directory above it, the way
+/// every other tool that reads one does: running from a subdirectory of a
+/// project should find the project's environment, not nothing.
+pub fn default_venv_in(dir: Option<&Path>, activated: Option<&Path>) -> Option<PathBuf> {
+    if let Some(activated) = activated.filter(|dir| site_packages(dir).is_some()) {
+        return Some(activated.to_path_buf());
     }
-    let active = PathBuf::from(std::env::var_os("VIRTUAL_ENV")?);
-    // Only if it really is one: the variable outlives a deleted environment.
-    site_packages(&active).is_some().then_some(active)
+    let mut here = dir;
+    while let Some(dir) = here {
+        let candidate = dir.join(".venv");
+        if site_packages(&candidate).is_some() {
+            return Some(candidate);
+        }
+        here = dir.parent();
+    }
+    None
+}
+
+/// Put the default environment on the interpreter's path, if none is set.
+pub fn adopt_default_venv() -> Option<PathBuf> {
+    if venv().is_some() {
+        return None;
+    }
+    let default = default_venv()?;
+    match set_venv(Some(default.clone())) {
+        Ok(()) => Some(default),
+        Err(e) => {
+            eprintln!("could not adopt {}: {e}", default.display());
+            None
+        }
+    }
 }
 
 fn editor_slot() -> &'static Mutex<String> {

@@ -337,7 +337,7 @@ fn the_global_environment_reaches_the_interpreter_and_the_editor() {
 
     // And named in the checkout config, or the editor would underline every
     // import that works perfectly well at runtime.
-    let out = checkout::write("venv-config", "def transform():\n    pass\n", &[]).unwrap();
+    let out = checkout::write("venv-config", "def transform():\n    pass\n", &[], "").unwrap();
     let config = std::fs::read_to_string(out.dir.join("pyrightconfig.json")).unwrap();
     assert!(
         config.contains("\"venv\": \".venv\""),
@@ -374,7 +374,7 @@ fn the_global_environment_reaches_the_interpreter_and_the_editor() {
     });
     assert!(gone, "and off sys.path with it");
 
-    let out = checkout::write("venv-config", "def transform():\n    pass\n", &[]).unwrap();
+    let out = checkout::write("venv-config", "def transform():\n    pass\n", &[], "").unwrap();
     let config = std::fs::read_to_string(out.dir.join("pyrightconfig.json")).unwrap();
     assert!(
         !config.contains("venvPath"),
@@ -784,4 +784,94 @@ fn the_choose_button_is_not_clipped_by_the_band_kept_for_it() {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A directory shaped like an environment, at exactly this path.
+fn venv_at(path: &Path) -> PathBuf {
+    std::fs::create_dir_all(path.join("lib").join("python3.99").join("site-packages"))
+        .expect("venv layout");
+    path.to_path_buf()
+}
+
+/// With nothing chosen, a `.venv` in the working directory is the environment.
+///
+/// This is what makes dex work in a project that has one: before, nothing put
+/// site-packages on the interpreter's path at startup, so every package the
+/// project had installed was invisible until somebody picked the environment by
+/// hand — and the first sign of it was the prelude failing to import pyarrow.
+#[test]
+fn a_dot_venv_in_the_working_directory_is_the_default() {
+    let root = std::env::temp_dir().join("dex-default-venv-test");
+    let _ = std::fs::remove_dir_all(&root);
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).expect("a project directory");
+
+    // Nothing there yet, so there is no default to find.
+    assert_eq!(
+        settings::default_venv_in(Some(&project), None),
+        None,
+        "a directory with no environment in it offers none"
+    );
+
+    let venv = venv_at(&project.join(".venv"));
+    assert_eq!(
+        settings::default_venv_in(Some(&project), None),
+        Some(venv.clone()),
+        "`.venv` beside the project is picked up"
+    );
+
+    // And from below it: running out of a subdirectory should find the
+    // project's environment, the way every other tool that reads one does.
+    let inner = project.join("src").join("deep");
+    std::fs::create_dir_all(&inner).expect("a subdirectory");
+    assert_eq!(
+        settings::default_venv_in(Some(&inner), None),
+        Some(venv.clone()),
+        "the nearest `.venv` at or above the working directory"
+    );
+
+    // An activated environment wins: activating one is a deliberate act, and a
+    // `.venv` lying in the directory is not.
+    let activated = venv_at(&root.join("elsewhere"));
+    assert_eq!(
+        settings::default_venv_in(Some(&project), Some(&activated)),
+        Some(activated),
+        "an activated environment beats one that is merely lying about"
+    );
+
+    // Both are checked for really being environments: VIRTUAL_ENV outlives a
+    // deleted one, and `.venv` may be any directory at all.
+    let bogus = root.join("not-an-environment");
+    std::fs::create_dir_all(&bogus).expect("a directory");
+    assert_eq!(
+        settings::default_venv_in(Some(&project), Some(&bogus)),
+        Some(venv),
+        "a stale VIRTUAL_ENV falls through to the real one"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Adopting the default puts it on the interpreter's path, and leaves a chosen
+/// environment alone.
+#[test]
+fn adopting_the_default_leaves_a_chosen_environment_alone() {
+    dex_nodes::scripting::init_python();
+    let root = std::env::temp_dir().join("dex-adopt-venv-test");
+    let _ = std::fs::remove_dir_all(&root);
+    let chosen = venv_at(&root.join("chosen"));
+
+    settings::set_venv(Some(chosen.clone())).expect("the choice takes");
+    assert_eq!(
+        settings::adopt_default_venv(),
+        None,
+        "a chosen environment is not overridden by a default"
+    );
+    assert_eq!(
+        settings::effective_venv().as_deref(),
+        Some(chosen.as_path())
+    );
+
+    settings::set_venv(None).expect("cleared");
+    let _ = std::fs::remove_dir_all(&root);
 }

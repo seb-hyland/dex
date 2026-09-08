@@ -582,7 +582,15 @@ fn hang_arguments(
     for input in inputs {
         let arg = NodeUid::<LambdaArg>::mint();
         let arg_port = NodeUid::mint();
-        LambdaArg::build_with(handle.clone(), arg, arg_port, input.name.clone());
+        // The default label: a gathered input carries the original's name but
+        // not what it was labelled, so there is nothing better to give it here.
+        LambdaArg::build_with(
+            handle.clone(),
+            arg,
+            arg_port,
+            "label".to_owned(),
+            input.name.clone(),
+        );
         handle.submit_action(
             args,
             "Hung a gathered argument",

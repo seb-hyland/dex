@@ -177,7 +177,7 @@ class Builder:
         )
         for label, operand in zip(OPERANDS, operands):
             arg, port = dex.NodeUid.mint(), dex.NodeUid.mint()
-            dex.LambdaArg.build_with(self.ws, arg, port, label)
+            dex.LambdaArg.build_with(self.ws, arg, port, "label", label)
             self.ws.submit_action(args, dex.AddArgAt(arg))
             self.ws.submit_action(port, dex.SetConnection(operand))
         self.place(node, uid, OP_SIZE)
@@ -200,7 +200,7 @@ def build(ws, equation, params):
     )
     for name in params:
         arg, port = dex.NodeUid.mint(), dex.NodeUid.mint()
-        dex.LambdaArg.build_with(ws, arg, port, name)
+        dex.LambdaArg.build_with(ws, arg, port, "label", name)
         ws.submit_action(args, dex.AddArgAt(arg))
 
     # The pins mirror the parameters. Naming them here rather than waiting for

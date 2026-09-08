@@ -17,9 +17,14 @@ use crate::{
     },
 };
 
-/// Initialise the Python interpreter.
+/// Initialise the Python interpreter, against the default environment.
+///
+/// The environment has to be adopted here rather than left to whoever asks
+/// first: `sys.path` is the interpreter's, so it must be set before anything
+/// imports anything.
 pub fn init_python() {
     pyo3::Python::initialize();
+    crate::settings::adopt_default_venv();
 }
 
 /// Possible output cases for a transform's return value.

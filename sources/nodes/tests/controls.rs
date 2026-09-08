@@ -393,16 +393,16 @@ fn the_sidebar_and_the_tab_row_fold_away() {
 
     // The tab row: its canvas names are what disappear. Matched with the
     // number, since the sidebar has a "Canvas Lambda" button of its own.
-    assert!(app.shows_text("Canvas 1"), "the tab row is showing");
+    assert!(app.shows_text("Unnamed desktop"), "the tab row is showing");
     app.ws.submit_action(root, "fold tabs", ToggleTabBar);
     app.ws.process_pending();
     assert!(
-        !app.shows_text("Canvas 1"),
+        !app.shows_text("Unnamed desktop"),
         "folded, the tab row is gone too"
     );
     app.ws.submit_action(root, "unfold tabs", ToggleTabBar);
     app.ws.process_pending();
-    assert!(app.shows_text("Canvas 1"), "and comes back");
+    assert!(app.shows_text("Unnamed desktop"), "and comes back");
 }
 
 /// Folding and unfolding twice over does what it says each time.
@@ -593,7 +593,7 @@ fn an_override_can_be_closed_with_the_tab_row_folded() {
     let output = app.frame(vec![]);
 
     // The desktop's own crumb, at the near end of the trail.
-    let home = crumb(&output, "Canvas 1").expect("the way out of the override is on screen");
+    let home = crumb(&output, "Unnamed desktop").expect("the way out of the override is on screen");
 
     // And it answers: pressing it puts the override away.
     press(&mut app, home.center());
@@ -624,7 +624,7 @@ fn a_breadcrumb_pops_everything_above_it() {
     // Three crumbs: the desktop, the canvas opened over it, and the label.
     let middle = crumb(&output, "A Canvas").expect("the middle of the trail names the canvas");
     assert!(
-        crumb(&output, "Canvas 1").is_some(),
+        crumb(&output, "Unnamed desktop").is_some(),
         "and the near end names the desktop"
     );
 

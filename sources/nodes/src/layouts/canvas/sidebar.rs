@@ -169,6 +169,7 @@ impl CanvasSidebar {
         let backpack = VerticalDnD::build(ws.clone(), Vec::new(), theme::SPACE_SM, true);
         let venv_button = Button::build(ws.clone(), Label::new(venv_button_label(false)));
         let venv_clear_button = Button::build(ws.clone(), Label::new("Clear".to_owned()));
+
         // Starts on the default, so the field always shows what will run rather
         // than an empty box that means "whatever the default happens to be".
         let mut save_name_field = LabelEditable::new("workspace.dex".to_owned());
@@ -185,7 +186,10 @@ impl CanvasSidebar {
 
         editor.shrink_to_text = false;
         let editor_field = ws.insert_node(editor);
-        let mut prelude = CodeEditor::new(String::new(), "python".to_owned());
+        let mut prelude = CodeEditor::new(
+            include_str!("../../default_prelude.py").to_owned(),
+            "python".to_owned(),
+        );
         prelude.fill = true;
         prelude.font_size = theme::TEXT_SM;
         let python_prelude = ws.insert_node(prelude);
@@ -291,8 +295,8 @@ impl CanvasSidebar {
             .workspace
             .send_request(self.python_prelude, GetCommittedText {})
             .unwrap_or_default();
-        // The prelude runs before anything is wired, so it is handed no globals.
-        match checkout::open(&ctx.id.key(), &source, &[]) {
+        // The prelude runs before anything is wired, so it is handed no globals
+        match checkout::open(&ctx.id.key(), &source, &[], "") {
             Ok(open) => self.prelude_checkout.set(open),
             Err(e) => eprintln!("could not check the prelude out: {e}"),
         }
@@ -489,6 +493,10 @@ impl CanvasSidebar {
         y: &mut f32,
     ) {
         const GAP: f32 = 10.0;
+        // Read here rather than on every tick: running the prelude is real work,
+        // and it is only worth doing for somebody who is about to look at what
+        // it offers. A workspace whose sidebar is never drawn never pays for it.
+        self.poll_prelude_prototypes(ctx.node);
         if self.prototypes.is_empty() && self.prelude_error.is_none() {
             return;
         }
@@ -560,6 +568,11 @@ impl CanvasSidebar {
     /// Ask a worker what the prelude offers, when the prelude has changed.
     fn poll_prelude_prototypes(&self, ctx: NodeContext) {
         let ws = ctx.workspace;
+        // The committed value, not what is being typed: reading the prelude
+        // means *running* it, which is not something to do between one
+        // keystroke and the next. It is committed when the tab is left, when
+        // the editor loses focus, and when an external edit is pulled back — so
+        // a finished edit still lands without a keystroke ever triggering one.
         let source = ws
             .send_request(self.python_prelude, GetCommittedText {})
             .unwrap_or_default();
@@ -572,7 +585,9 @@ impl CanvasSidebar {
         ws.cancel_all_tasks_for(ctx.id);
         ws.submit_task(ComputeTask::new(ctx.id, move || {
             let (handle, actions) = WorkspaceActionHandle::buffered();
-            let (offers, error) = prelude_prototypes::read(&source);
+            // The same handle the offer travels on, so anything the prelude
+            // built is queued ahead of the templates that name it.
+            let (offers, error) = prelude_prototypes::read(&source, &handle);
             handle.submit_action(
                 sidebar,
                 "Read what the prelude offers",
@@ -947,7 +962,6 @@ impl Node for CanvasSidebar {
         // Polled off the draw, so an external edit lands whichever tab is open.
         self.poll_prelude_checkout(ctx);
         self.poll_settings(ctx);
-        self.poll_prelude_prototypes(ctx);
     }
 
     fn on_delete(&self, ctx: NodeContext) {

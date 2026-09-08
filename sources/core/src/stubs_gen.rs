@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
-use crate::stubs::{Position, StubMethod, classes, methods, node_types, python_type_at};
+use crate::stubs::{Position, StubMethod, classes, globals, methods, node_types, python_type_at};
 
 /// The header every generated stub carries, so nobody edits it by hand.
 const HEADER: &str = "\
@@ -14,9 +14,14 @@ const HEADER: &str = "\
 
 from typing import Any
 
-# Any value a script can hand to something expecting a node: a node class, or a
-# primitive that is coerced into one.
-NodeLike = Node | str | int | float | bool | None
+# Any value a script can hand to something expecting a node.
+#
+# A node class, a primitive that is coerced into one, an Arrow table that
+# becomes a `Table` — or any object at all, because an object defining `draw` is
+# a node. That last case is the whole of the scripting model, and it is why this
+# ends in `Any`: a script-defined view is not a `Node` subclass and never will
+# be, and a checker that insisted on one would reject every example there is.
+NodeLike = Node | str | int | float | bool | None | Any
 
 ";
 
@@ -144,9 +149,19 @@ pub fn render() -> String {
         out.push('\n');
     }
 
-    // The two handles a script is handed as globals: one to write with, one to read.
-    let _ = writeln!(out, "ws: WorkspaceActionHandle");
-    let _ = writeln!(out, "snapshot: Snapshot");
+    // Whatever the module itself carries, each declared beside the binding that
+    // adds it.
+    for global in globals() {
+        if !global.doc.is_empty() {
+            let _ = writeln!(out, "\n# {}", one_line(global.doc));
+        }
+        let _ = writeln!(
+            out,
+            "{}: {}",
+            escape_ident(global.name),
+            python_type_at(global.ty, &known, Position::Output)
+        );
+    }
 
     out
 }

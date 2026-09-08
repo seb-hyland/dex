@@ -10,6 +10,10 @@ use dex_core::prelude::*;
 use dex_nodes::layouts::canvas::layout::{Canvas, CanvasLayerNodes, Layer};
 use dex_nodes::scripting::{ScriptOutput, run_script};
 
+/// The example paints with the default prelude's helpers, so it runs under it
+/// exactly as a lambda would.
+const PRELUDE: &str = include_str!("../src/default_prelude.py");
+
 const PDB_VIEWER: &str = include_str!("../../../examples/pdb_viewer.py");
 const SCREEN: egui::Vec2 = egui::vec2(900.0, 640.0);
 
@@ -50,7 +54,7 @@ fn build_canvas(ws: &mut Workspace) -> NodeUid {
 
     let graph = GraphSnapshot::capture(ws);
     let (handle, actions) = WorkspaceActionHandle::buffered();
-    let uid = match run_script(&source, "", &handle, &[], graph) {
+    let uid = match run_script(&source, PRELUDE, &handle, &[], graph) {
         Ok(ScriptOutput::Handle(uid)) => uid,
         Ok(_) => panic!("the viewer returns a handle to the canvas it built"),
         Err(e) => panic!("{e}"),

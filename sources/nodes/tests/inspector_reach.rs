@@ -9,9 +9,15 @@
 //! each offer a lens of their own somewhere else. The lens skipped out from
 //! under the cursor and could not be clicked at all.
 //!
-//! A circular phylogeny is the worst case and so the case worth pinning: a few
-//! hundred thin diagonal branches, every one of their boxes overlapping most of
-//! the others.
+//! A radial spray of thin diagonal nodes is the worst case, and so the case
+//! worth pinning: a couple of hundred branches, every one of their bounding
+//! boxes overlapping most of the others.
+//!
+//! The scene is built here rather than borrowed from an example. It used to
+//! come from `circos3.py`, which drew a node per branch; that example now draws
+//! its marks directly — which is the right way to draw a big tree and the wrong
+//! way to make this test's worst case. A test that needs a pathological scene
+//! should say so and build one.
 
 use dex_core::prelude::*;
 use dex_nodes::layouts::canvas::layout::{AddCanvasItem, CanvasChildren, NodeScreenRect};
@@ -20,8 +26,84 @@ use dex_nodes::layouts::inspector::{LensRegion, LensTarget};
 use dex_nodes::scripting::{ScriptOutput, run_script};
 use std::sync::Arc;
 
-const CIRCOS3: &str = include_str!("../../../examples/circos3.py");
 const SCREEN: egui::Vec2 = egui::vec2(1000.0, 1000.0);
+
+/// A radial spray of long thin nodes, each one an inspectable child whose
+/// bounding box covers most of the others'.
+const SPRAY: &str = r#"
+import math
+
+BRANCHES = 220
+
+
+class Branch:
+    """One thin diagonal line, drawn corner to corner of whatever box it gets."""
+
+    def __init__(self, index):
+        self.index = index
+
+    def type_name(self):
+        return "Branch %d" % self.index
+
+    def draw(self, ctx):
+        base = ctx.constraints
+        w = base.x.provided_value() if base.x is not None else 0.0
+        h = base.y.provided_value() if base.y is not None else 0.0
+        (x, y) = (base.pos.x, base.pos.y)
+        ctx.draw_node(
+            dex.Path.polyline(
+                [dex.Vector.new(x, y), dex.Vector.new(x + w, y + h)],
+                dex.Stroke.new(1.4, dex.Color.rgb(40, 120, 90)),
+            ),
+            dex.DrawConstraints(pos=dex.ScreenPos.new(0.0, 0.0), x=None, y=None,
+                                wrap=None, should_clip=False),
+        )
+        return dex.DrawResult.Complete(
+            region=dex.ScreenRegion.from_min_size(base.pos, dex.Vector.new(w, h)))
+
+
+class Spray:
+    """Branches radiating from the middle, drawn as inspectable children."""
+
+    def __init__(self, branches):
+        self.branches = branches
+
+    def type_name(self):
+        return "A Spray"
+
+    def owned_nodes(self):
+        return list(self.branches)
+
+    def on_delete(self, ctx):
+        for uid in self.branches:
+            ctx.workspace.delete_node(uid)
+
+    def draw(self, ctx):
+        base = ctx.constraints
+        w = base.x.provided_value() if base.x is not None else 0.0
+        h = base.y.provided_value() if base.y is not None else 0.0
+        (cx, cy) = (base.pos.x + w / 2.0, base.pos.y + h / 2.0)
+        reach = min(w, h) / 2.0 - 20.0
+        for (i, uid) in enumerate(self.branches):
+            angle = 2.0 * math.pi * i / len(self.branches)
+            (ex, ey) = (cx + reach * math.cos(angle), cy + reach * math.sin(angle))
+            (x0, y0) = (min(cx, ex), min(cy, ey))
+            ctx.draw_inspectable_node(
+                uid,
+                dex.DrawConstraints(
+                    pos=dex.ScreenPos.new(x0, y0),
+                    x=dex.AxisConstraint.Exactly(abs(ex - cx) or 1.0),
+                    y=dex.AxisConstraint.Exactly(abs(ey - cy) or 1.0),
+                    wrap=None, should_clip=False,
+                ),
+            )
+        return dex.DrawResult.Complete(
+            region=dex.ScreenRegion.from_min_size(base.pos, dex.Vector.new(w, h)))
+
+
+def transform():
+    return Spray([dex.ws.insert_node_dyn(Branch(i)) for i in range(BRANCHES)])
+"#;
 
 /// A frame's worth of time, so the lens's dwell is measured in frames rather
 /// than in however fast the test happens to run.
@@ -94,13 +176,13 @@ fn plotted() -> (Workspace, Driver) {
     (ws, driver)
 }
 
-/// The phylogeny the example builds.
+/// The pathological scene: many overlapping thin diagonal inspectable nodes.
 fn phylogeny(ws: &mut Workspace) -> Arc<dyn Node> {
     let graph = GraphSnapshot::capture(ws);
     let (handle, actions) = WorkspaceActionHandle::buffered();
-    let built = match run_script(CIRCOS3, "", &handle, &[], graph) {
+    let built = match run_script(SPRAY, "", &handle, &[], graph) {
         Ok(ScriptOutput::Node(node)) => node,
-        Ok(_) => panic!("the example returns the phylogeny it built"),
+        Ok(_) => panic!("the scene is returned as a node"),
         Err(e) => panic!("{e}"),
     };
     drop(handle);

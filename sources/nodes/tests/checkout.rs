@@ -5,6 +5,9 @@
 
 use dex_nodes::primitives::checkout;
 
+/// The library a checked-out script actually runs under.
+const PRELUDE: &str = include_str!("../src/default_prelude.py");
+
 fn no_editor() {
     // Nothing should be launched by a test.
     unsafe {
@@ -32,10 +35,11 @@ fn a_checkout_holds_everything_a_language_server_needs() {
         "layout-test",
         "def transform():\n    pass\n",
         &[("count".to_owned(), "int".to_owned())],
+        "",
     )
     .expect("written");
 
-    for name in ["dex.pyi", "pyrightconfig.json", "main.py"] {
+    for name in ["dex.pyi", "pyrightconfig.json", "main.py", "dex_prelude.py"] {
         assert!(out.dir.join(name).is_file(), "checkout is missing {name}");
     }
     // The stubs are rendered live, not copied from a checked-in file.
@@ -57,7 +61,8 @@ fn a_checkout_holds_everything_a_language_server_needs() {
 #[test]
 fn an_edit_is_pulled_back_without_the_header() {
     no_editor();
-    let out = checkout::write("pull-test", "def transform():\n    pass\n", &[]).expect("written");
+    let out =
+        checkout::write("pull-test", "def transform():\n    pass\n", &[], "").expect("written");
 
     // Nothing changed yet.
     assert!(
@@ -103,6 +108,7 @@ fn a_checkout_typechecks_and_completes() {
         "lsp-test",
         "def transform():\n    return dex.Label.new(f'{count}')\n",
         &globals,
+        "",
     )
     .expect("written");
 
@@ -309,7 +315,7 @@ fn changing_the_environment_rewrites_an_open_checkout() {
     let dir = std::env::temp_dir().join(format!("dex-checkout-{key}"));
     let _ = std::fs::remove_dir_all(&dir);
     let before = settings::venv();
-    let checkout = checkout::write(key, "x = 1\n", &[]).expect("checked out");
+    let checkout = checkout::write(key, "x = 1\n", &[], "").expect("checked out");
 
     settings::set_venv(Some(venv.clone())).expect("the test environment is taken");
     let refreshed = checkout::refresh_config(&checkout).expect("the environment moved");
@@ -433,8 +439,8 @@ fn every_injected_global_type_resolves() {
     // `Table` needs arrow to construct; its declared type is what matters.
     globals.push(("table".to_owned(), "typing.Any".to_owned()));
 
-    let out =
-        checkout::write("global-types", "def transform():\n    pass\n", &globals).expect("written");
+    let out = checkout::write("global-types", "def transform():\n    pass\n", &globals, "")
+        .expect("written");
 
     let run = std::process::Command::new(&checker)
         .arg("--outputjson")
@@ -484,7 +490,7 @@ fn the_example_typechecks_against_the_stubs() {
             .join(name);
         let source = std::fs::read_to_string(&example).expect("example exists");
 
-        let out = checkout::write("example-check", &source, &[]).expect("written");
+        let out = checkout::write("example-check", &source, &[], PRELUDE).expect("written");
         let run = std::process::Command::new(&checker)
             .arg("--outputjson")
             .arg("main.py")
@@ -505,4 +511,52 @@ fn the_example_typechecks_against_the_stubs() {
 
         let _ = std::fs::remove_dir_all(&out.dir);
     }
+}
+
+/// The default prelude typechecks against the stubs.
+///
+/// It is a Python file like any other, and it is the one everybody's editor
+/// opens first — so anything the `dex` module carries but does not *describe*
+/// shows up here as a wall of red. That is exactly what happened to
+/// `prelude_prototypes`: the binding added it to the module, nothing declared
+/// it, and every use of it read as an error.
+#[test]
+fn the_prelude_typechecks_against_the_stubs() {
+    no_editor();
+    let Ok(checker) = which_checker() else {
+        eprintln!("no language server on PATH; skipping");
+        return;
+    };
+    // The prelude imports pyarrow, so the checker needs an environment with it
+    // — the same one the interpreter would use. Without that this would report
+    // a missing import rather than anything about dex.
+    dex_nodes::scripting::init_python();
+    if pyo3::Python::attach(|py| py.import("pyarrow").is_err()) {
+        let demoenv = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demoenv/.venv");
+        if !demoenv.is_dir() {
+            eprintln!("no environment with pyarrow; skipping");
+            return;
+        }
+        let _ = dex_nodes::settings::set_venv(Some(demoenv));
+    }
+    let out = checkout::write("prelude-check", PRELUDE, &[], "").expect("written");
+    let run = std::process::Command::new(&checker)
+        .arg("--outputjson")
+        .arg("main.py")
+        .current_dir(&out.dir)
+        .output()
+        .expect("language server runs");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let errors = stdout
+        .split("\"severity\": \"error\"")
+        .count()
+        .saturating_sub(1);
+    assert_eq!(
+        errors,
+        0,
+        "the default prelude does not typecheck against the stubs:\n{}",
+        &stdout[..stdout.len().min(2000)]
+    );
+
+    let _ = std::fs::remove_dir_all(&out.dir);
 }

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use std::borrow::Cow;
 
-use crate::stubs::{StubClass, StubField, StubMethod};
+use crate::stubs::{StubClass, StubField, StubGlobal, StubMethod};
 use crate::{
     DrawConstraints, DrawContext, DrawResult, Node, NodeContext, NodeHandle, NodeUid, Workspace,
     messages::{
@@ -384,6 +384,22 @@ impl PyNodeContext {
     #[getter]
     fn live(&self) -> bool {
         self.workspace.is_live()
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    StubGlobal {
+        name: "ws",
+        ty: "WorkspaceActionHandle",
+        doc: "This script's handle on the workspace: what it writes through.",
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    StubGlobal {
+        name: "snapshot",
+        ty: "Snapshot",
+        doc: "The graph as it stood when this script started: what it reads through.",
     }
 }
 

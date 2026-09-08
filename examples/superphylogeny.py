@@ -619,10 +619,11 @@ class AtomModel:
         return "%s atom" % (ELEMENT_NAME.get(self.element, self.element))
 
     def owned_nodes(self):
-        return [self.sensor]
+        return [self.sensor] + list(self.kept.values())
 
     def on_delete(self, ctx):
-        ctx.workspace.delete_node(self.sensor)
+        for uid in self.owned_nodes():
+            ctx.workspace.delete_node(uid)
 
     def build_inspector(self, ctx):
         return None
@@ -907,6 +908,11 @@ class GenomeExplorer:
         self.hover = None          # gene index under the pointer, or None
         self.selected = None       # gene index a click chose, or None
         self._boxes = []           # [(x0, y0, x1, y1, index)] this frame
+        # Structures folded for this genome's genes, by gene index. Kept here
+        # rather than on the readout that asks for them: a panel is chrome and
+        # gets rebuilt, and a structure that took a fetch and a fold to get
+        # should not go with it. This is what a clone copies and a delete takes.
+        self.kept = {}
         defn = (records[0][2] if records else "") or (records[0][0] if records else "genome")
         self.title = "%s — %d bp · %d features" % (defn, total_len, len(genes))
 
@@ -1012,7 +1018,6 @@ class GenePanel:
     def __init__(self, explorer, button):
         self.explorer = explorer
         self.button = button
-        self._struct = {}   # gene index -> structure plane uid (fetched once)
 
     def draw(self, ctx):
         base = ctx.constraints
@@ -1069,9 +1074,12 @@ class GenePanel:
                 self._open_structure(ctx.node.workspace.action_handle(), gi)
 
     def _open_structure(self, ws, gi):
-        """Fetch (once) and push the gene's structure fullscreen."""
-        if gi in self._struct:
-            ws.submit_action(ws.root(), dex.PushOverride(node=self._struct[gi]),
+        """Fetch (once) and push the gene's structure fullscreen.
+
+        Kept by the explorer, not by this panel: see `GenomeExplorer.kept`.
+        """
+        if gi in self.explorer.kept:
+            ws.submit_action(ws.root(), dex.PushOverride(node=self.explorer.kept[gi]),
                              "Structure fullscreen")
             return
         g = self.explorer.genes[gi]
@@ -1095,14 +1103,14 @@ class GenePanel:
             return _note("No structure available for this gene.")
 
         uid = async_slot(ws, produce)
-        self._struct[gi] = uid
+        self.explorer.kept[gi] = uid
         ws.submit_action(ws.root(), dex.PushOverride(node=uid), "Structure fullscreen")
 
     def type_name(self):
         return "Gene Readout"
 
     def owned_nodes(self):
-        return [self.button] + list(self._struct.values())
+        return [self.button]
 
     def on_delete(self, ctx):
         for uid in self.owned_nodes():
@@ -1222,42 +1230,46 @@ def build_genome_plane(ws, gbff_text):
 # ======================================================================
 # The tree
 # ======================================================================
+#
+# The tree itself is the prelude's `Phylogeny`, in edge-list mode: one row per
+# node, a `parent` column giving the edges, `depth` carrying cumulative branch
+# length so the radii are to scale, and `leaf_order` fixing where the tips fall.
+# So none of the geometry lives here any more — and, more to the point, this
+# tree answers the same protocol every other view does, which is what lets a
+# genome or a structure opened from it be joined back to the row it came from.
+#
+# What is left is the drilling: a panel in the plane's foreground that reads the
+# selection off the tree and offers to fetch what that leaf points at.
 
 NODE_COL, PARENT_COL, DEPTH_COL = "node", "parent", "depth"
 LEAF_COL, LEAF_ORDER_COL, KEY_COL = "is_leaf", "leaf_order", "key"
 CLADE_COL, LABEL_COL = "phylum", "label"
 
-# Column roles and which columns are metadata (never drawn as annotation rings).
-META_COLS = {"key", "kind", "n_contigs", "domain"}
+#: Columns that describe the tree rather than annotate it.
 STRUCTURAL = {NODE_COL, PARENT_COL, DEPTH_COL, LEAF_COL, LEAF_ORDER_COL,
-              LABEL_COL, CLADE_COL, KEY_COL, "distance", "phylum",
-              "genome", "structures"}
+              LABEL_COL, CLADE_COL, KEY_COL, "distance", "genome", "structures",
+              "kind", "n_contigs", "domain"}
 
-# Matches circos_table.py: the tree in the middle, annotation rings, clade rim.
-OPEN_ANGLE = 0.36
-START_ANGLE = -math.pi / 2 + OPEN_ANGLE / 2.0
-R_CLADE_OUT, R_CLADE_IN = 1.00, 0.955
-R_ANNO_OUT, R_ANNO_IN = 0.945, 0.50
-R_LEAF, R_ROOT = 0.48, 0.04
-BLOCK_INSET = 0.08
-RING_GAP = 0.15
-CURVE_TOL = 0.12
-BRANCH_WIDTH_AT, BRANCH_WIDTH = 420.0, 1.1
-CLADE_FONT, RING_FONT = 11.0, 8.5
-CLADE_LABEL_GAP, RING_LABEL_GAP = 7.0, 4.0
-LABEL_MIN_RADIUS = 170.0
-MIN_CLADE_LABEL_ARC = 26.0
-RAMP_LEVELS = 20
-PADDING = 8.0
-BRANCH_INK = (150, 156, 166)
-TRACK_BG = (240, 242, 246)
-TIP_DOT = 6.0  # the click box; the drawn dot is a fraction of this
+#: How thick an annotation ring is, and the gap before the first.
+RING_W = 14.0
+RING_GAP = 10.0
+#: How many rings are drawn before the rest are dropped: past this they are too
+#: thin to read, and a ring that cannot be read is worse than no ring.
+MAX_RINGS = 6
+
+TIP_DOT = 6.0
+SCRUB_EDGE = (208, 213, 222)
 
 
 def annotation_columns(names):
-    """Annotation columns (those with ':'), grouped and ordered by family."""
-    chosen = [n for n in names
-              if ":" in n and n not in STRUCTURAL and n not in META_COLS]
+    """The columns worth drawing as rings, grouped and ordered by family.
+
+    An annotation is named `thing:family` — `zinc:metal`, `glycolysis:process` —
+    so the families are read off the names and each gets its own hue, with
+    shades within it. Which is what makes twenty rings legible: you are looking
+    for a band of colour, not a particular one of twenty.
+    """
+    chosen = [n for n in names if ":" in n and n not in STRUCTURAL]
     families, grouped = [], {}
     for name in chosen:
         family = name.split(":", 1)[1]
@@ -1266,17 +1278,6 @@ def annotation_columns(names):
             families.append(family)
         grouped[family].append(name)
     return ([name for f in families for name in grouped[f]], grouped, families)
-
-
-def column_kind(values):
-    """`("binary", None)` or `("ramp", (lo, hi))` for a column's values."""
-    nums = [v for v in (as_float(x) for x in values) if v is not None]
-    if not nums:
-        return ("binary", None)
-    lo, hi = min(nums), max(nums)
-    if all(v in (0.0, 1.0) for v in nums):
-        return ("binary", None)
-    return ("ramp", (lo, hi))
 
 
 def ring_palette(grouped, families):
@@ -1291,18 +1292,6 @@ def ring_palette(grouped, families):
     return out
 
 
-def as_int(x):
-    if x is None or x == "":
-        return None
-    try:
-        return int(x)
-    except (TypeError, ValueError):
-        try:
-            return int(float(x))
-        except (TypeError, ValueError):
-            return None
-
-
 def as_float(x):
     if x is None or x == "":
         return None
@@ -1312,128 +1301,87 @@ def as_float(x):
         return None
 
 
-def polar(cx, cy, r, a):
-    return (cx + r * math.cos(a), cy + r * math.sin(a))
+class AnnotationRings:
+    """Rings of per-tip annotation outside the tree.
 
+    Placed by asking the tree where it drew each row, rather than by working the
+    angles out again — so the rings follow whatever the tree did, at whatever
+    zoom, and cannot end up pointing at the wrong tip.
+    """
 
-def arc(cx, cy, r, a0, a1):
-    if r <= 0.0:
-        return [polar(cx, cy, r, a0), polar(cx, cy, r, a1)]
-    theta = math.sqrt(8.0 * CURVE_TOL / r)
-    steps = max(2, int(abs(a1 - a0) / theta) + 2)
-    return [polar(cx, cy, r, a0 + (a1 - a0) * i / (steps - 1)) for i in range(steps)]
+    def __init__(self, tree, columns, inks):
+        self.tree = tree
+        self.columns = list(columns)
+        self.inks = dict(inks)
 
-
-def sector(cx, cy, r_in, r_out, a0, a1):
-    return arc(cx, cy, r_out, a0, a1) + arc(cx, cy, r_in, a1, a0)
-
-
-def sectors(cx, cy, r_in, r_out, a0, a1):
-    thickness = r_out - r_in
-    if thickness <= 0.0 or r_out <= 0.0:
+    def owned_nodes(self):
         return []
-    limit = 1.0 - max(min(0.25 * thickness / r_out, 1.0), 0.0)
-    widest = 2.0 * math.acos(max(-1.0, min(limit, 1.0))) or (math.pi / 6.0)
-    sweep = a1 - a0
-    parts = max(1, int(math.ceil(abs(sweep) / widest)))
-    step = sweep / parts
-    return [sector(cx, cy, r_in, r_out, a0 + step * i, a0 + step * (i + 1))
-            for i in range(parts)]
 
+    def type_name(self):
+        return "Annotation Rings"
 
-class Tree:
-    def __init__(self, columns):
-        node_ids = [as_int(v) for v in columns[NODE_COL]]
-        parents = [as_int(v) for v in columns[PARENT_COL]]
-        depths = [as_float(v) or 0.0 for v in columns[DEPTH_COL]]
-        is_leaf = [bool(as_int(v)) for v in columns[LEAF_COL]]
-        leaf_order = [as_int(v) for v in columns[LEAF_ORDER_COL]]
-        self.row_of = {n: i for (i, n) in enumerate(node_ids) if n is not None}
-        self.children = {n: [] for n in self.row_of}
-        self.parent, self.root = {}, None
-        for (i, n) in enumerate(node_ids):
-            if n is None:
-                continue
-            p = parents[i]
-            self.parent[n] = p
-            if p is None or p not in self.row_of:
-                self.root = n
-            else:
-                self.children[p].append(n)
-        self.depth = {n: depths[self.row_of[n]] for n in self.row_of}
-        self.is_leaf = {n: is_leaf[self.row_of[n]] for n in self.row_of}
-        self.max_depth = max(self.depth.values()) if self.depth else 1.0
-        self.tips = sorted(
-            (n for n in self.row_of if self.is_leaf[n]),
-            key=lambda n: (leaf_order[self.row_of[n]]
-                           if leaf_order[self.row_of[n]] is not None else self.row_of[n]))
-        self.angle = {}
-        step = (2.0 * math.pi - OPEN_ANGLE) / max(len(self.tips) - 1, 1)
-        self.step = step
-        for (i, t) in enumerate(self.tips):
-            self.angle[t] = START_ANGLE + step * i
-        self._resolve_angles(self.root)
-        self.clade, self.clade_of_tip = {}, {}
-        clade_col = columns.get(CLADE_COL)
-        if clade_col:
-            for t in self.tips:
-                self.clade_of_tip[t] = clade_col[self.row_of[t]]
-            self._resolve_clades(self.root)
+    def draw(self, ctx):
+        base = ctx.constraints
+        w = base.x.provided_value() if base.x is not None else None
+        h = base.y.provided_value() if base.y is not None else None
+        if w is None or h is None or not self.columns:
+            return dex.DrawResult.Complete(region=None)
+        ws = ctx.node.workspace
+        drawn = ws.send_request(self.tree, DrawnPoints()) or {}
+        table = ws.send_request(self.tree, SourceTable())
+        if not drawn or table is None:
+            return dex.DrawResult.Complete(region=None)
 
-    def _resolve_angles(self, n):
-        if n is None:
-            return 0.0
-        kids = self.children.get(n, [])
-        if not kids:
-            return self.angle.get(n, 0.0)
-        a = [self._resolve_angles(k) for k in kids]
-        self.angle[n] = sum(a) / len(a)
-        return self.angle[n]
+        # Only the tips carry annotations; an internal node has no value to show.
+        order = (table.column(LEAF_ORDER_COL).to_pylist()
+                 if LEAF_ORDER_COL in table.column_names else None)
+        tips = {row: to_local(ctx, p) for (row, p) in drawn.items()
+                if order is None or (row < len(order) and is_num(order[row]))}
+        if not tips:
+            return dex.DrawResult.Complete(region=None)
 
-    def _resolve_clades(self, n):
-        if n is None:
-            return set()
-        if self.is_leaf.get(n):
-            self.clade[n] = self.clade_of_tip.get(n)
-            return {self.clade_of_tip.get(n)}
-        seen = set()
-        for k in self.children.get(n, []):
-            seen |= self._resolve_clades(k)
-        self.clade[n] = next(iter(seen)) if len(seen) == 1 else None
-        return seen
+        points = list(tips.values())
+        cx = sum(p[0] for p in points) / len(points)
+        cy = sum(p[1] for p in points) / len(points)
+        reach = max(math.hypot(p[0] - cx, p[1] - cy) for p in points)
+        if reach <= 1.0:
+            return dex.DrawResult.Complete(region=None)
+        width = 2.0 * math.pi / max(len(tips), 1)
 
-    def radius_frac(self, n):
-        t = self.depth[n] / self.max_depth if self.max_depth > 0 else 0.0
-        return R_ROOT + (R_LEAF - R_ROOT) * t
-
-    def clade_runs(self):
-        runs, start = [], None
-        for t in self.tips:
-            c = self.clade_of_tip.get(t)
-            if start is None or c != start[0]:
-                if start is not None:
-                    runs.append(start)
-                start = [c, self.angle[t], self.angle[t]]
-            else:
-                start[2] = self.angle[t]
-        if start is not None:
-            runs.append(start)
-        return [(c, a0, a1) for (c, a0, a1) in runs if c not in (None, "")]
+        for (band, column) in enumerate(self.columns[:MAX_RINGS]):
+            r0 = reach + RING_GAP + band * RING_W
+            values = table.column(column).to_pylist()
+            ink = self.inks.get(column, BRANCH_INK)
+            for (row, (px, py)) in tips.items():
+                if row >= len(values):
+                    continue
+                v = as_float(values[row])
+                if not v:
+                    continue
+                angle = math.atan2(py - cy, px - cx)
+                polygon(ctx, sector_points(cx, cy, r0, r0 + RING_W - 3.0,
+                                           angle - width / 2.0, angle + width / 2.0),
+                        ink)
+        return dex.DrawResult.Complete(
+            region=dex.ScreenRegion.from_min_size(base.pos, dex.Vector.new(w, h)))
 
 
 class TreePanel:
     """The hovered and selected leaf, pinned in the tree plane's foreground.
 
-    It reads the tree's hover and selection directly (one view drawn in two
-    bands — only the ring can know which tip a click landed on). A hover names the
-    leaf along the bottom; a click shows its label and an "Open genome" button,
-    which fetches that leaf's genome and opens it fullscreen.
+    It knows the tree only by id and asks it the protocol's own questions — the
+    hovered row, the selected one, that row's record. So the drilling is written
+    against the same messages any other consumer uses, and would work just as
+    well against a scatter of the same table.
+
+    A hover names the leaf along the bottom; a click shows its label and an
+    "Open genome" button, which fetches that leaf's genome and opens it
+    fullscreen.
     """
 
     def __init__(self, tree, button):
         self.tree = tree
         self.button = button
-        self._genome = {}   # tip id -> genome plane uid (fetched once)
 
     def draw(self, ctx):
         base = ctx.constraints
@@ -1441,17 +1389,23 @@ class TreePanel:
         h = base.y.provided_value() if base.y is not None else None
         if w is None or h is None or not (math.isfinite(w) and math.isfinite(h)):
             return dex.DrawResult.Complete(region=None)
-        tree = self.tree
-        if tree.hover is not None and tree.hover in tree.tip_info:
-            (key, label, _c) = tree.tip_info[tree.hover]
-            _text(ctx, "%s   ·   %s" % (label, key),
+        ws = ctx.node.workspace
+
+        hovered = ws.send_request(self.tree, HoverRow())
+        if hovered is not None:
+            record = ws.send_request(self.tree, RowValues(hovered)) or {}
+            _text(ctx, "%s   ·   %s" % (record.get(LABEL_COL, ""), record.get(KEY_COL, "")),
                   base.pos.x + 12.0, base.pos.y + h - 22.0, 11.0, INK)
-        if tree.selected is not None and tree.selected in tree.tip_info:
-            self._overlay(ctx, base, w, h, tree.selected)
+
+        selected = ws.send_request(self.tree, Selection())
+        if selected is not None:
+            record = ws.send_request(self.tree, RowValues(selected)) or {}
+            if record.get(KEY_COL):
+                self._overlay(ctx, ws, base, w, h, selected, record)
         return dex.DrawResult.Complete(region=None)
 
-    def _overlay(self, ctx, base, w, h, t):
-        (key, label, _c) = self.tree.tip_info[t]
+    def _overlay(self, ctx, ws, base, w, h, row, record):
+        (key, label) = (record.get(KEY_COL, ""), record.get(LABEL_COL, ""))
         font = dex.Font.proportional(11.0)
         wrap = dex.TextWrap.singleline()
         rows = [label, key]
@@ -1465,300 +1419,42 @@ class TreePanel:
             _box(x, y, pw, ph))
         _text(ctx, label, x + 9.0, y + 8.0, 12.0, INK)
         _text(ctx, key, x + 9.0, y + 24.0, 10.0, FAINT)
-        by = y + ph - 26.0
-        ctx.draw_node(self.button, _box(x + 9.0, by, pw - 18.0, 20.0))
-        if ctx.node.workspace.send_request(self.button, dex.TakeClicked()):
-            self._open(ctx.node.workspace.action_handle(), t, key)
+        ctx.draw_node(self.button, _box(x + 9.0, y + ph - 26.0, pw - 18.0, 20.0))
+        if ws.send_request(self.button, dex.TakeClicked()):
+            self._open(ws, row, key)
 
-    def _open(self, ws, t, key):
-        if t in self._genome:
-            ws.submit_action(ws.root(), dex.PushOverride(node=self._genome[t]),
-                             "Genome fullscreen")
+    def _open(self, ws, row, key):
+        """Show this leaf's genome, fetching it the first time only.
+
+        The genome is kept by the *tree*, not by this panel. A readout is chrome
+        — redrawn, replaced, rebuilt — and a genome that took a network round
+        trip to get should not go with it. The tree is what a clone copies and
+        what a delete cleans up after, so that is where it belongs.
+        """
+        kept = ws.send_request(self.tree, KeptNode(row))
+        if kept is not None:
+            ws.action_handle().submit_action(
+                ws.action_handle().root(), dex.PushOverride(node=kept),
+                "Genome fullscreen")
             return
 
-        def produce(ws):
-            return build_genome_plane(ws, fetch_gbff(key))
+        def produce(handle):
+            return build_genome_plane(handle, fetch_gbff(key))
 
-        uid = async_slot(ws, produce)
-        self._genome[t] = uid
-        ws.submit_action(ws.root(), dex.PushOverride(node=uid), "Genome fullscreen")
+        handle = ws.action_handle()
+        uid = ws.send_request(self.tree, KeepNode(row, async_slot(handle, produce)))
+        handle.submit_action(handle.root(), dex.PushOverride(node=uid),
+                             "Genome fullscreen")
 
     def type_name(self):
         return "Leaf Readout"
 
     def owned_nodes(self):
-        return [self.button] + list(self._genome.values())
+        return [self.button]
 
     def on_delete(self, ctx):
         for uid in self.owned_nodes():
             ctx.workspace.delete_node(uid)
-
-    def build_inspector(self, ctx):
-        return None
-
-
-class SuperPhylogeny:
-    """The circos_table tree — branches, annotation rings, clade rim (all cached
-    and run-merged) — picked by one sensor rather than a node per tip.
-
-    It records each leaf's screen position every frame and hit-tests the pointer
-    against them; the `TreePanel` in the plane's foreground reads the hovered and
-    selected tip off this object and drills into that leaf's genome. A node per
-    tip was what made a full tree crawl.
-    """
-
-    def __init__(self, columns, tip_info, sensor):
-        self.columns = {k: list(v) for (k, v) in columns.items()}
-        self.tip_info = dict(tip_info)   # tree tip id -> (key, label, color)
-        self.sensor = sensor
-        self.hover = None                # tip id under the pointer, or None
-        self.selected = None             # tip id a click chose, or None
-        self._tip_pos = {}               # tip id -> (x, y) this frame
-        names = list(self.columns.keys())
-        self.anno_cols, self.grouped, self.families = annotation_columns(names)
-        self.kinds = {n: column_kind(self.columns[n]) for n in self.anno_cols}
-        self.ring_ink = ring_palette(self.grouped, self.families)
-        vals = []
-        for v in self.columns.get(CLADE_COL, []):
-            if v not in (None, "") and v not in vals:
-                vals.append(v)
-        self.clade_ink = {v: hsv_rgb((i / max(len(vals), 1)) % 1.0, 0.42, 0.74)
-                          for (i, v) in enumerate(vals)}
-        self._built = None
-        self._paths = []
-        self._labels = []
-        self._tree = None
-
-    def __getstate__(self):
-        state = self.__dict__.copy()
-        state["_tip_pos"] = {}
-        return state
-
-    # -- drawing ---------------------------------------------------------
-
-    def draw(self, ctx):
-        base = ctx.constraints
-        width = base.x.provided_value() if base.x is not None else None
-        height = base.y.provided_value() if base.y is not None else None
-        if width is None or height is None:
-            return dex.DrawResult.Complete(region=None)
-        radius = min(width, height) / 2.0 - PADDING
-        if radius <= 0.0:
-            return dex.DrawResult.Complete(region=None)
-        if self._built != (width, height):
-            self._build(ctx, radius)
-            self._built = (width, height)
-        cx = base.pos.x + width / 2.0
-        cy = base.pos.y + height / 2.0
-        origin = dex.DrawConstraints(pos=dex.ScreenPos.new(cx, cy), x=None, y=None,
-                                     wrap=None, should_clip=False)
-        for path in self._paths:
-            ctx.draw_node(path, origin)
-        for (label, ox, oy) in self._labels:
-            ctx.draw_node(label, dex.DrawConstraints(
-                pos=dex.ScreenPos.new(cx + ox, cy + oy), x=None, y=None,
-                wrap=None, should_clip=False))
-        # A dot at each leaf's *branch endpoint* (its depth radius), inside the
-        # annotation rings — a branch tip, not the outer ring — and where the
-        # pointer can find it. Drawn here rather than by a node apiece: thousands
-        # of tip-nodes, each hit-tested every frame, were what made this slow.
-        tree = self._tree
-        self._tip_pos = {}
-        if tree is not None:
-            for t in tree.tips:
-                (x, y) = polar(cx, cy, radius * tree.radius_frac(t), tree.angle[t])
-                self._tip_pos[t] = (x, y)
-                (_k, _l, color) = self.tip_info.get(t, (None, None, BRANCH_INK))
-                _polygon(ctx, octagon(x, y, TIP_DOT * 0.30), color)
-
-        # One sensor over the whole ring: hover to name a leaf, click to select.
-        ws = ctx.node.workspace
-        ctx.draw_node(self.sensor, dex.DrawConstraints(
-            pos=base.pos, x=dex.AxisConstraint.Exactly(width),
-            y=dex.AxisConstraint.Exactly(height), wrap=None, should_clip=False))
-        pointer = ws.send_request(self.sensor, dex.PointerPos())
-        self.hover = self._tip_at(pointer) if pointer is not None else None
-        if ws.send_request(self.sensor, dex.TakeClicked()) and pointer is not None:
-            self.selected = self.hover
-        return dex.DrawResult.Complete(
-            region=dex.ScreenRegion.from_min_size(base.pos, dex.Vector.new(width, height)))
-
-    def _tip_at(self, p):
-        """The leaf nearest the pointer, within a dot's reach, or None."""
-        best = None
-        reach = TIP_DOT * 1.5
-        for (t, (x, y)) in self._tip_pos.items():
-            gap = (x - p.x) ** 2 + (y - p.y) ** 2
-            if gap <= reach * reach and (best is None or gap < best[0]):
-                best = (gap, t)
-        return None if best is None else best[1]
-
-    # -- building (once per size) ---------------------------------------
-
-    def _build(self, ctx, radius):
-        self._paths, self._labels = [], []
-        tree = Tree(self.columns)
-        self._tree = tree
-        if not tree.tips or tree.root is None:
-            return
-        self._build_branches(radius, tree)
-        self._build_rings(ctx, radius, tree)
-        self._build_clades(ctx, radius, tree)
-
-    def _build_branches(self, radius, tree):
-        """Branches, tinted by clade; a node whose whole subtree shares one
-        colour is one retraced polyline rather than one stroke per branch."""
-        weight = max(0.6, BRANCH_WIDTH * radius / BRANCH_WIDTH_AT)
-        for n in tree.row_of:
-            kids = tree.children.get(n, [])
-            if not kids:
-                continue
-            r = radius * tree.radius_frac(n)
-            node_ink = self.clade_ink.get(tree.clade.get(n), BRANCH_INK)
-            skids = sorted(kids, key=lambda k: tree.angle[k])
-            inks = [self.clade_ink.get(tree.clade.get(k), BRANCH_INK) for k in skids]
-            if all(ci == node_ink for ci in inks):
-                pts = []
-                for (idx, k) in enumerate(skids):
-                    a = tree.angle[k]
-                    rk = radius * tree.radius_frac(k)
-                    if idx > 0:
-                        pts.extend(arc(0.0, 0.0, r, tree.angle[skids[idx - 1]], a))
-                    else:
-                        pts.append(polar(0.0, 0.0, r, a))
-                    pts.append(polar(0.0, 0.0, rk, a))
-                    pts.append(polar(0.0, 0.0, r, a))
-                self._stroke(pts, node_ink, weight)
-                continue
-            angles = [tree.angle[k] for k in skids]
-            self._stroke(arc(0.0, 0.0, r, min(angles), max(angles)), node_ink, weight)
-            for (k, k_ink) in zip(skids, inks):
-                self._stroke([polar(0.0, 0.0, r, tree.angle[k]),
-                              polar(0.0, 0.0, radius * tree.radius_frac(k), tree.angle[k])],
-                             k_ink, weight)
-
-    def _ring_runs(self, tree, name):
-        """`(a0, a1, rgb)` per drawable run of a ring — merged, absent skipped."""
-        kind, span = self.kinds[name]
-        ink = self.ring_ink[name]
-        col = self.columns[name]
-        half = tree.step * (0.5 - BLOCK_INSET)
-
-        def level_colour(v):
-            if kind == "binary":
-                return ink if v > 0.0 else None
-            lo, hi = span
-            if hi <= lo:
-                return None
-            q = round((v - lo) / (hi - lo) * RAMP_LEVELS)
-            return lerp_rgb(TRACK_BG, ink, q / RAMP_LEVELS)
-
-        runs, run = [], None
-        for t in tree.tips:
-            v = as_float(col[tree.row_of[t]])
-            rgb = None if v is None else level_colour(v)
-            if rgb is None:
-                if run is not None:
-                    runs.append(run)
-                    run = None
-                continue
-            if run is not None and run[0] == rgb:
-                run[2] = tree.angle[t]
-            else:
-                if run is not None:
-                    runs.append(run)
-                run = [rgb, tree.angle[t], tree.angle[t]]
-        if run is not None:
-            runs.append(run)
-        return [(a0 - half, a1 + half, rgb) for (rgb, a0, a1) in runs]
-
-    def _build_rings(self, ctx, radius, tree):
-        n = len(self.anno_cols)
-        if n == 0:
-            return
-        thickness = (R_ANNO_OUT - R_ANNO_IN) / n
-        font = dex.Font.proportional(RING_FONT)
-        wrap = dex.TextWrap.singleline()
-        a_lo = START_ANGLE - OPEN_ANGLE / 2.0
-        a_hi = START_ANGLE + 2.0 * math.pi - 1.5 * OPEN_ANGLE
-        for part in sectors(0.0, 0.0, radius * R_ANNO_IN, radius * R_ANNO_OUT, a_lo, a_hi):
-            self._polygon(part, TRACK_BG)
-        specs = []
-        for (i, name) in enumerate(self.anno_cols):
-            r_lo = R_ANNO_IN + thickness * i
-            r_in = radius * (r_lo + thickness * RING_GAP)
-            r_out = radius * (r_lo + thickness * (1.0 - RING_GAP))
-            for (b0, b1, rgb) in self._ring_runs(tree, name):
-                for part in sectors(0.0, 0.0, r_in, r_out, b0, b1):
-                    self._polygon(part, rgb)
-            specs.append(((r_in + r_out) / 2.0, name.split(":", 1)[0]))
-        if radius >= LABEL_MIN_RADIUS:
-            self._place_ring_labels(ctx, specs, font, wrap)
-
-    def _place_ring_labels(self, ctx, specs, font, wrap):
-        measured = [(r, text, ctx.measure_text(text, font, wrap)) for (r, text) in specs]
-        line_h = max((m.height for (_, _, m) in measured), default=0.0) + 3.0
-        prev = None
-        for (r, text, m) in measured:
-            natural = -r
-            cy = natural if prev is None else min(natural, prev - line_h)
-            prev = cy
-            lbl = dex.Label.new(text)
-            lbl.font = font
-            lbl.color = dex.Color.rgb(*INK)
-            self._labels.append((lbl, -m.width / 2.0, cy - m.height / 2.0))
-            if natural - cy > 2.0:
-                self._stroke([(0.0, cy + m.height / 2.0), (0.0, natural)],
-                             (205, 209, 214), 0.8)
-
-    def _build_clades(self, ctx, radius, tree):
-        if not self.clade_ink:
-            return
-        r_in, r_out = radius * R_CLADE_IN, radius * R_CLADE_OUT
-        named = radius >= LABEL_MIN_RADIUS
-        font = dex.Font.proportional(CLADE_FONT)
-        wrap = dex.TextWrap.singleline()
-        pad = tree.step * 0.5
-        for (clade, a0, a1) in tree.clade_runs():
-            rgb = self.clade_ink.get(clade, BRANCH_INK)
-            (b0, b1) = (a0 - pad, a1 + pad)
-            for part in sectors(0.0, 0.0, r_in, r_out, b0, b1):
-                self._polygon(part, rgb)
-            if named and r_out * (b1 - b0) >= MIN_CLADE_LABEL_ARC:
-                mid = (b0 + b1) / 2.0
-                m = ctx.measure_text(clade, font, wrap)
-                (x, y) = polar(0.0, 0.0, r_out + CLADE_LABEL_GAP, mid)
-                x += math.cos(mid) * m.width / 2.0
-                y += math.sin(mid) * m.height / 2.0
-                lbl = dex.Label.new(clade)
-                lbl.font = font
-                lbl.color = dex.Color.rgb(*INK)
-                self._labels.append((lbl, x - m.width / 2.0, y - m.height / 2.0))
-
-    def _stroke(self, pts, rgb, width):
-        if len(pts) < 2:
-            return
-        self._paths.append(dex.Path.polyline(
-            [dex.Vector.new(x, y) for (x, y) in pts],
-            dex.Stroke.new(width, dex.Color.rgb(*rgb))))
-
-    def _polygon(self, pts, rgb):
-        if len(pts) < 3:
-            return
-        self._paths.append(dex.Path.polygon(
-            [dex.Vector.new(x, y) for (x, y) in pts],
-            dex.Color.rgb(rgb[0], rgb[1], rgb[2]), dex.Stroke.none()))
-
-    # -- messages --------------------------------------------------------
-
-    def type_name(self):
-        return "A Super Phylogeny"
-
-    def owned_nodes(self):
-        return [self.sensor]
-
-    def on_delete(self, ctx):
-        ctx.workspace.delete_node(self.sensor)
 
     def build_inspector(self, ctx):
         return None
@@ -1778,42 +1474,33 @@ TREE_SIZE = 1100.0
 # ======================================================================
 
 
-def _columns(batch):
-    batch = batch.combine_chunks() if hasattr(batch, "combine_chunks") else batch
-    return {name: batch.column(i).to_pylist() for (i, name) in enumerate(batch.column_names)}
+def build(ws, source):
+    """The tree, its annotation rings, and the leaf panel in its foreground."""
+    frame = Frame(source)
+    tree = build_plot(
+        ws, Phylogeny,
+        frame=frame,
+        x=NODE_COL,
+        parent=PARENT_COL,
+        depth=DEPTH_COL,
+        leaf_order=LEAF_ORDER_COL,
+        color=CLADE_COL,
+        key=KEY_COL,
+        shape="circular",
+    )
+    # The plane's foreground shows the readout, so the tree does not draw its
+    # own: a card drawn inside the tree would be magnified along with it.
+    tree.chrome = False
+    body = ws.insert_node_dyn(tree)
 
-
-def build(ws, columns):
-    """Build the tree, its picking sensor, and the leaf panel in its foreground."""
-    tree = Tree(columns)
-    key_col = columns.get(KEY_COL, [])
-    label_col = columns.get(LABEL_COL, [])
-    clade_col = columns.get(CLADE_COL, [])
-    inks = {}
-    vals = []
-    for v in clade_col:
-        if v not in (None, "") and v not in vals:
-            vals.append(v)
-    for (i, v) in enumerate(vals):
-        inks[v] = hsv_rgb((i / max(len(vals), 1)) % 1.0, 0.42, 0.7)
-    tip_info = {}
-    for t in tree.tips:
-        row = tree.row_of[t]
-        key = key_col[row] if row < len(key_col) else ""
-        if not key:
-            continue
-        label = label_col[row] if row < len(label_col) else key
-        color = inks.get(tree.clade_of_tip.get(t), BRANCH_INK)
-        tip_info[t] = (key, label, color)
-    sensor = ws.insert_node_dyn(dex.InteractionBox.sensing(True, True, False))
-    sp = SuperPhylogeny(columns, tip_info, sensor)
-    # The tree is a single item on a pan/zoom canvas, its leaf panel pinned in
-    # the plane's foreground so it stays legible at any magnification.
-    body = ws.insert_node_dyn(sp)
+    (columns, grouped, families) = annotation_columns(frame.columns)
+    rings = ws.insert_node_dyn(
+        AnnotationRings(body, columns, ring_palette(grouped, families)))
     button = dex.Button.build(ws, dex.Label.new("Open genome"))
-    panel = ws.insert_node_dyn(TreePanel(sp, button))
+    panel = ws.insert_node_dyn(TreePanel(body, button))
+    # The rings first, so the panel sits over them.
     return on_plane(ws, body, (TREE_SIZE, TREE_SIZE), "Placed the tree",
-                    [panel], name="Phylogeny")
+                    [rings, panel], name="Phylogeny")
 
 
 def _find_table():
@@ -1827,4 +1514,4 @@ def transform():
     batch = _find_table()
     if batch is None:
         raise ValueError("wire the phylogeny Table into this transform")
-    return build(dex.ws, _columns(batch))
+    return build(dex.ws, batch)

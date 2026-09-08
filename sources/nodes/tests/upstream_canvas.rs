@@ -52,9 +52,17 @@ fn operator(ws: &Workspace, name: &str, source: &str) -> (NodeUid, [NodeUid; 2])
         )),
     );
     let ports = [NodeUid::mint(), NodeUid::mint()];
-    for (port, label) in ports.iter().zip(["a", "b"]) {
+    // The names are what the script binds; the label is the row's own word for
+    // the argument and does not matter here.
+    for (port, name) in ports.iter().zip(["a", "b"]) {
         let arg = NodeUid::mint();
-        LambdaArg::build_with(handle.clone(), arg.cast(), *port, label.to_owned());
+        LambdaArg::build_with(
+            handle.clone(),
+            arg.cast(),
+            *port,
+            "label".to_owned(),
+            name.to_owned(),
+        );
         handle.submit_action(args, "add", AddArgAt { arg });
     }
     (uid, ports)

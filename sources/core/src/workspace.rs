@@ -79,6 +79,9 @@ pub struct Workspace {
 
     /// This frame's record of what the pointer is over. Rebuilt from scratch every frame.
     probe: InspectProbe,
+
+    /// The egui context the last frame was drawn with, if there has been one.
+    egui: Option<egui::Context>,
 }
 
 #[utils::dynamic_scoped(PyWorkspace)]
@@ -96,6 +99,7 @@ impl Workspace {
             actions: action_recv,
             scheduler: ComputeScheduler::spawn(action_tx),
             probe: InspectProbe::default(),
+            egui: None,
         }
     }
 
@@ -113,6 +117,7 @@ impl Workspace {
             actions: action_recv,
             scheduler: ComputeScheduler::spawn(action_tx),
             probe: InspectProbe::default(),
+            egui: None,
         }
     }
 
@@ -137,6 +142,7 @@ impl Workspace {
             actions,
             scheduler: ComputeSchedulerHandle::disconnected(),
             probe: InspectProbe::default(),
+            egui: None,
         }
     }
 
@@ -274,9 +280,18 @@ impl Workspace {
     pub fn draw_frame(&mut self, ui: &mut Ui, draw_area: Rect) {
         self.probe
             .begin_frame(ui.ctx().pointer_latest_pos().map(ScreenPos::from));
+        // Kept before ticking, so a node that ticks can ask about focus.
+        self.egui = Some(ui.ctx().clone());
         self.tick_all();
         self.draw_root(ui, draw_area);
         self.process_actions();
+    }
+
+    /// Whether the control `id` names currently holds keyboard focus.
+    #[dynamic(skip)] // egui state; not for scripts
+    pub fn has_focus(&self, id: egui::Id) -> Option<bool> {
+        let ctx = self.egui.as_ref()?;
+        Some(ctx.memory(|memory| memory.has_focus(id)))
     }
 
     /// Tick every live node, drawn or not. Part of a frame; exposed so a host
@@ -951,6 +966,26 @@ impl<'ctx> DrawContext<'ctx> {
             height: galley.rect.height(),
             row_height: galley.rows.first().map_or(0.0, |r| r.height()),
             rows: galley.rows.len() as u32,
+        }
+    }
+
+    /// A point in this node's own drawing coordinates, as it lands on screen.
+    pub fn to_global(&self, pos: ScreenPos) -> ScreenPos {
+        match self.ui.ctx().layer_transform_to_global(self.ui.layer_id()) {
+            Some(transform) => ScreenPos::from(transform.mul_pos(egui::Pos2::from(pos))),
+            None => pos,
+        }
+    }
+
+    /// The inverse of [`DrawContext::to_global`]: a point on screen, in this node's own drawing coordinates.
+    pub fn from_global(&self, pos: ScreenPos) -> ScreenPos {
+        match self
+            .ui
+            .ctx()
+            .layer_transform_from_global(self.ui.layer_id())
+        {
+            Some(transform) => ScreenPos::from(transform.mul_pos(egui::Pos2::from(pos))),
+            None => pos,
         }
     }
 

@@ -1,0 +1,1512 @@
+//! The default prelude: the library every workspace opens with.
+//!
+//! It is compiled into the binary and run before every lambda, so it has to
+//! parse, run, and answer for itself. These tests build views out of it the way
+//! a transform would, draw them, and put the protocol's own questions to them.
+
+use dex_core::prelude::*;
+use dex_nodes::scripting::{ScriptOutput, ScriptValue, run_script};
+
+const PRELUDE: &str = include_str!("../src/default_prelude.py");
+const SCREEN: egui::Vec2 = egui::vec2(760.0, 560.0);
+
+/// Whether this interpreter can do Arrow at all.
+///
+/// The prelude requires pyarrow — it is how a table crosses into a script. The
+/// repo keeps an environment with it under `demoenv/`, so a bare interpreter is
+/// pointed at that rather than skipping every test that matters. `VIRTUAL_ENV`
+/// cannot be used for this: pyo3 reads it while starting the interpreter and
+/// then cannot find the standard library.
+fn has_pyarrow() -> bool {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    dex_nodes::scripting::init_python();
+    ONCE.call_once(|| {
+        if pyo3::Python::attach(|py| py.import("pyarrow").is_ok()) {
+            return;
+        }
+        let demoenv = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demoenv/.venv");
+        if demoenv.is_dir() {
+            let _ = dex_nodes::settings::set_venv(Some(demoenv));
+        }
+    });
+    pyo3::Python::attach(|py| py.import("pyarrow").is_ok())
+}
+
+/// Run `script` against the default prelude, seat what it returns as the root,
+/// and hand back the workspace.
+fn built(script: &str) -> (Workspace, NodeUid) {
+    dex_nodes::scripting::init_python();
+    let mut ws = Workspace::new_empty();
+    let (handle, actions) = WorkspaceActionHandle::buffered();
+    let args: [(String, ScriptValue); 0] = [];
+    // A script may hand back the node itself, or the id of one it already
+    // seated — a layout built with `build` does the latter.
+    let output = match run_script(script, PRELUDE, &handle, &args, GraphSnapshot::capture(&ws)) {
+        Ok(output) => output,
+        Err(e) => panic!("{e}"),
+    };
+    let root = match output {
+        ScriptOutput::Node(node) => ws.action_handle().insert_node_dyn(node),
+        ScriptOutput::Handle(uid) => uid,
+        ScriptOutput::Nothing => panic!("the script returns something"),
+    };
+    drop(handle);
+    for action in actions.try_iter() {
+        ws.submit_action_dyn(action);
+    }
+    ws.process_pending();
+    ws.set_root(root);
+    ws.process_pending();
+    (ws, root)
+}
+
+/// One frame with the given events; returns how many shapes were painted.
+fn frame(ws: &mut Workspace, ctx: &egui::Context, events: Vec<egui::Event>) -> usize {
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN);
+    let input = egui::RawInput {
+        screen_rect: Some(screen),
+        events,
+        ..Default::default()
+    };
+    let out = ctx.clone().run_ui(input, |c| {
+        egui::CentralPanel::default().show(c, |ui| {
+            ws.draw_frame(ui, screen);
+        });
+    });
+    fn count(shape: &egui::Shape) -> usize {
+        match shape {
+            egui::Shape::Vec(inner) => inner.iter().map(count).sum(),
+            _ => 1,
+        }
+    }
+    out.shapes.iter().map(|c| count(&c.shape)).sum()
+}
+
+/// Draw twice — the first pass sizes, the second paints.
+fn drawn(ws: &mut Workspace, ctx: &egui::Context) -> usize {
+    let mut painted = 0;
+    for _ in 0..2 {
+        painted = frame(ws, ctx, Vec::new());
+    }
+    painted
+}
+
+fn context() -> egui::Context {
+    let ctx = egui::Context::default();
+    dex_nodes::fonts::install_fonts(&ctx);
+    ctx
+}
+
+/// Run a script of assertions against the prelude, and hand back its verdict.
+///
+/// The pure parts of the library — the statistics, the tree building — are
+/// checked from Python rather than from here, because that is the language they
+/// are written in and an assertion beside the code it is about reads better
+/// than one that has to reach across the bridge to say the same thing.
+fn checked(script: &str) -> String {
+    let (handle, _actions) = WorkspaceActionHandle::buffered();
+    let ws = Workspace::new_empty();
+    let args: [(String, ScriptValue); 0] = [];
+    let out = run_script(script, PRELUDE, &handle, &args, GraphSnapshot::capture(&ws))
+        .expect("every assertion holds");
+    let ScriptOutput::Node(node) = out else {
+        panic!("returns a verdict")
+    };
+    dex_nodes::scripting::node_to_value(&*node)
+        .map(|v| v.display())
+        .expect("a verdict")
+}
+
+/// Ask `target` something, through a script, and get the answer back as text.
+fn ask(ws: &Workspace, target: NodeUid, expression: &str) -> String {
+    let script = format!("def transform():\n    return str({expression})\n");
+    let (handle, _actions) = WorkspaceActionHandle::buffered();
+    let args = [("target".to_owned(), ScriptValue::Node(target))];
+    let out = run_script(&script, PRELUDE, &handle, &args, GraphSnapshot::capture(ws))
+        .expect("the asking script runs");
+    let ScriptOutput::Node(node) = out else {
+        panic!("the asker returns text")
+    };
+    dex_nodes::scripting::node_to_value(&*node)
+        .map(|v| v.display())
+        .expect("an answer")
+}
+
+/// The prelude parses and runs on its own, offering nothing but its library.
+#[test]
+fn the_prelude_runs() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (handle, _actions) = WorkspaceActionHandle::buffered();
+    let (_offers, error) = dex_nodes::prelude_prototypes::read(PRELUDE, &handle);
+    assert_eq!(error, None, "the default prelude runs clean");
+}
+
+/// The statistics are pure and worth pinning: they are what every layout's
+/// numbers come out of.
+#[test]
+fn the_statistics_hold() {
+    dex_nodes::scripting::init_python();
+    let _ = has_pyarrow();
+    let checks = r#"
+def transform():
+    assert abs(pearson([(1, 1), (2, 2), (3, 3)]) - 1.0) < 1e-9
+    assert abs(pearson([(1, 3), (2, 2), (3, 1)]) + 1.0) < 1e-9
+    assert pearson([(1, 1)]) is None
+    (a, b) = least_squares([(0, 1), (1, 3), (2, 5)])
+    assert abs(a - 2.0) < 1e-9 and abs(b - 1.0) < 1e-9
+    assert quartiles([1, 2, 3, 4, 5])[1] == 3
+    assert quartiles([]) == (0.0, 0.0, 0.0)
+    (lo, hi, step) = nice_bounds(0.3, 9.7)
+    assert lo <= 0.3 and hi >= 9.7 and step > 0
+    assert nice_bounds(5.0, 5.0)[0] < 5.0, "a flat range still spans something"
+    assert tick_text(-0.0, 1.0) == "0"
+    assert axis_ticks(0.0, 1.0, 0.25) == [0.0, 0.25, 0.5, 0.75, 1.0]
+    assert cramers_v([[10, 0], [0, 10]], 2, 2, 20) > 0.9
+    assert cramers_v([[5, 5], [5, 5]], 2, 2, 20) < 1e-9
+
+    # A density integrates to about one, and peaks where the data is.
+    xs = [0.0] * 40 + [4.0] * 40
+    grid = [i * 0.1 for i in range(-20, 61)]
+    d = gaussian_kde(xs, grid)
+    area = sum(d) * 0.1
+    assert 0.9 < area < 1.1, area
+    assert d[grid.index(0.0)] > d[grid.index(2.0)], "a trough between the humps"
+
+    assert is_num(1.5) and not is_num(True) and not is_num(None)
+    assert show(None) == "—" and show(1.0 / 3.0) == "0.3333"
+    return "ok"
+"#;
+    let (handle, _actions) = WorkspaceActionHandle::buffered();
+    let ws = Workspace::new_empty();
+    let args: [(String, ScriptValue); 0] = [];
+    let out = run_script(checks, PRELUDE, &handle, &args, GraphSnapshot::capture(&ws))
+        .expect("every assertion holds");
+    let ScriptOutput::Node(node) = out else {
+        panic!("returns ok")
+    };
+    assert_eq!(
+        dex_nodes::scripting::node_to_value(&*node).map(|v| v.display()),
+        Some("ok".to_owned())
+    );
+}
+
+/// A scatter built from the sample draws, and answers the whole protocol.
+#[test]
+fn a_scatter_draws_and_answers_the_protocol() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, root) = built(
+        "def transform():\n    \
+             return build_plot(dex.ws, Scatter, x='body_mass_g', y='flipper_mm')\n",
+    );
+    let ctx = context();
+    assert!(drawn(&mut ws, &ctx) > 20, "the scatter painted its marks");
+
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "len(dex.snapshot.send_request(target, RowKeys()))"
+        ),
+        "90",
+        "every row of the sample is placeable"
+    );
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "len(dex.snapshot.send_request(target, DrawnPoints()))"
+        ),
+        "90",
+        "and every one of them was drawn"
+    );
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, Encoding())['kind']"
+        ),
+        "scatter"
+    );
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, DrawnPoint(10 ** 9))"
+        ),
+        "None",
+        "an id past the end is a clean None"
+    );
+    assert!(
+        ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, PointLabel(3))"
+        )
+        .contains("body_mass_g"),
+        "the label names what was plotted"
+    );
+    assert!(
+        ask(
+            &ws,
+            root,
+            "sorted(dex.snapshot.send_request(target, RowValues(3)).keys())"
+        )
+        .contains("species"),
+        "the record behind a row is the whole record"
+    );
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, SourceTable()).num_rows"
+        ),
+        "90",
+        "and the table behind the view comes back whole"
+    );
+}
+
+/// Every layout paints from the sample without raising.
+#[test]
+fn every_layout_paints() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let views = [
+        "build_plot(dex.ws, Scatter, x='body_mass_g', y='flipper_mm')",
+        "build_plot(dex.ws, Scatter, x='body_mass_g', y='flipper_mm', color='species')",
+        "build_plot(dex.ws, Bars, x='species')",
+        "build_plot(dex.ws, Strip, x='body_mass_g')",
+        "build_plot(dex.ws, Strip, x='species', y='body_mass_g')",
+        "build_plot(dex.ws, Violin, x='species', y='body_mass_g')",
+        "build_plot(dex.ws, Violin, x='body_mass_g')",
+        "build_plot(dex.ws, Heatmap, x='species', y='island')",
+    ];
+    for view in views {
+        let (mut ws, _root) = built(&format!("def transform():\n    return {view}\n"));
+        let ctx = context();
+        assert!(drawn(&mut ws, &ctx) > 10, "{view} painted");
+    }
+}
+
+/// The writes: pushing a selection into a view is what links two of them.
+#[test]
+fn a_selection_can_be_pushed_in() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, root) = built(
+        "def transform():\n    \
+             return build_plot(dex.ws, Scatter, x='body_mass_g', y='flipper_mm')\n",
+    );
+    let ctx = context();
+    drawn(&mut ws, &ctx);
+
+    assert_eq!(
+        ask(&ws, root, "dex.snapshot.send_request(target, Selection())"),
+        "None",
+        "nothing is selected to begin with"
+    );
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, SetSelection(7))"
+        ),
+        "7",
+        "a row can be pushed in from outside"
+    );
+    assert_eq!(
+        ask(&ws, root, "dex.snapshot.send_request(target, Selection())"),
+        "7",
+        "and it stuck"
+    );
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, SetSelection(10 ** 9))"
+        ),
+        "None",
+        "a row that does not exist selects nothing"
+    );
+}
+
+/// Re-pointing a view at other columns changes what it draws.
+#[test]
+fn an_encoding_can_be_pushed_in() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, root) = built(
+        "def transform():\n    \
+             return build_plot(dex.ws, Scatter, x='body_mass_g', y='flipper_mm')\n",
+    );
+    let ctx = context();
+    drawn(&mut ws, &ctx);
+
+    assert!(
+        ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, SetEncoding(y='bill_length_mm'))['y']"
+        ) == "bill_length_mm",
+        "the channel took"
+    );
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, SetEncoding(y='not a column'))['y']"
+        ),
+        "bill_length_mm",
+        "a column that does not exist is ignored rather than obeyed"
+    );
+    assert!(drawn(&mut ws, &ctx) > 20, "and it still draws");
+}
+
+/// A table with a lineage column and a key, for the tree and the join.
+const LINEAGES: &str = r#"
+def sample():
+    lineages = [
+        "Bacteria;Proteobacteria;Gammaproteobacteria;Escherichia",
+        "Bacteria;Proteobacteria;Gammaproteobacteria;Salmonella",
+        "Bacteria;Proteobacteria;Alphaproteobacteria;Rhizobium",
+        "Bacteria;Firmicutes;Bacilli;Bacillus",
+        "Bacteria;Firmicutes;Bacilli;Staphylococcus",
+        "Archaea;Euryarchaeota;Methanobacteria;Methanobrevibacter",
+    ]
+    return {
+        "accession": ["GCA_%03d" % i for i in range(len(lineages))],
+        "lineage": lineages,
+        "phylum": [l.split(";")[1] for l in lineages],
+        "genes": [4200, 4500, 6100, 4100, 2700, 1800],
+        "gc": [50.8, 52.2, 61.0, 43.5, 32.8, 31.0],
+        "length_mb": [4.6, 4.9, 6.8, 4.2, 2.8, 1.7],
+    }
+"#;
+
+/// The tree draws both ways, and places every row on the leaf its lineage ends on.
+#[test]
+fn a_phylogeny_draws_in_both_shapes() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    for shape in ["hierarchical", "circular"] {
+        let (mut ws, root) = built(&format!(
+            "{LINEAGES}\n\
+             def transform():\n    \
+                 return build_plot(dex.ws, Phylogeny, sample(), x='lineage',\n                 \
+                                   color='phylum', shape='{shape}')\n"
+        ));
+        let ctx = context();
+        assert!(drawn(&mut ws, &ctx) > 20, "the {shape} tree painted");
+        assert_eq!(
+            ask(
+                &ws,
+                root,
+                "len(dex.snapshot.send_request(target, DrawnPoints()))"
+            ),
+            "6",
+            "every row sits on the leaf its lineage ends on ({shape})"
+        );
+        assert!(
+            ask(
+                &ws,
+                root,
+                "dex.snapshot.send_request(target, PointLabel(0))"
+            )
+            .contains("Escherichia"),
+            "and the readout names the whole lineage"
+        );
+    }
+}
+
+/// The tree is one node with two shapes, so both agree about the rows.
+#[test]
+fn both_tree_shapes_place_the_same_rows() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let script = format!(
+        "{LINEAGES}\n\
+         def transform():\n    \
+             frame = Frame(sample())\n    \
+             a = build_plot(dex.ws, Phylogeny, frame=frame, x='lineage', shape='hierarchical')\n    \
+             b = build_plot(dex.ws, Phylogeny, frame=frame, x='lineage', shape='circular')\n    \
+             same = sorted(a.tree.row_leaf.items()) == sorted(b.tree.row_leaf.items())\n    \
+             return \"same\" if same else \"different\"\n"
+    );
+    let (handle, _actions) = WorkspaceActionHandle::buffered();
+    let ws = Workspace::new_empty();
+    let args: [(String, ScriptValue); 0] = [];
+    let out = run_script(
+        &script,
+        PRELUDE,
+        &handle,
+        &args,
+        GraphSnapshot::capture(&ws),
+    )
+    .expect("both trees build");
+    let ScriptOutput::Node(node) = out else {
+        panic!("returns a verdict")
+    };
+    assert_eq!(
+        dex_nodes::scripting::node_to_value(&*node).map(|v| v.display()),
+        Some("same".to_owned()),
+        "one tree, drawn two ways"
+    );
+}
+
+/// A circos draws its ring, its tracks and its chords.
+#[test]
+fn a_circos_draws_with_tracks_and_links() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, root) = built(&format!(
+        "{LINEAGES}\n\
+         def transform():\n    \
+             return build_plot(dex.ws, Circos, sample(), x='phylum',\n                 \
+                               tracks=['genes', 'gc'], link='accession',\n                 \
+                               key='accession')\n"
+    ));
+    let ctx = context();
+    assert!(drawn(&mut ws, &ctx) > 30, "the circos painted");
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "len(dex.snapshot.send_request(target, DrawnPoints()))"
+        ),
+        "6",
+        "every row sits somewhere on the ring"
+    );
+}
+
+/// The 3D view projects, and dragging turns it.
+#[test]
+fn a_3d_scatter_projects_and_turns() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, root) = built(
+        "def transform():\n    \
+             return build_plot(dex.ws, Scatter3D, x='body_mass_g', y='flipper_mm',\n             \
+                               z='bill_length_mm', color='species')\n",
+    );
+    let ctx = context();
+    assert!(drawn(&mut ws, &ctx) > 20, "the cloud painted");
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "len(dex.snapshot.send_request(target, DrawnPoints()))"
+        ),
+        "90",
+    );
+    let before = ask(
+        &ws,
+        root,
+        "round(dex.snapshot.send_request(target, DrawnPoint(0))[0], 2)",
+    );
+
+    // A drag across the middle of the view.
+    let (from, to) = (egui::pos2(360.0, 260.0), egui::pos2(430.0, 260.0));
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(from)]);
+    frame(
+        &mut ws,
+        &ctx,
+        vec![egui::Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }],
+    );
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(to)]);
+    frame(
+        &mut ws,
+        &ctx,
+        vec![egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+    frame(&mut ws, &ctx, vec![]);
+    let after = ask(
+        &ws,
+        root,
+        "round(dex.snapshot.send_request(target, DrawnPoint(0))[0], 2)",
+    );
+    assert_ne!(before, after, "the drag turned the cloud");
+}
+
+/// Two views, joined: lines between the same record in each, and their two
+/// tables put together — both written against the protocol, neither knowing
+/// what kind of view it is talking to.
+#[test]
+fn two_views_can_be_linked_and_joined() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let link = r#"
+def transform():
+    ws = dex.ws
+    frame = Frame(sample())
+    tree = ws.insert_node_dyn(build_plot(ws, Phylogeny, frame=frame, x="lineage"))
+    scatter = ws.insert_node_dyn(build_plot(ws, Scatter, frame=frame, x="genes", y="gc"))
+    joiner = link_views(ws, tree, scatter)
+    return dex.VerticalLayout.build(ws, [tree, scatter, joiner], 0.0)
+"#;
+    let (mut ws, root) = built(&format!("{LINEAGES}{link}"));
+    let ctx = context();
+    assert!(
+        drawn(&mut ws, &ctx) > 30,
+        "both views and their links painted"
+    );
+
+    // The join, run against the workspace once both views are live in it: a
+    // snapshot only holds what was there when it was taken.
+    let join = r#"
+def transform():
+    (a, b, _joiner) = dex.snapshot.owned_refs(root)
+    pairs = row_correspondence(dex.snapshot, a, b)
+    table = joined_table(dex.snapshot, a, b)
+    return "%d %d %d" % (len(pairs), table.num_rows, table.num_columns)
+"#;
+    let (handle, _actions) = WorkspaceActionHandle::buffered();
+    let args = [("root".to_owned(), ScriptValue::Node(root))];
+    let out = run_script(join, PRELUDE, &handle, &args, GraphSnapshot::capture(&ws))
+        .expect("the join runs");
+    let ScriptOutput::Node(node) = out else {
+        panic!("returns counts")
+    };
+    assert_eq!(
+        dex_nodes::scripting::node_to_value(&*node).map(|v| v.display()),
+        Some("6 6 12".to_owned()),
+        "six records in common, and both tables' columns side by side"
+    );
+}
+
+/// The explorer puts its view on a plane, and passes the protocol down to it —
+/// so anything that works on a bare layout works on the explorer.
+#[test]
+fn the_explorer_drives_a_view_on_a_plane() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, root) = built("def transform():\n    return build_explorer(dex.ws)\n");
+    let ctx = context();
+    assert!(drawn(&mut ws, &ctx) > 20, "the explorer painted a view");
+
+    // Three dropdowns and the plane. The view is not owned here: the plane owns
+    // it, along with the item holding it and the readout in front of it.
+    use dex_core::refs::NodeRefs;
+    let mut owned = Vec::new();
+    ws.get_node(root)
+        .unwrap()
+        .owned_refs(&mut |uid| owned.push(uid));
+    assert_eq!(owned.len(), 4, "a mode dropdown, x, y, and the plane");
+
+    let canvas = owned[3];
+    let body = ws
+        .send_request(canvas, dex_nodes::layouts::canvas::layout::CanvasChildren)
+        .expect("the plane is a canvas");
+    assert_eq!(body.len(), 1, "the view is the one thing on it");
+    let front = ws
+        .send_request(
+            canvas,
+            dex_nodes::layouts::canvas::layout::CanvasLayerNodes {
+                layer: dex_nodes::layouts::canvas::layout::Layer::Foreground,
+            },
+        )
+        .unwrap_or_default();
+    assert_eq!(
+        front.len(),
+        2,
+        "its title and its readout in front, both at their own size whatever \
+         the plane is zoomed to"
+    );
+    let behind = ws
+        .send_request(
+            canvas,
+            dex_nodes::layouts::canvas::layout::CanvasLayerNodes {
+                layer: dex_nodes::layouts::canvas::layout::Layer::Background,
+            },
+        )
+        .unwrap_or_default();
+    assert_eq!(behind.len(), 1, "and the grid behind it");
+
+    // And the protocol reaches the view behind all of that.
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "len(dex.snapshot.send_request(target, DrawnPoints()))"
+        ),
+        "90",
+    );
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, SourceTable()).num_rows"
+        ),
+        "90",
+    );
+}
+
+/// The layout follows the data, not a list: a mode and two columns is all
+/// anybody says, and which picture that comes to is a question about types.
+#[test]
+fn the_explorer_picks_its_layout_from_the_columns() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, root) = built("def transform():\n    return build_explorer(dex.ws)\n");
+    let ctx = context();
+    drawn(&mut ws, &ctx);
+
+    use dex_core::refs::NodeRefs;
+    let mut owned = Vec::new();
+    ws.get_node(root)
+        .unwrap()
+        .owned_refs(&mut |uid| owned.push(uid));
+    let (mode_dd, x_dd, y_dd) = (owned[0], owned[1], owned[2]);
+
+    // The sample's columns, in order: species, island, sex, body_mass_g,
+    // flipper_mm, bill_length_mm.
+    let choose = |ws: &mut Workspace, dd: NodeUid, index: usize| {
+        ws.submit_action_dyn(Action {
+            dest: dd,
+            description: "choose".into(),
+            body: Box::new(dex_nodes::primitives::dropdown::SetDropdownSelection { index }),
+        });
+        ws.process_pending();
+    };
+    let kind = |ws: &Workspace| {
+        ask(
+            ws,
+            root,
+            "dex.snapshot.send_request(target, Encoding())['kind']",
+        )
+    };
+
+    // Univariate over a categorical column: how often each category occurs.
+    assert_eq!(kind(&ws), "bars", "it opens univariate on the first column");
+
+    // Univariate over a continuous one: every row at its value.
+    choose(&mut ws, x_dd, 3);
+    drawn(&mut ws, &ctx);
+    assert_eq!(kind(&ws), "strip");
+
+    // Bivariate follows the pair — the whole matrix, not just the numeric
+    // corner of it.
+    choose(&mut ws, mode_dd, 1);
+    choose(&mut ws, y_dd, 4);
+    drawn(&mut ws, &ctx);
+    assert_eq!(kind(&ws), "scatter", "continuous x continuous");
+
+    choose(&mut ws, x_dd, 0);
+    drawn(&mut ws, &ctx);
+    assert_eq!(kind(&ws), "violin", "categorical x continuous");
+
+    // And the other way round: whichever way they were chosen, the category is
+    // what the measure is split by.
+    choose(&mut ws, x_dd, 3);
+    choose(&mut ws, y_dd, 0);
+    drawn(&mut ws, &ctx);
+    assert_eq!(kind(&ws), "violin", "continuous x categorical");
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, Encoding())['x']"
+        ),
+        "species",
+        "with the category on x, however it was picked"
+    );
+
+    choose(&mut ws, y_dd, 1);
+    choose(&mut ws, x_dd, 0);
+    drawn(&mut ws, &ctx);
+    assert_eq!(kind(&ws), "heatmap", "categorical x categorical");
+
+    // Through all of that it stayed the same node, on the same plane, over the
+    // same table: the view becomes another layout rather than being rebuilt.
+    let mut after = Vec::new();
+    ws.get_node(root)
+        .unwrap()
+        .owned_refs(&mut |uid| after.push(uid));
+    assert_eq!(after, owned, "nothing was rebuilt");
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, SourceTable()).num_rows"
+        ),
+        "90",
+        "over the same table, read once"
+    );
+    assert!(drawn(&mut ws, &ctx) > 20, "and it is still drawing");
+}
+
+/// The examples that are now thin wrappers all still build and paint.
+#[test]
+fn the_rewritten_examples_build_and_paint() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    for (name, source) in [
+        ("circos.py", include_str!("../../../examples/circos.py")),
+        ("circos2.py", include_str!("../../../examples/circos2.py")),
+        ("circos3.py", include_str!("../../../examples/circos3.py")),
+        (
+            "circos_table.py",
+            include_str!("../../../examples/circos_table.py"),
+        ),
+    ] {
+        let (mut ws, _root) = built(source);
+        let ctx = context();
+        assert!(
+            drawn(&mut ws, &ctx) > 20,
+            "{name} built and painted from its own sample"
+        );
+    }
+}
+
+/// Clicking a mark opens the record as a real `Table` node — the whole row,
+/// with its own column types, not a drawn imitation of one.
+///
+/// It has to be exercised through a *draw*. A view builds the row's table by
+/// inserting a node, and an insert is queued on the workspace handle of
+/// whatever asked; a script querying a snapshot brings its own throwaway
+/// handle, so the uid it gets back names a node that never arrives. During a
+/// draw the handle is the live workspace's, which is the only path that
+/// actually seats anything.
+#[test]
+fn a_selected_row_becomes_a_real_table_node() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, root) = built(
+        "def transform():\n    \
+             return build_plot(dex.ws, Scatter, x='body_mass_g', y='flipper_mm')\n",
+    );
+    let ctx = context();
+    drawn(&mut ws, &ctx);
+
+    fn tables(ws: &Workspace) -> Vec<NodeUid> {
+        ws.live_ids()
+            .into_iter()
+            .filter(|uid| {
+                ws.get_node(*uid).is_some_and(|node| {
+                    (*node)
+                        .as_any_ref()
+                        .is::<dex_nodes::primitives::table::Table>()
+                })
+            })
+            .collect()
+    }
+    assert!(
+        tables(&ws).is_empty(),
+        "nothing selected, so no row has been sliced out"
+    );
+
+    // Select a row and draw: the overlay asks the view for that row's table.
+    let _ = ask(
+        &ws,
+        root,
+        "dex.snapshot.send_request(target, SetSelection(3))",
+    );
+    drawn(&mut ws, &ctx);
+    ws.process_pending();
+    drawn(&mut ws, &ctx);
+
+    let seated = tables(&ws);
+    assert_eq!(seated.len(), 1, "one table, for the selected row");
+    let node = ws.get_node(seated[0]).unwrap();
+    let table = (*node)
+        .as_any_ref()
+        .downcast_ref::<dex_nodes::primitives::table::Table>()
+        .unwrap();
+    assert_eq!(table.batch().num_rows(), 1, "one row: the selected record");
+    assert_eq!(
+        table.batch().num_columns(),
+        6,
+        "and the whole record, not just the two plotted columns"
+    );
+    // Real Arrow types, which is the whole reason for a Table over a drawn grid.
+    let schema = table.batch().schema();
+    let species = schema.field_with_name("species").expect("the text column");
+    assert!(
+        matches!(species.data_type(), arrow::datatypes::DataType::Utf8),
+        "text stayed text: {:?}",
+        species.data_type()
+    );
+
+    // Drawing again reuses it rather than piling up a node per frame.
+    drawn(&mut ws, &ctx);
+    ws.process_pending();
+    assert_eq!(tables(&ws).len(), 1, "one table, not one per frame");
+
+    // Selecting another row replaces it: the old one does not leak.
+    let _ = ask(
+        &ws,
+        root,
+        "dex.snapshot.send_request(target, SetSelection(4))",
+    );
+    drawn(&mut ws, &ctx);
+    ws.process_pending();
+    drawn(&mut ws, &ctx);
+    ws.process_pending();
+    assert_eq!(
+        tables(&ws).len(),
+        1,
+        "the previous row's table went when the selection moved on"
+    );
+}
+
+/// What the sidebar offers is a lambda you wire a table into — named for what
+/// it does, declaring what it wants, and holding a script you can edit.
+#[test]
+fn the_offer_is_a_lambda_that_takes_a_table() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    dex_nodes::scripting::init_python();
+    let mut ws = Workspace::new_empty();
+    let (handle, actions) = WorkspaceActionHandle::buffered();
+    let (offers, error) = dex_nodes::prelude_prototypes::read(PRELUDE, &handle);
+    assert_eq!(error, None, "the prelude scans clean");
+    assert_eq!(
+        offers
+            .iter()
+            .map(|(n, _, _)| n.as_str())
+            .collect::<Vec<_>>(),
+        ["Generate data explorer"],
+        "one offer, named for what it generates"
+    );
+
+    // Seat it the way the sidebar does, with everything its factory queued.
+    let (_, template, _) = offers[0].clone();
+    let uid = ws.action_handle().insert_node_dyn(template);
+    drop(handle);
+    for action in actions.try_iter() {
+        ws.submit_action_dyn(action);
+    }
+    ws.process_pending();
+
+    let node = ws.get_node(uid).expect("the offer is live");
+    assert!(
+        (*node)
+            .as_any_ref()
+            .is::<dex_nodes::composites::lambda::Lambda>(),
+        "it is a lambda, not the explorer itself: a view of a table has to be \
+         given the table, and being wired into is how that happens"
+    );
+
+    // One argument, called `thisData`, declared to be a table.
+    let row = ws
+        .send_request(
+            uid.cast::<dex_nodes::composites::lambda::Lambda>(),
+            dex_nodes::composites::lambda::LambdaArgsNode,
+        )
+        .expect("the lambda has an argument row");
+    let args = ws
+        .send_request(
+            row.cast::<dex_nodes::composites::lambda::LambdaArgs>(),
+            dex_nodes::composites::lambda::ArgDeclarations,
+        )
+        .expect("the row reports its arguments");
+    assert_eq!(args.len(), 1, "one argument");
+    assert_eq!(args[0].0, "thisData", "named for what the script reads");
+    assert_eq!(
+        args[0].2,
+        dex_nodes::argtypes::ArgType::Table,
+        "declared a table, so the port says what belongs in it"
+    );
+
+    // The row reads `label: name (kind)`, so the whole line says
+    // "for: thisData (a table)" — what wiring something in is *for*, which a
+    // parameter name on its own does not say.
+    let arg_nodes = ws
+        .send_request(
+            row.cast::<dex_nodes::composites::lambda::LambdaArgs>(),
+            dex_nodes::composites::lambda::ArgNodes,
+        )
+        .expect("the row lists its arguments");
+    assert_eq!(
+        ws.send_request(
+            arg_nodes[0].cast::<dex_nodes::composites::lambda::LambdaArg>(),
+            dex_nodes::composites::lambda::ArgLabel,
+        )
+        .as_deref(),
+        Some("for"),
+    );
+
+    // And it holds a script that runs: wire the sample in and it builds.
+    let (handle, actions) = WorkspaceActionHandle::buffered();
+    let args: [(String, ScriptValue); 0] = [];
+    let source = "def transform():\n    return build_explorer(dex.ws, sample_table())\n";
+    let out = run_script(source, PRELUDE, &handle, &args, GraphSnapshot::capture(&ws))
+        .expect("the script the lambda carries runs");
+    let ScriptOutput::Node(explorer) = out else {
+        panic!("it builds an explorer")
+    };
+    let seated = ws.action_handle().insert_node_dyn(explorer);
+    drop(handle);
+    for action in actions.try_iter() {
+        ws.submit_action_dyn(action);
+    }
+    ws.process_pending();
+    ws.set_root(seated);
+    ws.process_pending();
+    let ctx = context();
+    assert!(drawn(&mut ws, &ctx) > 20, "and what it builds draws");
+}
+
+/// The picture is on a plane, so it is panned and zoomed rather than squeezed
+/// into whatever box the explorer happens to be drawn at.
+///
+/// Checked through `DrawnPoints`, which answers in screen coordinates: if the
+/// plane really is moving under the view, the marks land somewhere else. That
+/// is also the thing that would silently break — a view drawn straight into the
+/// box still paints, it just stops being navigable.
+#[test]
+fn the_explorer_s_picture_pans_and_zooms() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, root) = built("def transform():\n    return build_explorer(dex.ws)\n");
+    let ctx = context();
+    drawn(&mut ws, &ctx);
+
+    let mark = |ws: &Workspace| {
+        ask(
+            ws,
+            root,
+            "'%.1f,%.1f' % dex.snapshot.send_request(target, DrawnPoint(0))",
+        )
+    };
+    let before = mark(&ws);
+    drawn(&mut ws, &ctx);
+    assert_eq!(
+        mark(&ws),
+        before,
+        "an idle frame leaves the marks where they were, so what follows is the \
+         plane moving and not the picture settling"
+    );
+
+    // Over the plane, well clear of the control bar along the top.
+    let over = egui::pos2(400.0, 320.0);
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(over)]);
+    frame(&mut ws, &ctx, vec![egui::Event::Zoom(2.0)]);
+    drawn(&mut ws, &ctx);
+    let zoomed = mark(&ws);
+    assert_ne!(before, zoomed, "magnifying the plane moved the marks");
+
+    // Dragging empty background pans it: the view is a *static* item, which
+    // declines an inspector, so the drag reaches the plane rather than being
+    // taken as a gesture on the thing sitting on it.
+    let to = egui::pos2(330.0, 260.0);
+    frame(
+        &mut ws,
+        &ctx,
+        vec![egui::Event::PointerButton {
+            pos: over,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }],
+    );
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(to)]);
+    frame(
+        &mut ws,
+        &ctx,
+        vec![egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+    drawn(&mut ws, &ctx);
+    assert_ne!(zoomed, mark(&ws), "dragging the plane moved them again");
+}
+
+/// A lineage splits into its ranks, rank prefixes come off, and it stops where
+/// the data stops saying anything.
+#[test]
+fn a_lineage_splits_into_ranked_names() {
+    dex_nodes::scripting::init_python();
+    let _ = has_pyarrow();
+    let checks = r#"
+def transform():
+    assert split_lineage("A;B;C") == ["A", "B", "C"]
+    # Rank prefixes come off, so the same lineage makes the same tree whether
+    # or not whoever wrote it labelled the ranks.
+    assert split_lineage("d__Bacteria;p__Bacillota") == ["Bacteria", "Bacillota"]
+    # An unplaced rank ends the lineage: everything unclassified is not one clade.
+    assert split_lineage("A;B;unclassified;D") == ["A", "B"]
+    assert split_lineage("A;;C") == ["A"]
+    assert split_lineage("  A ; B ") == ["A", "B"]
+    assert split_lineage("") == []
+    return "ok"
+"#;
+    assert_eq!(checked(checks), "ok");
+}
+
+/// Lineages sharing a prefix share nodes — and names that merely look alike do
+/// not. A genus is identified by its whole path, because homonyms across the
+/// tree of life are the rule rather than the exception. Parents sit on the
+/// midpoint of their children, which is what makes a dendrogram readable.
+#[test]
+fn the_tree_shares_prefixes_and_centres_parents() {
+    dex_nodes::scripting::init_python();
+    let _ = has_pyarrow();
+    let checks = r#"
+def transform():
+    tree = Tree(list(enumerate([
+        "A;B;X",
+        "A;B;Y",
+        "A;C;X",
+    ])))
+    # One root, and "A;B" is one node reached by two rows.
+    assert tree.roots == [("A",)], tree.roots
+    assert tree.nodes[("A", "B")]["weight"] == 2
+    # The two X's are different nodes: same name, different lineage.
+    assert ("A", "B", "X") in tree.nodes and ("A", "C", "X") in tree.nodes
+    assert tree.nodes[("A", "B", "X")]["rows"] == [0]
+    assert tree.nodes[("A", "C", "X")]["rows"] == [2]
+
+    # Three leaves in slots 0, 1, 2. A parent is centred on its *immediate*
+    # children, not on all the leaves under it: "A;B" sits between its two at
+    # 0.5, and the root between "A;B" (0.5) and "A;C" (2.0) at 1.25. Which is
+    # what makes an unbalanced tree lean towards its heavier side.
+    assert len(tree.leaves) == 3
+    assert tree.slot[("A", "B")] == 0.5
+    assert tree.slot[("A", "C")] == 2.0
+    assert tree.slot[("A",)] == 1.25
+
+    # Every row ends on a leaf, which is what makes DrawnPoints answerable.
+    assert sorted(tree.row_leaf) == [0, 1, 2]
+    return "ok"
+"#;
+    assert_eq!(checked(checks), "ok");
+}
+
+/// The sideways shape is the third one, and it places the same rows as the
+/// other two.
+#[test]
+fn a_tree_draws_sideways_too() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, root) = built(&format!(
+        "{LINEAGES}\n\
+         def transform():\n    \
+             return build_plot(dex.ws, Phylogeny, sample(), x='lineage', shape='sideways')\n"
+    ));
+    let ctx = context();
+    assert!(drawn(&mut ws, &ctx) > 20, "the sideways tree painted");
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "len(dex.snapshot.send_request(target, DrawnPoints()))"
+        ),
+        "6",
+    );
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, Encoding())['kind']"
+        ),
+        "phylogeny",
+        "still the same layout, just laid out the other way"
+    );
+}
+
+/// The other way a table carries a tree: one row per node, pointing at its
+/// parent. Branch lengths and tip order come from the columns that hold them.
+#[test]
+fn a_tree_can_be_read_from_an_edge_list() {
+    dex_nodes::scripting::init_python();
+    let _ = has_pyarrow();
+    let checks = r#"
+def transform():
+    #      r
+    #     / \
+    #    a   b
+    #   / \
+    #  c   d
+    tree = Tree.from_edges(
+        ids=["r", "a", "b", "c", "d"],
+        parents=[None, "r", "r", "a", "a"],
+        depths=[0.0, 0.4, 0.9, 1.1, 1.3],
+        leaf_order=[None, None, 2, 0, 1],
+    )
+    assert tree.roots == [("r",)], tree.roots
+    assert sorted(tree.nodes[("r",)]["children"]) == [("a",), ("b",)]
+    assert sorted(tree.nodes[("a",)]["children"]) == [("c",), ("d",)]
+
+    # Depth is the distance column, so branch lengths are to scale.
+    assert tree.nodes[("d",)]["depth"] == 1.3
+    assert tree.max_depth == 1.3
+
+    # Weight counts the subtree, so a dot can be sized by it.
+    assert tree.nodes[("a",)]["weight"] == 3
+    assert tree.nodes[("r",)]["weight"] == 5
+
+    # The tool's own tip order wins: c, d, b — not the order they were walked.
+    assert tree.leaves == [("c",), ("d",), ("b",)], tree.leaves
+
+    # Every row is a node, so every row is placeable — internal ones included.
+    assert sorted(tree.row_leaf) == [0, 1, 2, 3, 4]
+
+    # Without a distance column, depth counts hops instead.
+    hops = Tree.from_edges(["r", "a", "c"], [None, "r", "a"])
+    assert hops.nodes[("c",)]["depth"] == 2
+    return "ok"
+"#;
+    assert_eq!(checked(checks), "ok");
+}
+
+/// A `Phylogeny` over an edge-list table draws and places every node.
+#[test]
+fn a_phylogeny_draws_from_an_edge_list() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let edges = r#"
+def edges():
+    return {
+        "node": ["r", "a", "b", "c", "d", "e"],
+        "parent": [None, "r", "r", "a", "a", "b"],
+        "depth": [0.0, 0.4, 0.5, 1.1, 1.3, 1.0],
+        "leaf_order": [None, None, None, 0, 1, 2],
+        "clade": ["root", "left", "right", "left", "left", "right"],
+    }
+"#;
+    let (mut ws, root) = built(&format!(
+        "{edges}\n\
+         def transform():\n    \
+             return build_plot(dex.ws, Phylogeny, edges(), x='node', parent='parent',\n                 \
+                               depth='depth', leaf_order='leaf_order', color='clade',\n                 \
+                               shape='circular')\n"
+    ));
+    let ctx = context();
+    assert!(drawn(&mut ws, &ctx) > 15, "the edge-list tree painted");
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "len(dex.snapshot.send_request(target, DrawnPoints()))"
+        ),
+        "6",
+        "every node is a row, and every row was placed"
+    );
+    assert!(
+        ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, PointLabel(3))"
+        )
+        .contains('c'),
+        "a node reads as its own name, not as a path"
+    );
+}
+
+/// A branch length that does not grow from a parent to its child still lays out.
+///
+/// The regression: slots were worked out in order of the depth *column*, on the
+/// assumption that a child is always deeper than its parent. With hop-counted
+/// depth that holds. With branch lengths it does not — a zero-length branch
+/// gives parent and child the same distance, and a rounded column can give the
+/// child less — so a parent was reached first and asked for a slot that had not
+/// been worked out yet, which came out as `KeyError: (<node id>,)`.
+#[test]
+fn a_tree_lays_out_whatever_the_depth_column_says() {
+    dex_nodes::scripting::init_python();
+    let _ = has_pyarrow();
+    let checks = r#"
+def transform():
+    # b sits at the same distance as its parent a (a zero-length branch), and
+    # c at *less* than its parent b.
+    tree = Tree.from_edges(
+        ids=["r", "a", "b", "c"],
+        parents=[None, "r", "a", "b"],
+        depths=[0.0, 0.7, 0.7, 0.6],
+    )
+    assert sorted(tree.slot) == sorted(tree.nodes), "every node was placed"
+    # One chain, so every node sits over the single leaf at slot 0.
+    assert tree.slot[("r",)] == 0.0, tree.slot
+
+    # A parent column that points in a circle leaves nodes no root can reach.
+    # They are placed after everything else rather than left out, so the
+    # picture still draws and shows them.
+    cyclic = Tree.from_edges(ids=["x", "y"], parents=["y", "x"])
+    assert sorted(cyclic.slot) == sorted(cyclic.nodes), cyclic.slot
+    return "ok"
+"#;
+    assert_eq!(checked(checks), "ok");
+}
+
+/// And the layout draws it, which is where the failure actually showed up.
+#[test]
+fn a_phylogeny_draws_a_tree_with_flat_branches() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let edges = r#"
+def edges():
+    # `b` is an internal node sitting at the same distance as its parent `a` —
+    # a zero-length branch, which is what a real tree looks like wherever the
+    # tool could not resolve the order. The tips hang below it, so working the
+    # slots out by depth reaches `a` before `b` has one.
+    return {
+        "node": ["r", "a", "b", "b1", "b2", "c", "c1"],
+        "parent": [None, "r", "a", "b", "b", "r", "c"],
+        "depth": [0.0, 0.5, 0.5, 0.9, 1.0, 0.4, 0.8],
+        "leaf_order": [None, None, None, 0, 1, None, 2],
+    }
+"#;
+    let (mut ws, root) = built(&format!(
+        "{edges}\n\
+         def transform():\n    \
+             return build_plot(dex.ws, Phylogeny, edges(), x='node', parent='parent',\n                 \
+                               depth='depth', leaf_order='leaf_order', shape='circular')\n"
+    ));
+    let ctx = context();
+    assert!(drawn(&mut ws, &ctx) > 10, "the tree painted");
+    assert_eq!(
+        ask(
+            &ws,
+            root,
+            "len(dex.snapshot.send_request(target, DrawnPoints()))"
+        ),
+        "7",
+        "every node placed, flat branches and all"
+    );
+}
+
+/// The axes are worked out for what is on screen, not baked into the picture.
+///
+/// Zooming into a crowded corner should *subdivide* the axis — more ticks, at
+/// finer values — rather than stretching the ones the whole of the data called
+/// for. That is only possible because the grid is a background that asks the
+/// view how it maps data onto the plane, instead of marks the view painted once
+/// at one size.
+#[test]
+fn the_axes_are_drawn_for_the_visible_range() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, root) = built(
+        "def transform():\n    \
+             return plot_on_plane(dex.ws, build_plot(\n        \
+                 dex.ws, Scatter, x='body_mass_g', y='flipper_mm'))\n",
+    );
+    let ctx = context();
+    drawn(&mut ws, &ctx);
+
+    // The view publishes its mapping; the background is written against it.
+    let plot = {
+        use dex_core::refs::NodeRefs;
+        let mut owned = Vec::new();
+        ws.get_node(root)
+            .unwrap()
+            .owned_refs(&mut |uid| owned.push(uid));
+        ws.send_request(root, dex_nodes::layouts::canvas::layout::CanvasChildren)
+            .and_then(|items| items.first().copied())
+            .and_then(|item| {
+                ws.send_request(item, dex_nodes::layouts::canvas::nodes::CanvasNodeChild)
+            })
+            .expect("the view is the item on the plane")
+    };
+    assert!(
+        ask(
+            &ws,
+            plot,
+            "dex.snapshot.send_request(target, PlotScale())['y']['kind']"
+        ) == "value",
+        "the scatter publishes a continuous y axis"
+    );
+
+    // How many tick captions the grid drew, by counting the text it painted.
+    let captions = |ws: &mut Workspace, ctx: &egui::Context| -> Vec<f64> {
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN);
+        let out = ctx.clone().run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |c| {
+                egui::CentralPanel::default().show(c, |ui| {
+                    ws.draw_frame(ui, screen);
+                });
+            },
+        );
+        fn walk(shape: &egui::Shape, seen: &mut Vec<f64>) {
+            match shape {
+                egui::Shape::Vec(inner) => inner.iter().for_each(|s| walk(s, seen)),
+                egui::Shape::Text(t) => {
+                    // A tick caption is a bare number.
+                    if let Ok(v) = t.galley.text().trim().parse::<f64>() {
+                        seen.push(v);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut seen = Vec::new();
+        out.shapes.iter().for_each(|c| walk(&c.shape, &mut seen));
+        seen
+    };
+    let before = captions(&mut ws, &ctx);
+    assert!(
+        before.len() > 1,
+        "the grid captioned its ticks ({before:?})"
+    );
+    let gap = |vs: &[f64]| -> f64 {
+        let mut sorted = vs.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted
+            .windows(2)
+            .map(|w| w[1] - w[0])
+            .filter(|d| *d > 0.0)
+            .fold(f64::INFINITY, f64::min)
+    };
+    let coarse = gap(&before);
+
+    // Magnify hard: the same window now covers a much smaller slice of the
+    // data, so the axis has to find finer values to put ticks at.
+    let over = egui::pos2(400.0, 300.0);
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(over)]);
+    for _ in 0..3 {
+        frame(&mut ws, &ctx, vec![egui::Event::Zoom(2.0)]);
+    }
+    drawn(&mut ws, &ctx);
+    let after = captions(&mut ws, &ctx);
+    assert!(
+        after.len() > 1,
+        "there are still captions after zooming in ({after:?})"
+    );
+
+    // The step itself got finer. Ticks baked into the picture would come back
+    // at the same values however far in the plane was zoomed — spread further
+    // apart, and most of them off screen. These were worked out again for the
+    // window that is actually showing.
+    let fine = gap(&after);
+    assert!(
+        fine < coarse,
+        "the axis subdivided as it was magnified \
+         (step was {coarse}, now {fine}; before {before:?}, after {after:?})"
+    );
+}
+
+/// A view keeps what was expensive to get, and keeps it *itself*.
+///
+/// This is what the drilling in `superphylogeny.py` rests on: a genome fetched
+/// for one tip is kept by the tree rather than by the readout that asked for
+/// it, because a readout is chrome and gets rebuilt, and a network round trip
+/// should not go with it. Being the view's means a clone copies it and a delete
+/// takes it away.
+#[test]
+fn a_view_keeps_what_was_expensive_to_get() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, root) = built(
+        "def transform():\n    \
+             return build_plot(dex.ws, Scatter, x='body_mass_g', y='flipper_mm')\n",
+    );
+    let ctx = context();
+    drawn(&mut ws, &ctx);
+
+    assert_eq!(
+        ask(&ws, root, "dex.snapshot.send_request(target, KeptNode(7))"),
+        "None",
+        "nothing kept for a key nobody has asked about"
+    );
+
+    // Hand it something to keep, then ask for it back.
+    let script = r#"
+def transform():
+    made = dex.ws.insert_node_dyn("an expensive thing")
+    kept = dex.snapshot.send_request(target, KeepNode(7, made))
+    again = dex.snapshot.send_request(target, KeptNode(7))
+    # The first one wins, so a second asker shares it rather than replacing it.
+    other = dex.ws.insert_node_dyn("a second thing")
+    same = dex.snapshot.send_request(target, KeepNode(7, other))
+    return "%s %s %s" % (kept == made, again == made, same == made)
+"#;
+    let (handle, actions) = WorkspaceActionHandle::buffered();
+    let args = [("target".to_owned(), ScriptValue::Node(root))];
+    let out = run_script(script, PRELUDE, &handle, &args, GraphSnapshot::capture(&ws))
+        .expect("the script runs");
+    let ScriptOutput::Node(node) = out else {
+        panic!("returns three verdicts")
+    };
+    assert_eq!(
+        dex_nodes::scripting::node_to_value(&*node).map(|v| v.display()),
+        Some("True True True".to_owned()),
+        "it kept what it was given, hands it back, and the first one wins"
+    );
+    drop(handle);
+    for action in actions.try_iter() {
+        ws.submit_action_dyn(action);
+    }
+    ws.process_pending();
+
+    // And it is the view's own, so a clone copies it and a delete takes it away
+    // rather than leaving it behind with nothing pointing at it.
+    let check = r#"
+def transform():
+    kept = dex.snapshot.send_request(target, KeptNode(7))
+    owned = dex.snapshot.owned_refs(target)
+    assert kept is not None, "it is still keeping it"
+    assert kept in owned, "and it is among what the view owns"
+    return "ok"
+"#;
+    let (handle, _actions) = WorkspaceActionHandle::buffered();
+    let out = run_script(check, PRELUDE, &handle, &args, GraphSnapshot::capture(&ws))
+        .expect("the ownership check runs");
+    let ScriptOutput::Node(node) = out else {
+        panic!("returns ok")
+    };
+    assert_eq!(
+        dex_nodes::scripting::node_to_value(&*node).map(|v| v.display()),
+        Some("ok".to_owned())
+    );
+}

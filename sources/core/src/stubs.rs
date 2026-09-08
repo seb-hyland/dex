@@ -45,6 +45,25 @@ pub struct StubNodeImpl {
     pub name: &'static str,
 }
 
+/// A value the `dex` module carries, rather than a class or a method.
+pub struct StubGlobal {
+    pub name: &'static str,
+    /// The Rust type, mapped the same way a field's is.
+    pub ty: &'static str,
+    pub doc: &'static str,
+}
+
+dex_dynamic::__rt::inventory::collect!(StubGlobal);
+
+/// Every value the module carries, sorted by name.
+pub fn globals() -> Vec<&'static StubGlobal> {
+    let mut all: Vec<_> = dex_dynamic::__rt::inventory::iter::<StubGlobal>
+        .into_iter()
+        .collect();
+    all.sort_by_key(|g| g.name);
+    all
+}
+
 dex_dynamic::__rt::inventory::collect!(StubNodeImpl);
 
 /// The names of every bound class that is a node.

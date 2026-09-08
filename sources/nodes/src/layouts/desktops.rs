@@ -90,7 +90,7 @@ impl Desktops {
         let id = NodeUid::<Desktops>::mint();
 
         let canvas = Canvas::build(ws.clone());
-        let tab = DesktopTabView::build(ws.clone(), canvas, id, "Canvas 1".to_owned());
+        let tab = DesktopTabView::build(ws.clone(), canvas, id, "Unnamed desktop".to_owned());
         let tab_bar = HorizontalDnD::build(ws.clone(), vec![tab.erase()], TAB_SPACING, true);
         let sidebar = CanvasSidebar::build(ws.clone(), id);
         let add_button = Button::build_with(ws.clone(), Label::new(String::new()), |b| {

@@ -7,7 +7,7 @@ use utils::Transient;
 use crate::argtypes::{ArgSpec, ArgType, TypeFault, arg_type_labels, check_arg_types, describe};
 use crate::layouts::desktops::{Desktops, PythonPrelude};
 use crate::primitives::checkout;
-use crate::primitives::dropdown::{Dropdown, DropdownSelection};
+use crate::primitives::dropdown::{Dropdown, DropdownSelection, SetDropdownSelection};
 use crate::scripting::{
     DataflowOutput, ScriptOutput, ScriptValue, ValueDelegate, is_valid_ident, resolve_arg,
     run_script,
@@ -354,21 +354,25 @@ pub struct LambdaArg {
 
 #[utils::dynamic_methods]
 impl LambdaArg {
-    /// Build an argument into `ws`.
+    /// Build an argument into `ws`, for the reader to name.
     pub fn build(ws: WorkspaceActionHandle) -> NodeUid<LambdaArg> {
         let arg = NodeUid::mint();
         let port = ConnectionPort::build(ws.clone());
-        Self::build_with(ws, arg, port.erase(), "param_name".to_owned())
+        Self::build_with(
+            ws,
+            arg,
+            port.erase(),
+            "label".to_owned(),
+            "param_name".to_owned(),
+        )
     }
 
-    /**
-        Build an argument named `name` under ids the caller chose.
-
-    */
+    /// Build an argument under ids the caller chose.
     pub fn build_with(
         ws: WorkspaceActionHandle,
         arg: NodeUid<LambdaArg>,
         port: NodeUid,
+        label: String,
         name: String,
     ) -> NodeUid<LambdaArg> {
         // Every field in the row is a word in a sentence, so an empty one shows
@@ -378,7 +382,7 @@ impl LambdaArg {
             label.underline_when_empty = true;
             ws.insert_node(label)
         };
-        let label = field("label".to_owned());
+        let label = field(label);
         let param_name = field(name);
         /*
             A declaration reads as part of the argument's own line, not as a
@@ -487,6 +491,23 @@ impl Node for LambdaArg {
 }
 
 defhandlers! { LambdaArg {
+    actions: [
+        /*
+            Declare what this argument accepts.
+
+            The kind lives in a dropdown, and the dropdown's id is minted inside
+            `build_with` — so a caller assembling a lambda has no way to reach
+            it. Which it needs: a lambda offered ready-made should arrive
+            declaring what to wire into it, not saying `any`.
+        */
+        SetArgKind { kind: ArgType } => (this, s, ctx) {
+            ctx.workspace.submit_action(
+                this.kind_picker,
+                "Declared an argument's type",
+                SetDropdownSelection { index: s.kind.index() },
+            );
+        },
+    ],
     requests: [
         // This argument's parameter name and the node it is wired to.
         ArgBinding => (this, _q, ctx): (String, Option<NodeUid>) {
@@ -522,6 +543,10 @@ defhandlers! { LambdaArg {
         },
         // The dropdown that says what this argument accepts.
         ArgKindPicker => (this, _q): NodeUid { this.kind_picker.erase() },
+        // What the row calls this argument, as against what the script binds.
+        ArgLabel => (this, _q, ctx): String {
+            ctx.workspace.send_request(this.label, GetText).unwrap_or_default()
+        },
     ],
 }}
 
@@ -947,7 +972,13 @@ impl Lambda {
             .workspace
             .send_request(self.editor, ActiveScript)
             .unwrap_or_default();
-        match checkout::open(&ctx.id.key(), &source, &self.script_globals(ctx)) {
+
+        // The prelude goes with it
+        let prelude = ctx
+            .workspace
+            .send_request(ctx.workspace.root().cast::<Desktops>(), PythonPrelude)
+            .unwrap_or_default();
+        match checkout::open(&ctx.id.key(), &source, &self.script_globals(ctx), &prelude) {
             Ok(open) => self.checkout.set(open),
             Err(e) => eprintln!("could not check the script out: {e}"),
         }

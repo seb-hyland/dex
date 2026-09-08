@@ -31,7 +31,13 @@ fn add_arg(ws: &Workspace, owner: NodeUid, name: &str) -> NodeUid {
         .expect("the lambda exposes its argument row");
     let arg = NodeUid::mint();
     let port = NodeUid::mint();
-    LambdaArg::build_with(handle, arg.cast(), port, name.to_owned());
+    LambdaArg::build_with(
+        handle,
+        arg.cast(),
+        port,
+        "label".to_owned(),
+        name.to_owned(),
+    );
     ws.submit_action(args, "Add argument", AddArgAt { arg });
     port
 }

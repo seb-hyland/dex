@@ -134,19 +134,6 @@ def parse_pdb(text):
 # ======================================================================
 
 
-def hsv_rgb(h, s, v):
-    i = int(h * 6.0)
-    f = h * 6.0 - i
-    p, q, t = v * (1 - s), v * (1 - s * f), v * (1 - s * (1 - f))
-    (r, g, b) = [(v, t, p), (q, v, p), (p, v, t), (p, q, v), (t, p, v), (v, p, q)][i % 6]
-    return (int(r * 255), int(g * 255), int(b * 255))
-
-
-def lerp_rgb(a, b, t):
-    t = max(0.0, min(t, 1.0))
-    return tuple(int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3))
-
-
 def octagon(cx, cy, r):
     return [
         (cx + r * math.cos(k * math.pi / 4.0), cy + r * math.sin(k * math.pi / 4.0))
@@ -209,7 +196,7 @@ class Protein:
             self.yaw += drag.x * DRAG_SENS
             self.pitch = max(-1.4, min(1.4, self.pitch + drag.y * DRAG_SENS))
 
-        self._text(ctx, self.title, base.pos.x + MARGIN, base.pos.y + MARGIN,
+        text(ctx, self.title, base.pos.x + MARGIN, base.pos.y + MARGIN,
                    TITLE_FONT, INK)
 
         avail = min(width, height - TITLE_H - LEGEND_H) / 2.0 - MARGIN
@@ -255,12 +242,12 @@ class Protein:
             if kind == "line":
                 (a, b, ink) = payload
                 shade = lerp_rgb(lerp_rgb(ink, FAR, 0.7), ink, t)
-                self._line(ctx, [(a[0], a[1]), (b[0], b[1])], shade,
+                line(ctx, [(a[0], a[1]), (b[0], b[1])], shade,
                            LINE_W * (0.5 + 0.7 * t))
             else:
                 (q, ink) = payload
                 shade = lerp_rgb(lerp_rgb(ink, FAR, 0.6), ink, t)
-                self._polygon(ctx, octagon(q[0], q[1], DOT_R * (0.6 + 0.6 * t)), shade)
+                polygon(ctx, octagon(q[0], q[1], DOT_R * (0.6 + 0.6 * t)), shade)
 
         self._legend(ctx, base.pos.x + MARGIN,
                      base.pos.y + height - LEGEND_H + 4.0, width)
@@ -273,57 +260,13 @@ class Protein:
         for chain in self.order:
             name = "chain %s" % (chain.strip() or "?")
             m = ctx.measure_text(name, font, wrap)
-            self._polygon(ctx, [(x, y), (x + sw, y), (x + sw, y + sw), (x, y + sw)],
+            polygon(ctx, [(x, y), (x + sw, y), (x + sw, y + sw), (x, y + sw)],
                           self.chain_ink[chain])
-            self._text(ctx, name, x + sw + 4.0, y + (sw - m.height) / 2.0,
+            text(ctx, name, x + sw + 4.0, y + (sw - m.height) / 2.0,
                        LEGEND_FONT, INK)
             x += sw + 6.0 + m.width + 14.0
 
     # -- draw helpers ----------------------------------------------------
-
-    def _abs(self):
-        return dex.DrawConstraints(
-            pos=dex.ScreenPos.new(0.0, 0.0),
-            x=None, y=None, wrap=None, should_clip=False,
-        )
-
-    def _box(self, x, y, w, h):
-        return dex.DrawConstraints(
-            pos=dex.ScreenPos.new(x, y),
-            x=dex.AxisConstraint.Exactly(w),
-            y=dex.AxisConstraint.Exactly(h),
-            wrap=None, should_clip=False,
-        )
-
-    def _line(self, ctx, pts, rgb, width):
-        ctx.draw_node(
-            dex.Path.polyline(
-                [dex.Vector.new(px, py) for (px, py) in pts],
-                dex.Stroke.new(width, dex.Color.rgb(*rgb)),
-            ),
-            self._abs(),
-        )
-
-    def _polygon(self, ctx, pts, rgb):
-        ctx.draw_node(
-            dex.Path.polygon(
-                [dex.Vector.new(px, py) for (px, py) in pts],
-                dex.Color.rgb(*rgb), dex.Stroke.none(),
-            ),
-            self._abs(),
-        )
-
-    def _text(self, ctx, text, x, y, size, rgb):
-        label = dex.Label.new(text)
-        label.font = dex.Font.proportional(size)
-        label.color = dex.Color.rgb(*rgb)
-        ctx.draw_node(
-            label,
-            dex.DrawConstraints(
-                pos=dex.ScreenPos.new(x, y),
-                x=None, y=None, wrap=None, should_clip=False,
-            ),
-        )
 
     def _done(self, base, width, height):
         return dex.DrawResult.Complete(

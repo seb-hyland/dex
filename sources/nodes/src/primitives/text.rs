@@ -248,11 +248,47 @@ impl Label {
     }
 }
 
+/**
+    Whether `id` has just stopped holding focus, from a `tick`.
+
+    A control commits what was typed into it when focus leaves. Noticing that
+    while it *draws* only works for a control that is still being drawn: close
+    its tab, fold its panel, and it never notices — what was typed stays in the
+    buffer, invisible to everything reading the committed value. And a control
+    that stops being drawn is exactly the one whose edit is most likely
+    finished.
+
+    So the fact of having been focused is recorded while drawing, and the loss
+    is noticed on the next tick, drawn or not.
+*/
+fn focus_was_lost(ctx: NodeContext, focused: &Transient<bool>) -> bool {
+    if *focused.val() != Some(true) {
+        return false;
+    }
+    let id = egui::Id::new(ctx.id);
+    // No frame drawn yet is not a loss: nothing has had focus to lose.
+    if ctx.workspace.has_focus(id).unwrap_or(true) {
+        return false;
+    }
+    focused.set(false);
+    true
+}
+
+/// Note whether this control holds focus, for `focus_was_lost` to read later.
+fn note_focus(ui: &egui::Ui, id: egui::Id, focused: &Transient<bool>) {
+    if ui.memory(|memory| memory.has_focus(id)) {
+        focused.set(true);
+    }
+}
+
 #[utils::dynamic_type]
 #[utils::portable]
 pub struct LabelEditable {
     pub value: String,
     buf: Transient<String>,
+    /// Whether this held focus when it was last drawn. See [`focus_was_lost`].
+    #[dynamic(skip)]
+    focused: Transient<bool>,
 
     pub singleline: bool,
     pub shrink_to_text: bool,
@@ -315,6 +351,7 @@ impl LabelEditable {
         Self {
             value,
             buf: Transient::default(),
+            focused: Transient::default(),
             singleline: true,
             shrink_to_text: true,
             underline_when_empty: false,
@@ -433,6 +470,33 @@ impl Node for LabelEditable {
 
     fn settle(&mut self) {
         self.commit_buffer();
+    }
+
+    /// Commit what was typed once focus has gone elsewhere. See [`focus_was_lost`].
+    ///
+    /// Here rather than in `draw` so it happens whether or not this is still
+    /// being drawn — a field in a panel that has just been folded away has an
+    /// edit in it just as much as one still on screen.
+    fn tick(&self, ctx: NodeContext) {
+        if !focus_was_lost(ctx, &self.focused) {
+            return;
+        }
+        if let Some(text) = &*self.buf.val() {
+            ctx.workspace.submit_action(
+                ctx.id.cast::<Self>(),
+                "Kept what was typed",
+                SetText {
+                    value: text.clone(),
+                },
+            );
+        }
+        if self.auto_lock {
+            ctx.workspace.submit_action(
+                ctx.id.cast::<Self>(),
+                "Locked click-to-edit label on focus loss",
+                SetInteractive { on: false },
+            );
+        }
     }
 
     fn draw(&self, ctx: DrawContext) -> DrawResult {
@@ -571,7 +635,9 @@ impl Node for LabelEditable {
             )
             .inner;
 
+        note_focus(ctx.ui, editor_id, &self.focused);
         if editor_response.lost_focus() {
+            self.focused.set(false);
             ctx.submit_action_for_self::<Self, _>(
                 SetText {
                     value: buf_mut.clone(),
@@ -790,6 +856,9 @@ pub struct CodeEditor {
     /// node that owns it takes the flag and does the work.
     #[dynamic(skip)]
     external_edit: Transient<bool>,
+    /// Whether this held focus when it was last drawn. See [`focus_was_lost`].
+    #[dynamic(skip)]
+    focused: Transient<bool>,
 }
 
 #[utils::dynamic_methods]
@@ -805,7 +874,23 @@ impl CodeEditor {
             theme: "Github Light".to_owned(),
             language,
             external_edit: Transient::default(),
+            focused: Transient::default(),
         }
+    }
+}
+
+impl CodeEditor {
+    /**
+        Put `text` in the edit buffer without committing it.
+
+        The write half of `GetText`: what the widget itself does on every
+        keystroke, as against `SetText`, which sets the committed value too.
+        Anything reading this editor mid-edit — the sidebar watching the prelude
+        — sees this immediately; the committed value still catches up only on
+        focus loss.
+    */
+    pub fn set_buffer(&self, text: String) {
+        self.buf.set(text);
     }
 }
 
@@ -813,6 +898,21 @@ impl CodeEditor {
 impl Node for CodeEditor {
     fn type_name(&self, _ctx: NodeContext) -> String {
         "A Code Editor".to_owned()
+    }
+
+    /// Commit what was typed once focus has gone elsewhere. See [`focus_was_lost`].
+    fn tick(&self, ctx: NodeContext) {
+        if focus_was_lost(ctx, &self.focused)
+            && let Some(text) = &*self.buf.val()
+        {
+            ctx.workspace.submit_action(
+                ctx.id.cast::<Self>(),
+                "Kept what was typed",
+                SetText {
+                    value: text.clone(),
+                },
+            );
+        }
     }
 
     /**
@@ -915,17 +1015,9 @@ impl Node for CodeEditor {
             .with_theme(theme_for(&self.theme))
             .desired_width(text_w);
 
-        // Update on focus loss
-        if ctx
-            .ui
-            .memory_mut(|mem| mem.had_focus_last_frame(editor_id) && !mem.has_focus(editor_id))
-            && let Some(v) = &*self.buf.val()
-        {
-            ctx.submit_action_for_self::<Self, _>(
-                SetText { value: v.clone() },
-                "Updated editable label's stored value on focus loss",
-            );
-        }
+        // Whether it is focused is noted here and acted on in `tick`, so an
+        // editor that stops being drawn still commits what was typed into it.
+        note_focus(ctx.ui, editor_id, &self.focused);
 
         let mut buf_mut = self.buf.val_mut_or_else(|| self.value.clone());
         // The widget sizes itself to its text and scrolls internally, but a

@@ -12,14 +12,34 @@ use dex_nodes::layouts::canvas::layout::{Canvas, CanvasLayerNodes, Layer};
 use dex_nodes::scripting::{ScriptOutput, run_script};
 
 const SUPERPHYLO: &str = include_str!("../../../examples/superphylogeny.py");
+/// The example's tree is the default prelude's `Phylogeny`, so it runs under it
+/// exactly as a lambda would.
+const PRELUDE: &str = include_str!("../src/default_prelude.py");
 const SCREEN: egui::Vec2 = egui::vec2(900.0, 700.0);
+
+/// The prelude needs pyarrow; the repo keeps an environment with it.
+fn has_pyarrow() -> bool {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    dex_nodes::scripting::init_python();
+    ONCE.call_once(|| {
+        if pyo3::Python::attach(|py| py.import("pyarrow").is_ok()) {
+            return;
+        }
+        let demoenv = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demoenv/.venv");
+        if demoenv.is_dir() {
+            let _ = dex_nodes::settings::set_venv(Some(demoenv));
+        }
+    });
+    pyo3::Python::attach(|py| py.import("pyarrow").is_ok())
+}
 
 /// Run `body` as the example's `transform`, returning the id it hands back.
 fn run(ws: &mut Workspace, body: &str) -> NodeUid {
     let source = format!("{SUPERPHYLO}\ndef transform():\n{body}");
     let graph = GraphSnapshot::capture(ws);
     let (handle, actions) = WorkspaceActionHandle::buffered();
-    let uid = match run_script(&source, "", &handle, &[], graph) {
+    let uid = match run_script(&source, PRELUDE, &handle, &[], graph) {
         Ok(ScriptOutput::Handle(uid)) => uid,
         Ok(_) => panic!("the example returns a handle to the node it built"),
         Err(e) => panic!("{e}"),
@@ -87,9 +107,9 @@ fn frame(ws: &mut Workspace, ctx: &egui::Context) -> bool {
             match s {
                 egui::Shape::Mesh(m) => !m.vertices.is_empty(),
                 egui::Shape::Vec(v) => v.iter().any(walk),
-                egui::Shape::Circle(_)
-                | egui::Shape::LineSegment { .. }
-                | egui::Shape::Path(_) => true,
+                egui::Shape::Circle(_) | egui::Shape::LineSegment { .. } | egui::Shape::Path(_) => {
+                    true
+                }
                 _ => false,
             }
         }
@@ -102,7 +122,10 @@ fn frame(ws: &mut Workspace, ctx: &egui::Context) -> bool {
 /// leaf panel — and nothing else — in the foreground.
 #[test]
 fn the_tree_is_placed_on_a_plane_with_its_leaf_panel_in_front() {
-    dex_nodes::scripting::init_python();
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
     let mut ws = Workspace::new_empty();
     let canvas_id = build_tree(&mut ws);
 
@@ -117,8 +140,14 @@ fn the_tree_is_placed_on_a_plane_with_its_leaf_panel_in_front() {
         "the tree is the one item on the plane"
     );
     let front = band(&ws, canvas_id, Layer::Foreground);
-    assert_eq!(front.len(), 1, "its leaf panel is the one thing in front");
-    assert_eq!(name(&ws, front[0]), "Leaf Readout");
+    assert_eq!(
+        front.len(),
+        2,
+        "the annotation rings and the leaf panel, both pinned in front so they \
+         stay legible while the tree behind them is magnified"
+    );
+    assert_eq!(name(&ws, front[0]), "Annotation Rings");
+    assert_eq!(name(&ws, front[1]), "Leaf Readout");
     assert!(
         band(&ws, canvas_id, Layer::Background).is_empty(),
         "nothing is pinned under it"
@@ -128,7 +157,10 @@ fn the_tree_is_placed_on_a_plane_with_its_leaf_panel_in_front() {
 /// And it paints: the new sensor-and-search draw path runs without raising.
 #[test]
 fn the_tree_paints() {
-    dex_nodes::scripting::init_python();
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
     let mut ws = Workspace::new_empty();
     build_tree(&mut ws);
     let ctx = egui::Context::default();
@@ -195,6 +227,10 @@ fn a_structure_is_placed_on_a_named_plane_with_its_readout_in_front() {
     assert_eq!(name(&ws, items[0]), "A PDB Viewer");
 
     let chrome = band(&ws, canvas_id, Layer::Foreground);
-    assert_eq!(chrome.len(), 1, "and the readout is the one piece of chrome");
+    assert_eq!(
+        chrome.len(),
+        1,
+        "and the readout is the one piece of chrome"
+    );
     assert_eq!(name(&ws, chrome[0]), "Atom Readout");
 }
