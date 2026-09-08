@@ -1,31 +1,32 @@
 """One taxonomic tree that drills all the way down to structure.
 
-Three views, joined into a single object you explore by clicking inward:
+Three views, joined into a single object you explore by drilling inward:
 
   1. **The tree** — a circular phylogeny from the GTDB-style table (branches
-     tinted by phylum, a labelled clade ring, one clickable marker per tip).
-  2. **Click a tip → its genome.** The tip's accession is fetched from NCBI on a
-     background task; while it is in flight the inspector shows "Loading…", then
-     swaps itself for the Genome Explorer of that assembly. It carries a
-     fullscreen button, because a genome does not fit in a popup.
-  3. **Click a gene → its structure.** The gene's inspector shows its record
-     and, if the CDS resolves to a UniProt accession, fetches the AlphaFold
-     model for it — again on a task, again with fullscreen.
+     tinted by phylum, a labelled clade ring, a dot at each tip).
+  2. **Click a tip → its genome.** Hovering a tip names its leaf; clicking one
+     opens a small panel in the tree's foreground with an "Open genome" button.
+     That fetches the assembly from NCBI on a background task — "Loading…" shown
+     fullscreen while it is in flight — then the Genome Explorer of that genome
+     fills the screen.
+  3. **Click a gene → its structure.** Hovering a gene names it; clicking one
+     opens a panel with its record and, for a CDS, an "Open structure" button
+     that fetches the AlphaFold model (or folds the sequence with ESMFold) and
+     opens it fullscreen.
 
-Every one of those three is bigger than the box it is shown in, so every one of
-them sits on a `Canvas` of its own (`on_plane`): drawn once, life-size and
-generous, and moved around by dragging and alt-scrolling. Nothing invents its own
-navigation. Zoom is measured against a whole desktop rather than against the box
-in hand, so a plane shown small in an inspector's preview is the same picture
-scaled down, and opening it fullscreen shows you what you were already looking
-at. The exception is the structure, which gives up the plane's drag in exchange
-for being turned by it.
+**One sensor, not a node per point.** The tree has thousands of tips and a genome
+thousands of genes; a clickable *node* at each — drawn and hit-tested every
+frame — is what made a full tree crawl. Instead each plot draws its own marks,
+records where they landed, and answers hover and click by searching that list,
+the way `pdb_viewer.py` picks an atom. The hover readout and the click panel live
+in the plane's *foreground*, reading the selection off the plot object directly —
+the `Protein`/`AtomPanel` split — so they stay put and legible at any zoom.
 
-Each plane is named after what it holds, so the inspector's heading and the
-breadcrumb trail say "Genome" and not "A Canvas". And anything that must stay
-legible however far the plane has been dragged or magnified — a genome's title
-and key, the selected atom's readout — is drawn in the plane's *foreground*,
-which stays put and life-size over it.
+Every one of these views is bigger than the box it is shown in, so each sits on a
+`Canvas` of its own (`on_plane`): drawn once, life-size, and moved by dragging
+and alt-scrolling. The structure is the exception, giving up the plane's drag in
+exchange for being turned by it. Each plane is named after what it holds, so the
+breadcrumb trail says "Genome" and not "A Canvas".
 
 Nothing is precomputed and nothing blocks: every fetch runs through `dex.spawn`,
 which hands a Python callable to a background thread. The callable owns a
@@ -43,9 +44,7 @@ The join keys, both carried in the data itself:
 
 Scope note: this keeps the tree to branches + clade ring + tips so the drill-down
 is the story. The annotation rings from `circos_table.py` layer straight back in
-if you want them. And one clickable node per tip is a lot of nodes on a full
-GTDB tree — fine for a clade, heavy for ten thousand tips; subsample the table
-for the whole tree, or make only a chosen rank's tips inspectable.
+if you want them.
 """
 
 import io
@@ -216,163 +215,15 @@ def async_slot(ws, produce):
 
 
 # ======================================================================
-# Fullscreen wrapper: a thumbnail in the popup, big on demand
+# Shared constants and draw helpers
 # ======================================================================
 
-FS_BTN_H = 32.0
+# A structure or genome shown in an inspector preview can be handed a non-finite
+# axis on a measure pass; these are the fallbacks it falls back to.
 THUMB_W = 380.0
 THUMB_H = 280.0
 INK = (58, 62, 70)
 FAINT = (120, 126, 136)
-
-
-class Framed:
-    """A preview with an "Open Fullscreen" button beneath it — the same `Button`
-    the canvas uses — which pushes `body` as a Desktops override (`PushOverride`)
-    to fill the content area.
-
-    `body` and the button are OWNED here, but `Framed` itself is owned by a stable
-    parent (`Tip`/`Gene`), not by the inspector — so opening fullscreen (which
-    closes the inspector) does not take the node with it.
-    """
-
-    def __init__(self, body, button):
-        self.body = body        # uid of the node to preview / fullscreen
-        self.button = button    # uid of the "Open Fullscreen" Button
-
-    def draw(self, ctx):
-        base = ctx.constraints
-        w = base.x.provided_value() if base.x is not None else THUMB_W
-        h = base.y.provided_value() if base.y is not None else THUMB_H + FS_BTN_H
-        if not math.isfinite(w):
-            w = THUMB_W
-        if not math.isfinite(h):
-            h = THUMB_H + FS_BTN_H
-        w = max(w, THUMB_W)
-        h = max(h, THUMB_H + FS_BTN_H)
-        (x0, y0) = (base.pos.x, base.pos.y)
-
-        ctx.draw_node(self.body, _box(x0, y0, w, h - FS_BTN_H))
-        ctx.draw_node(self.button,
-                      _box(x0, y0 + h - FS_BTN_H + 4.0, min(200.0, w), FS_BTN_H - 8.0))
-        if ctx.node.workspace.send_request(self.button, dex.TakeClicked()):
-            root = ctx.node.workspace.root()
-            ctx.node.workspace.submit_action(
-                root, dex.PushOverride(node=self.body), "Opened fullscreen"
-            )
-        return dex.DrawResult.Complete(
-            region=dex.ScreenRegion.from_min_size(base.pos, dex.Vector.new(w, h))
-        )
-
-    def type_name(self):
-        return "Preview"
-
-    def owned_nodes(self):
-        return [self.body, self.button]
-
-    def on_delete(self, ctx):
-        ctx.workspace.delete_node(self.body)
-        ctx.workspace.delete_node(self.button)
-
-    def build_inspector(self, ctx):
-        return None
-
-
-def framed(ws, body_uid):
-    """Wrap an already-inserted `body_uid` with an Open-Fullscreen button."""
-    button = dex.Button.build(ws, dex.Label.new("Open Fullscreen"))
-    return Framed(body_uid, button)
-
-
-class Ref:
-    """Draws another node by id WITHOUT owning it.
-
-    `build_inspector` returns one of these so the inspector shows a persistent
-    result; when the inspector closes and deletes this ref, the result — owned by
-    a stable parent (`Tip`/`Gene`) — is untouched, and so survives to be pushed
-    fullscreen.
-    """
-
-    def __init__(self, target):
-        self.target = target
-
-    def draw(self, ctx):
-        return ctx.draw_node(self.target, ctx.constraints)
-
-    def type_name(self):
-        return "Result"
-
-    def owned_nodes(self):
-        return []
-
-    def on_delete(self, ctx):
-        pass
-
-    def build_inspector(self, ctx):
-        return None
-
-
-class FoldPrompt:
-    """A button that folds a sequence with ESMFold on demand.
-
-    ESMFold predicts from sequence — the only route to a structure for a MAG
-    protein AlphaFold has never seen — but each fold is a live, slow computation.
-    So it does not run on inspect: this offers the button, and only a click
-    replaces it (in place, at its own id) with the pending fold and then the
-    structure.
-    """
-
-    def __init__(self, seq, button):
-        self.seq = seq
-        self.button = button
-
-    def draw(self, ctx):
-        base = ctx.constraints
-        w = base.x.provided_value() if base.x is not None else THUMB_W
-        h = base.y.provided_value() if base.y is not None else 58.0
-        if not math.isfinite(w):
-            w = THUMB_W
-        if not math.isfinite(h):
-            h = 58.0
-        w = max(w, THUMB_W)
-        (x0, y0) = (base.pos.x, base.pos.y)
-        _text(ctx, "No known structure — fold %d aa on demand:" % len(self.seq),
-              x0, y0 + 4.0, 11.0, FAINT)
-        ctx.draw_node(self.button, _box(x0, y0 + 26.0, min(240.0, w), 24.0))
-        if ctx.node.workspace.send_request(self.button, dex.TakeClicked()):
-            me = ctx.node.id
-            ws = ctx.node.workspace.action_handle()
-            seq = self.seq
-            ws.delete_node(self.button)
-            ws.insert_node_at_dyn(me, _pending("Folding with ESMFold — this can take a while…"))
-
-            def worker():
-                try:
-                    node = framed(ws, build_protein(ws, fetch_esmfold(seq)))
-                except Exception as exc:  # noqa: BLE001
-                    node = dex.ErrorLayout.message("%s: %s" % (type(exc).__name__, exc))
-                ws.insert_node_at_dyn(me, node)
-
-            dex.spawn(worker)
-        return dex.DrawResult.Complete(
-            region=dex.ScreenRegion.from_min_size(base.pos, dex.Vector.new(w, max(h, 58.0))))
-
-    def type_name(self):
-        return "Fold on demand"
-
-    def owned_nodes(self):
-        return [self.button]
-
-    def on_delete(self, ctx):
-        ctx.workspace.delete_node(self.button)
-
-    def build_inspector(self, ctx):
-        return None
-
-
-# ======================================================================
-# Shared draw helpers
-# ======================================================================
 
 
 def on_plane(ws, body_uid, size, what="Placed it", foreground=(), name=None):
@@ -1035,125 +886,34 @@ def arrow_points(x0, x1, y0, y1, strand):
     return [(x1, y0), (x0 + head, y0), (x0, ymid), (x0 + head, y1), (x1, y1)]
 
 
-class Gene:
-    """A gene arrow whose inspector shows its record and, if it has a UniProt
-    xref, fetches and shows the AlphaFold structure below it."""
-
-    def __init__(self, key, name, locus, product, start, end, strand,
-                 uniprot, protein_id, translation):
-        self.key = key
-        self.name = name
-        self.locus = locus
-        self.product = product
-        self.start = start
-        self.end = end
-        self.strand = strand
-        self.uniprot = uniprot          # from a UniProtKB /db_xref, if present
-        self.protein_id = protein_id    # /protein_id, resolved to UniProt on demand
-        self.translation = translation  # the AA sequence, for ESMFold fallback
-        self.color = FEATURE_COLORS.get(key, (150, 150, 156))
-        self._panel = None
-
-    def draw(self, ctx):
-        base = ctx.constraints
-        w = base.x.provided_value() if base.x is not None else 0.0
-        h = base.y.provided_value() if base.y is not None else 0.0
-        if w <= 0.0 or h <= 0.0:
-            return dex.DrawResult.Complete(region=None)
-        (x0, y0) = (base.pos.x, base.pos.y)
-        pts = arrow_points(x0, x0 + w, y0, y0 + h, self.strand)
-        _polygon(ctx, pts, self.color)
-        return dex.DrawResult.Complete(
-            region=dex.ScreenRegion.from_min_size(base.pos, dex.Vector.new(w, h)))
-
-    def _data_label(self):
-        rows = []
-        if self.name:
-            rows.append("Gene: %s" % self.name)
-        if self.locus:
-            rows.append("Locus tag: %s" % self.locus)
-        rows.append("Type: %s" % self.key)
-        if self.product:
-            rows.append("Product: %s" % self.product)
-        if self.uniprot:
-            rows.append("UniProt: %s" % self.uniprot)
-        arrow = "→" if self.strand >= 0 else "←"
-        rows.append("Location: %d %s %d" % (self.start, arrow, self.end))
-        label = dex.Label.new("\n".join(rows))
-        label.singleline = False
-        label.color = dex.Color.rgb(*INK)
-        return label
-
-    def type_name(self):
-        return "%s (%s)" % (self.name or self.locus or self.key, self.key)
-
-    def build_inspector(self, ctx):
-        # `build_inspector` gets a NodeContext (`.workspace`), not a DrawContext.
-        ws = ctx.workspace.action_handle()
-        if self._panel is None:
-            data_uid = ws.insert_node_dyn(self._data_label())
-            # Any CDS with a UniProt xref, a protein_id, or a translation can
-            # reach a model: AlphaFold if it's a known UniProt protein, else
-            # ESMFold folds the sequence directly (which is what MAG genes need).
-            if self.key != "CDS" or not (self.uniprot or self.protein_id or self.translation):
-                self._panel = data_uid
-            else:
-                uni, pid, seq = self.uniprot, self.protein_id, self.translation
-
-                def produce(ws):
-                    acc = uni or resolve_uniprot(pid)
-                    if acc:
-                        try:
-                            pdb = fetch_alphafold(acc)
-                            return framed(ws, build_protein(ws, pdb))
-                        except urllib.error.HTTPError as e:
-                            # 404: the archive has no model for it. 400: the
-                            # accession is not one AlphaFold indexes at all.
-                            # Either way there is nothing to show, and ESMFold
-                            # below is the fallback.
-                            if e.code not in (400, 404):
-                                raise
-                    # No precomputed model. ESMFold can fold the sequence live, but
-                    # that is slow — so offer a button, not an automatic wait.
-                    if seq and len(seq) <= ESMFOLD_MAX:
-                        button = dex.Button.build(ws, dex.Label.new("Predict structure (ESMFold)"))
-                        return FoldPrompt(seq, button)
-                    if seq:
-                        return _note("No AlphaFold model; %d aa is over the "
-                                     "ESMFold limit (%d)." % (len(seq), ESMFOLD_MAX))
-                    return _note("No structure available for this gene.")
-
-                struct_uid = async_slot(ws, produce)
-                self._panel = ws.insert_node_dyn(
-                    dex.VerticalLayout.new([data_uid, struct_uid], 8.0))
-        # The panel is owned by this Gene (persistent); the inspector only
-        # borrows it through a Ref, so closing the inspector cannot delete it.
-        return ws.insert_node_dyn(Ref(self._panel))
-
-    def owned_nodes(self):
-        return [self._panel] if self._panel is not None else []
-
-    def on_delete(self, ctx):
-        if self._panel is not None:
-            ctx.workspace.delete_node(self._panel)
-
-
 class GenomeExplorer:
-    """The wrapped genome map (see genome_explorer.py), genes inspectable.
+    """The wrapped genome map, its genes picked by one sensor rather than a node
+    apiece — thousands of inspectable gene-nodes were what made this slow.
 
-    The map alone: what it is and what its colours mean are drawn by
-    `GenomeChrome` in the plane's foreground, where they stay legible however far
-    the map has been dragged or magnified.
+    It draws every gene arrow itself, records each one's box, and hit-tests the
+    pointer against them; the `GenePanel` in the plane's foreground reads the
+    hovered and selected gene off this object and shows them. What the map is and
+    what its colours mean are `GenomeChrome`, also in the foreground, where they
+    stay legible however far the plane has been dragged or magnified.
     """
 
-    def __init__(self, records, offsets, genes, total_len, types_present):
+    def __init__(self, records, offsets, genes, total_len, types_present, sensor):
         self.records = list(records)
         self.offsets = list(offsets)
-        self.genes = list(genes)   # [{uid, start, end, strand, key}]
+        self.genes = list(genes)   # gene dicts: layout span + record + colour
         self.total_len = total_len
         self.types_present = list(types_present)
+        self.sensor = sensor
+        self.hover = None          # gene index under the pointer, or None
+        self.selected = None       # gene index a click chose, or None
+        self._boxes = []           # [(x0, y0, x1, y1, index)] this frame
         defn = (records[0][2] if records else "") or (records[0][0] if records else "genome")
         self.title = "%s — %d bp · %d features" % (defn, total_len, len(genes))
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_boxes"] = []
+        return state
 
     def draw(self, ctx):
         base = ctx.constraints
@@ -1166,6 +926,7 @@ class GenomeExplorer:
             width = THUMB_W
         if not math.isfinite(height):
             height = THUMB_H
+        self._boxes = []
         x0, y0 = base.pos.x + G_MARGIN, base.pos.y + G_MARGIN
         plot_w, plot_h = width - 2 * G_MARGIN, height - 2 * G_MARGIN
         # The title and the key sit in the plane's foreground (`GenomeChrome`),
@@ -1185,7 +946,7 @@ class GenomeExplorer:
             _line(ctx, [(track_x, line_y), (track_x + row_len * scale, line_y)],
                   (168, 174, 184), 1.0)
             _text(ctx, "{:,}".format(r * bp_per_row + 1), x0, line_y - 6.0, 9.0, FAINT)
-        for g in self.genes:
+        for (gi, g) in enumerate(self.genes):
             r = g["start"] // bp_per_row
             if r >= n_rows:
                 continue
@@ -1199,8 +960,27 @@ class GenomeExplorer:
                 gy0, gy1 = line_y - LINE_HALF - BAND, line_y - LINE_HALF
             else:
                 gy0, gy1 = line_y + LINE_HALF, line_y + LINE_HALF + BAND
-            ctx.draw_inspectable_node(g["uid"], _box(gx0, gy0, gx1 - gx0, gy1 - gy0))
+            _polygon(ctx, arrow_points(gx0, gx1, gy0, gy1, g["strand"]), g["color"])
+            self._boxes.append((gx0, gy0, gx1, gy1, gi))
+
+        # One sensor over the whole map: hover to read a gene, click to select.
+        ws = ctx.node.workspace
+        _clip = dex.DrawConstraints(
+            pos=base.pos, x=dex.AxisConstraint.Exactly(width),
+            y=dex.AxisConstraint.Exactly(height), wrap=None, should_clip=False)
+        ctx.draw_node(self.sensor, _clip)
+        pointer = ws.send_request(self.sensor, dex.PointerPos())
+        self.hover = self._gene_at(pointer) if pointer is not None else None
+        if ws.send_request(self.sensor, dex.TakeClicked()) and pointer is not None:
+            self.selected = self.hover
         return self._done(base, width, height)
+
+    def _gene_at(self, p):
+        # Last drawn first, so a gene on a later row wins where rows are dense.
+        for (x0, y0, x1, y1, gi) in reversed(self._boxes):
+            if x0 <= p.x <= x1 and y0 <= p.y <= y1:
+                return gi
+        return None
 
     def _done(self, base, w, h):
         return dex.DrawResult.Complete(
@@ -1210,11 +990,123 @@ class GenomeExplorer:
         return "A Genome Explorer"
 
     def owned_nodes(self):
-        return [g["uid"] for g in self.genes]
+        return [self.sensor]
 
     def on_delete(self, ctx):
-        for g in self.genes:
-            ctx.workspace.delete_node(g["uid"])
+        ctx.workspace.delete_node(self.sensor)
+
+    def build_inspector(self, ctx):
+        return None
+
+
+class GenePanel:
+    """The hovered and selected gene, pinned in the genome plane's foreground.
+
+    It reads the selection off the `GenomeExplorer` object directly — the two are
+    one view in two bands, and only the map can know which gene a click landed on.
+    A hovered gene gets a one-line readout along the bottom; a clicked CDS gets a
+    card with its record and an "Open structure" button, which fetches the model
+    (AlphaFold, else ESMFold from the sequence) and opens it fullscreen.
+    """
+
+    def __init__(self, explorer, button):
+        self.explorer = explorer
+        self.button = button
+        self._struct = {}   # gene index -> structure plane uid (fetched once)
+
+    def draw(self, ctx):
+        base = ctx.constraints
+        w = base.x.provided_value() if base.x is not None else None
+        h = base.y.provided_value() if base.y is not None else None
+        if w is None or h is None or not (math.isfinite(w) and math.isfinite(h)):
+            return dex.DrawResult.Complete(region=None)
+        ge = self.explorer
+        genes = ge.genes
+
+        if ge.hover is not None and ge.hover < len(genes):
+            g = genes[ge.hover]
+            name = g["name"] or g["locus"] or g["key"]
+            line = "%s (%s)" % (name, g["key"])
+            if g["product"]:
+                line += " — " + g["product"]
+            _text(ctx, line, base.pos.x + 12.0, base.pos.y + h - 22.0, 11.0, INK)
+
+        if ge.selected is not None and ge.selected < len(genes):
+            self._overlay(ctx, base, w, h, ge.selected)
+        return dex.DrawResult.Complete(region=None)
+
+    def _overlay(self, ctx, base, w, h, gi):
+        g = self.explorer.genes[gi]
+        rows = []
+        if g["name"]:
+            rows.append("Gene: %s" % g["name"])
+        if g["locus"]:
+            rows.append("Locus tag: %s" % g["locus"])
+        rows.append("Type: %s" % g["key"])
+        if g["product"]:
+            rows.append("Product: %s" % g["product"])
+        if g["uniprot"]:
+            rows.append("UniProt: %s" % g["uniprot"])
+        arrow = "→" if g["strand"] >= 0 else "←"
+        rows.append("Location: %d %s %d" % (g["loc_start"], arrow, g["loc_end"]))
+
+        pw = 230.0
+        font_h = 15.0
+        can_fold = g["key"] == "CDS" and (g["uniprot"] or g["protein_id"] or g["translation"])
+        ph = len(rows) * font_h + 16.0 + (30.0 if can_fold else 0.0)
+        x = base.pos.x + w - pw - 12.0
+        y = base.pos.y + 12.0
+        ctx.draw_node(
+            dex.Rect.bordered(pw, ph, dex.Color.rgba(255, 255, 255, 244), 5.0,
+                              dex.Stroke.new(1.0, dex.Color.rgb(*SCRUB_EDGE))),
+            _box(x, y, pw, ph))
+        for (k, s) in enumerate(rows):
+            _text(ctx, s, x + 9.0, y + 8.0 + k * font_h, 10.5, INK)
+        if can_fold:
+            by = y + ph - 26.0
+            ctx.draw_node(self.button, _box(x + 9.0, by, pw - 18.0, 20.0))
+            if ctx.node.workspace.send_request(self.button, dex.TakeClicked()):
+                self._open_structure(ctx.node.workspace.action_handle(), gi)
+
+    def _open_structure(self, ws, gi):
+        """Fetch (once) and push the gene's structure fullscreen."""
+        if gi in self._struct:
+            ws.submit_action(ws.root(), dex.PushOverride(node=self._struct[gi]),
+                             "Structure fullscreen")
+            return
+        g = self.explorer.genes[gi]
+        uni, pid, seq = g["uniprot"], g["protein_id"], g["translation"]
+
+        def produce(ws):
+            acc = uni or resolve_uniprot(pid)
+            if acc:
+                try:
+                    return build_protein(ws, fetch_alphafold(acc))
+                except urllib.error.HTTPError as e:
+                    # 404: no model for it; 400: not an accession AlphaFold
+                    # indexes. Either way, fall through to ESMFold.
+                    if e.code not in (400, 404):
+                        raise
+            if seq and len(seq) <= ESMFOLD_MAX:
+                return build_protein(ws, fetch_esmfold(seq))
+            if seq:
+                return _note("No AlphaFold model; %d aa is over the ESMFold "
+                             "limit (%d)." % (len(seq), ESMFOLD_MAX))
+            return _note("No structure available for this gene.")
+
+        uid = async_slot(ws, produce)
+        self._struct[gi] = uid
+        ws.submit_action(ws.root(), dex.PushOverride(node=uid), "Structure fullscreen")
+
+    def type_name(self):
+        return "Gene Readout"
+
+    def owned_nodes(self):
+        return [self.button] + list(self._struct.values())
+
+    def on_delete(self, ctx):
+        for uid in self.owned_nodes():
+            ctx.workspace.delete_node(uid)
 
     def build_inspector(self, ctx):
         return None
@@ -1276,6 +1168,8 @@ class GenomeChrome:
 
 
 def build_genome_explorer(ws, gbff_text):
+    """Parse `gbff_text` into a `GenomeExplorer` — genes as plain data, one sensor
+    for the lot, no node per gene."""
     records = parse_genbank(gbff_text)
     genes, offsets, recmeta, types_present, offset = [], [], [], [], 0
     for rec in records:
@@ -1293,17 +1187,36 @@ def build_genome_explorer(ws, gbff_text):
             if parsed is None:
                 continue
             (s, e, strand) = parsed
-            gene = Gene(key, quals.get("gene", ""), quals.get("locus_tag", ""),
-                        quals.get("product", ""), s, e, strand,
-                        uniprot_of(quals), quals.get("protein_id", ""),
-                        quals.get("translation", "") if isinstance(quals.get("translation"), str) else "")
-            uid = ws.insert_node_dyn(gene)
-            genes.append({"uid": uid, "start": offset + s, "end": offset + e,
-                          "strand": strand, "key": key})
+            tr = quals.get("translation", "")
+            genes.append({
+                "start": offset + s, "end": offset + e, "loc_start": s, "loc_end": e,
+                "strand": strand, "key": key, "name": quals.get("gene", ""),
+                "locus": quals.get("locus_tag", ""), "product": quals.get("product", ""),
+                "uniprot": uniprot_of(quals), "protein_id": quals.get("protein_id", ""),
+                "translation": tr if isinstance(tr, str) else "",
+                "color": FEATURE_COLORS.get(key, (150, 150, 156)),
+            })
             if key not in types_present:
                 types_present.append(key)
         offset += length
-    return GenomeExplorer(recmeta, offsets, genes, offset, types_present)
+    sensor = ws.insert_node_dyn(dex.InteractionBox.sensing(True, True, False))
+    return GenomeExplorer(recmeta, offsets, genes, offset, types_present, sensor)
+
+
+def build_genome_plane(ws, gbff_text):
+    """A genome on a pan/zoom plane, its key and gene panel in the foreground.
+
+    The `GenePanel` shares the `GenomeExplorer` object (not a copy), so the click
+    the map records is the click the panel reads — the `Protein`/`AtomPanel` split
+    exactly.
+    """
+    explorer = build_genome_explorer(ws, gbff_text)
+    body = ws.insert_node_dyn(explorer)
+    chrome = ws.insert_node_dyn(GenomeChrome(explorer.title, explorer.types_present))
+    button = dex.Button.build(ws, dex.Label.new("Open structure"))
+    panel = ws.insert_node_dyn(GenePanel(explorer, button))
+    return on_plane(ws, body, GENOME_SIZE, "Placed the genome", [chrome, panel],
+                    name="Genome")
 
 
 # ======================================================================
@@ -1508,65 +1421,99 @@ class Tree:
         return [(c, a0, a1) for (c, a0, a1) in runs if c not in (None, "")]
 
 
-class Tip:
-    """A clickable marker for one leaf; its inspector fetches the genome."""
+class TreePanel:
+    """The hovered and selected leaf, pinned in the tree plane's foreground.
 
-    def __init__(self, key, label, color):
-        self.key = key
-        self.label = label
-        self.color = color
-        self._result = None
+    It reads the tree's hover and selection directly (one view drawn in two
+    bands — only the ring can know which tip a click landed on). A hover names the
+    leaf along the bottom; a click shows its label and an "Open genome" button,
+    which fetches that leaf's genome and opens it fullscreen.
+    """
+
+    def __init__(self, tree, button):
+        self.tree = tree
+        self.button = button
+        self._genome = {}   # tip id -> genome plane uid (fetched once)
 
     def draw(self, ctx):
         base = ctx.constraints
-        w = base.x.provided_value() if base.x is not None else 0.0
-        h = base.y.provided_value() if base.y is not None else 0.0
-        if w <= 0.0 or h <= 0.0:
+        w = base.x.provided_value() if base.x is not None else None
+        h = base.y.provided_value() if base.y is not None else None
+        if w is None or h is None or not (math.isfinite(w) and math.isfinite(h)):
             return dex.DrawResult.Complete(region=None)
-        cx, cy = base.pos.x + w / 2.0, base.pos.y + h / 2.0
-        # A small dot centred in the (larger) click box, so tips read as points,
-        # not blobs, even when thousands crowd the ring.
-        _polygon(ctx, octagon(cx, cy, min(w, h) * 0.28), self.color)
-        return dex.DrawResult.Complete(
-            region=dex.ScreenRegion.from_min_size(base.pos, dex.Vector.new(w, h)))
+        tree = self.tree
+        if tree.hover is not None and tree.hover in tree.tip_info:
+            (key, label, _c) = tree.tip_info[tree.hover]
+            _text(ctx, "%s   ·   %s" % (label, key),
+                  base.pos.x + 12.0, base.pos.y + h - 22.0, 11.0, INK)
+        if tree.selected is not None and tree.selected in tree.tip_info:
+            self._overlay(ctx, base, w, h, tree.selected)
+        return dex.DrawResult.Complete(region=None)
+
+    def _overlay(self, ctx, base, w, h, t):
+        (key, label, _c) = self.tree.tip_info[t]
+        font = dex.Font.proportional(11.0)
+        wrap = dex.TextWrap.singleline()
+        rows = [label, key]
+        pw = max(180.0, max(ctx.measure_text(s, font, wrap).width for s in rows) + 18.0)
+        ph = len(rows) * 15.0 + 16.0 + 30.0
+        x = base.pos.x + w - pw - 12.0
+        y = base.pos.y + 12.0
+        ctx.draw_node(
+            dex.Rect.bordered(pw, ph, dex.Color.rgba(255, 255, 255, 244), 5.0,
+                              dex.Stroke.new(1.0, dex.Color.rgb(*SCRUB_EDGE))),
+            _box(x, y, pw, ph))
+        _text(ctx, label, x + 9.0, y + 8.0, 12.0, INK)
+        _text(ctx, key, x + 9.0, y + 24.0, 10.0, FAINT)
+        by = y + ph - 26.0
+        ctx.draw_node(self.button, _box(x + 9.0, by, pw - 18.0, 20.0))
+        if ctx.node.workspace.send_request(self.button, dex.TakeClicked()):
+            self._open(ctx.node.workspace.action_handle(), t, key)
+
+    def _open(self, ws, t, key):
+        if t in self._genome:
+            ws.submit_action(ws.root(), dex.PushOverride(node=self._genome[t]),
+                             "Genome fullscreen")
+            return
+
+        def produce(ws):
+            return build_genome_plane(ws, fetch_gbff(key))
+
+        uid = async_slot(ws, produce)
+        self._genome[t] = uid
+        ws.submit_action(ws.root(), dex.PushOverride(node=uid), "Genome fullscreen")
 
     def type_name(self):
-        return self.label or self.key
-
-    def build_inspector(self, ctx):
-        # `build_inspector` gets a NodeContext (`.workspace`), not a DrawContext.
-        ws = ctx.workspace.action_handle()
-        if self._result is None:
-            key = self.key
-
-            def produce(ws):
-                explorer = build_genome_explorer(ws, fetch_gbff(key))
-                chrome = ws.insert_node_dyn(
-                    GenomeChrome(explorer.title, explorer.types_present))
-                plane = on_plane(ws, ws.insert_node_dyn(explorer), GENOME_SIZE,
-                                 "Placed the genome", [chrome], name="Genome")
-                return framed(ws, plane)
-
-            self._result = async_slot(ws, produce)
-        # Owned by this Tip (persistent), borrowed by the inspector via a Ref.
-        return ws.insert_node_dyn(Ref(self._result))
+        return "Leaf Readout"
 
     def owned_nodes(self):
-        return [self._result] if self._result is not None else []
+        return [self.button] + list(self._genome.values())
 
     def on_delete(self, ctx):
-        if self._result is not None:
-            ctx.workspace.delete_node(self._result)
+        for uid in self.owned_nodes():
+            ctx.workspace.delete_node(uid)
+
+    def build_inspector(self, ctx):
+        return None
 
 
 class SuperPhylogeny:
     """The circos_table tree — branches, annotation rings, clade rim (all cached
-    and run-merged) — plus one inspectable `Tip` node at each *branch tip*, whose
-    inspector drills into that leaf's genome."""
+    and run-merged) — picked by one sensor rather than a node per tip.
 
-    def __init__(self, columns, tips):
+    It records each leaf's screen position every frame and hit-tests the pointer
+    against them; the `TreePanel` in the plane's foreground reads the hovered and
+    selected tip off this object and drills into that leaf's genome. A node per
+    tip was what made a full tree crawl.
+    """
+
+    def __init__(self, columns, tip_info, sensor):
         self.columns = {k: list(v) for (k, v) in columns.items()}
-        self.tip_nodes = dict(tips)   # tree tip id -> Tip node uid
+        self.tip_info = dict(tip_info)   # tree tip id -> (key, label, color)
+        self.sensor = sensor
+        self.hover = None                # tip id under the pointer, or None
+        self.selected = None             # tip id a click chose, or None
+        self._tip_pos = {}               # tip id -> (x, y) this frame
         names = list(self.columns.keys())
         self.anno_cols, self.grouped, self.families = annotation_columns(names)
         self.kinds = {n: column_kind(self.columns[n]) for n in self.anno_cols}
@@ -1581,6 +1528,11 @@ class SuperPhylogeny:
         self._paths = []
         self._labels = []
         self._tree = None
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_tip_pos"] = {}
+        return state
 
     # -- drawing ---------------------------------------------------------
 
@@ -1606,19 +1558,40 @@ class SuperPhylogeny:
             ctx.draw_node(label, dex.DrawConstraints(
                 pos=dex.ScreenPos.new(cx + ox, cy + oy), x=None, y=None,
                 wrap=None, should_clip=False))
-        # Inspection targets sit at each leaf's *branch endpoint* (its depth
-        # radius), inside the annotation rings — a branch tip, not the outer ring.
+        # A dot at each leaf's *branch endpoint* (its depth radius), inside the
+        # annotation rings — a branch tip, not the outer ring — and where the
+        # pointer can find it. Drawn here rather than by a node apiece: thousands
+        # of tip-nodes, each hit-tested every frame, were what made this slow.
         tree = self._tree
+        self._tip_pos = {}
         if tree is not None:
             for t in tree.tips:
-                uid = self.tip_nodes.get(t)
-                if uid is None:
-                    continue
                 (x, y) = polar(cx, cy, radius * tree.radius_frac(t), tree.angle[t])
-                ctx.draw_inspectable_node(
-                    uid, _box(x - TIP_DOT / 2.0, y - TIP_DOT / 2.0, TIP_DOT, TIP_DOT))
+                self._tip_pos[t] = (x, y)
+                (_k, _l, color) = self.tip_info.get(t, (None, None, BRANCH_INK))
+                _polygon(ctx, octagon(x, y, TIP_DOT * 0.30), color)
+
+        # One sensor over the whole ring: hover to name a leaf, click to select.
+        ws = ctx.node.workspace
+        ctx.draw_node(self.sensor, dex.DrawConstraints(
+            pos=base.pos, x=dex.AxisConstraint.Exactly(width),
+            y=dex.AxisConstraint.Exactly(height), wrap=None, should_clip=False))
+        pointer = ws.send_request(self.sensor, dex.PointerPos())
+        self.hover = self._tip_at(pointer) if pointer is not None else None
+        if ws.send_request(self.sensor, dex.TakeClicked()) and pointer is not None:
+            self.selected = self.hover
         return dex.DrawResult.Complete(
             region=dex.ScreenRegion.from_min_size(base.pos, dex.Vector.new(width, height)))
+
+    def _tip_at(self, p):
+        """The leaf nearest the pointer, within a dot's reach, or None."""
+        best = None
+        reach = TIP_DOT * 1.5
+        for (t, (x, y)) in self._tip_pos.items():
+            gap = (x - p.x) ** 2 + (y - p.y) ** 2
+            if gap <= reach * reach and (best is None or gap < best[0]):
+                best = (gap, t)
+        return None if best is None else best[1]
 
     # -- building (once per size) ---------------------------------------
 
@@ -1782,11 +1755,10 @@ class SuperPhylogeny:
         return "A Super Phylogeny"
 
     def owned_nodes(self):
-        return list(self.tip_nodes.values())
+        return [self.sensor]
 
     def on_delete(self, ctx):
-        for uid in self.tip_nodes.values():
-            ctx.workspace.delete_node(uid)
+        ctx.workspace.delete_node(self.sensor)
 
     def build_inspector(self, ctx):
         return None
@@ -1801,17 +1773,6 @@ class SuperPhylogeny:
 TREE_SIZE = 1100.0
 
 
-def _on_canvas(ws, tree_node):
-    """Put `tree_node` on a pan/zoom canvas and return the canvas.
-
-    No key in the corner: the tree wears its own, as a labelled clade ring, and
-    a second copy of it as a column of a hundred phyla covered the picture it
-    was meant to explain.
-    """
-    return on_plane(ws, tree_node, (TREE_SIZE, TREE_SIZE), "Placed the tree",
-                    name="Phylogeny")
-
-
 # ======================================================================
 # Build and transform
 # ======================================================================
@@ -1823,7 +1784,7 @@ def _columns(batch):
 
 
 def build(ws, columns):
-    """Build the tree and one inspectable `Tip` node per leaf."""
+    """Build the tree, its picking sensor, and the leaf panel in its foreground."""
     tree = Tree(columns)
     key_col = columns.get(KEY_COL, [])
     label_col = columns.get(LABEL_COL, [])
@@ -1835,7 +1796,7 @@ def build(ws, columns):
             vals.append(v)
     for (i, v) in enumerate(vals):
         inks[v] = hsv_rgb((i / max(len(vals), 1)) % 1.0, 0.42, 0.7)
-    tips = {}
+    tip_info = {}
     for t in tree.tips:
         row = tree.row_of[t]
         key = key_col[row] if row < len(key_col) else ""
@@ -1843,11 +1804,16 @@ def build(ws, columns):
             continue
         label = label_col[row] if row < len(label_col) else key
         color = inks.get(tree.clade_of_tip.get(t), BRANCH_INK)
-        tips[t] = ws.insert_node_dyn(Tip(key, label, color))
-    sp = SuperPhylogeny(columns, tips)
-    # The tree becomes a single item on a pan/zoom canvas.
-    tree_node = ws.insert_node_dyn(sp)
-    return _on_canvas(ws, tree_node)
+        tip_info[t] = (key, label, color)
+    sensor = ws.insert_node_dyn(dex.InteractionBox.sensing(True, True, False))
+    sp = SuperPhylogeny(columns, tip_info, sensor)
+    # The tree is a single item on a pan/zoom canvas, its leaf panel pinned in
+    # the plane's foreground so it stays legible at any magnification.
+    body = ws.insert_node_dyn(sp)
+    button = dex.Button.build(ws, dex.Label.new("Open genome"))
+    panel = ws.insert_node_dyn(TreePanel(sp, button))
+    return on_plane(ws, body, (TREE_SIZE, TREE_SIZE), "Placed the tree",
+                    [panel], name="Phylogeny")
 
 
 def _find_table():

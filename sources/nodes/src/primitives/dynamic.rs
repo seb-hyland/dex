@@ -2,7 +2,8 @@ use std::any::Any;
 use std::ffi::CString;
 
 use dex_core::messages::{
-    ActionBody, ActionHandler, RequestBody, RequestableDyn, action_to_python, request_to_python,
+    ActionBody, ActionHandler, DynamicRequest, PyRequestBody, RequestBody, RequestableDyn,
+    action_to_python, request_to_python,
 };
 use dex_core::prelude::*;
 use pyo3::prelude::*;
@@ -305,14 +306,26 @@ impl RequestableDyn for DynamicNode {
         body: Box<dyn RequestBody>,
         ctx: NodeContext,
     ) -> Result<Box<dyn Any>, Box<dyn RequestBody>> {
+        // A built-in message is presented as its own Python class and its
+        // answer boxed as the request's declared Rust type. A prelude-defined
+        // message is handed through as the live object, and whatever the node
+        // returns is boxed as a Python value for the caller.
+        enum Respond<'a> {
+            Rust(&'a DynamicRequest),
+            Python,
+        }
         let answered = Python::attach(|py| {
             let obj = self.obj.as_ref()?;
             let bound = obj.bind(py);
             if !bound.hasattr("request").unwrap_or(false) {
                 return None;
             }
-            let (entry, request) = request_to_python(&*body, py)?;
-            let request = request.ok()?;
+            let (request, respond) = if let Some((entry, request)) = request_to_python(&*body, py) {
+                (request.ok()?, Respond::Rust(entry))
+            } else {
+                let py_body = (*body).as_any_ref().downcast_ref::<PyRequestBody>()?;
+                (py_body.object(py), Respond::Python)
+            };
 
             let result = PyNodeContext::enter(py, ctx, |pyctx| {
                 bound.call_method1("request", (request, pyctx.clone()))
@@ -329,12 +342,15 @@ impl RequestableDyn for DynamicNode {
             if value.is(py.NotImplemented()) {
                 return None;
             }
-            match (entry.response_from_python)(&value) {
-                Ok(boxed) => Some(boxed),
-                Err(e) => {
-                    eprintln!("dynamic node `request` returned an unusable value: {e}");
-                    None
-                }
+            match respond {
+                Respond::Rust(entry) => match (entry.response_from_python)(&value) {
+                    Ok(boxed) => Some(boxed),
+                    Err(e) => {
+                        eprintln!("dynamic node `request` returned an unusable value: {e}");
+                        None
+                    }
+                },
+                Respond::Python => Some(Box::new(value.unbind()) as Box<dyn Any>),
             }
         });
 

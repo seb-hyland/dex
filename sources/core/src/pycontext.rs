@@ -13,7 +13,10 @@ use std::borrow::Cow;
 use crate::stubs::{StubClass, StubField, StubMethod};
 use crate::{
     DrawConstraints, DrawContext, DrawResult, Node, NodeContext, NodeHandle, NodeUid, Workspace,
-    messages::{Action, Request, action_for, registered_messages, request_for},
+    messages::{
+        Action, PyRequestBody, Request, RequestBody, action_for, is_py_request,
+        registered_messages, request_for,
+    },
     scripting::{FromDynamic, Scoped, ScopedRef, expired_handle},
 };
 
@@ -267,14 +270,32 @@ pub(crate) fn send_request_py(
     request: &Bound<'_, PyAny>,
     py: Python<'_>,
 ) -> PyResult<Py<PyAny>> {
-    let entry = request_for(request).ok_or_else(|| not_a_message(request, true))?;
-    let body = (entry.build)(request)?;
-
-    match ws.send_request_dyn(Request { dest, body }) {
-        Some(any) => (entry.respond)(any, py),
-        // The node did not answer; indistinguishable from a `None` answer.
-        None => Ok(py.None()),
+    // A built-in message: matched to its Rust type, with a typed response.
+    if let Some(entry) = request_for(request) {
+        let body = (entry.build)(request)?;
+        return match ws.send_request_dyn(Request { dest, body }) {
+            Some(any) => (entry.respond)(any, py),
+            // The node did not answer; indistinguishable from a `None` answer.
+            None => Ok(py.None()),
+        };
     }
+
+    // A prelude-defined message: the live object is carried through, and
+    // whatever the answering node returns comes straight back.
+    if is_py_request(request) {
+        let body: Box<dyn RequestBody> = Box::new(PyRequestBody::new(request));
+        return match ws.send_request_dyn(Request { dest, body }) {
+            Some(any) => Ok(match any.downcast::<Py<PyAny>>() {
+                Ok(obj) => *obj,
+                // Only a script node answers a Python message; anything else is
+                // a mismatch we report as no answer rather than a wrong value.
+                Err(_) => py.None(),
+            }),
+            None => Ok(py.None()),
+        };
+    }
+
+    Err(not_a_message(request, true))
 }
 
 /// The error a script sees when it passes something that is not a message.

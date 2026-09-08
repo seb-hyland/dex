@@ -217,6 +217,102 @@ pub fn registered_messages() -> (Vec<&'static str>, Vec<&'static str>) {
 }
 
 // ======================================================================
+// Python-defined messages
+// ======================================================================
+
+/**
+    The base class every Python-defined message subclasses.
+
+    A prelude declares a message as an ordinary Python class deriving this:
+
+    ```python
+    class DrawnPoint(dex.Request):
+        name = "drawn_point"
+        def __init__(self, row_id):
+            self.row_id = row_id
+    ```
+
+    Any node may then send an instance with `dex.send_request`, and any script
+    node answers it from its own `request` handler. Unlike the built-in
+    messages, a Python message carries no declared Rust response type: whatever
+    the answering node returns is handed back to the caller verbatim. This is
+    what lets a prelude define one query protocol every visualization speaks.
+*/
+#[pyo3::pyclass(subclass, module = "dex", name = "Request")]
+pub struct PyRequest;
+
+#[pyo3::pymethods]
+impl PyRequest {
+    /// Accept and ignore any arguments, so a subclass is free to define its own
+    /// `__init__` without threading them through `super().__init__`.
+    #[new]
+    #[pyo3(signature = (*_args, **_kwargs))]
+    fn __new__(
+        _args: &pyo3::Bound<'_, pyo3::types::PyTuple>,
+        _kwargs: Option<&pyo3::Bound<'_, pyo3::types::PyDict>>,
+    ) -> Self {
+        PyRequest
+    }
+}
+
+/**
+    A request whose body is a live Python object: an instance of a
+    [`PyRequest`] subclass.
+
+    It is not one of the compile-time [`DynamicRequest`]s — its class was
+    defined at runtime in a prelude — so it is dispatched by handing the object
+    itself to the destination node's `request` handler. A script node keys off
+    the message's own attributes (a `name` tag, say) rather than its Rust type,
+    which is what lets a message survive the pickling and deep-copying that give
+    a script-defined class a fresh identity.
+*/
+pub struct PyRequestBody {
+    obj: pyo3::Py<pyo3::PyAny>,
+}
+
+impl PyRequestBody {
+    /// Capture the Python message instance.
+    pub fn new(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> Self {
+        Self {
+            obj: obj.clone().unbind(),
+        }
+    }
+
+    /// A fresh handle to the wrapped Python instance.
+    pub fn object(&self, py: pyo3::Python<'_>) -> pyo3::Py<pyo3::PyAny> {
+        self.obj.clone_ref(py)
+    }
+}
+
+impl RequestBody for PyRequestBody {}
+
+/// Whether `obj` is a [`PyRequest`] (or a subclass of one).
+pub fn is_py_request(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> bool {
+    use pyo3::types::PyAnyMethods;
+    obj.is_instance_of::<PyRequest>()
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    dex_dynamic::DynamicBinding {
+        name: "Request",
+        register_python: |m| {
+            use dex_dynamic::__rt::pyo3::types::PyModuleMethods;
+            m.add_class::<PyRequest>()
+        },
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    crate::stubs::StubClass {
+        name: "Request",
+        doc: "Base class for a prelude-defined message sent with `send_request`.",
+        fields: &[],
+        constructible: true,
+        variants: &[],
+    }
+}
+
+// ======================================================================
 // Macros
 // ======================================================================
 

@@ -1,290 +1,205 @@
-//! Exercises `examples/circos3.py`: a circular phylogeny whose branches are
-//! nodes rather than paint.
-//!
-//! The point of the example is that the tree is not one drawing. Every branch
-//! is its own `Path` in the workspace, so the inspector can address one and
-//! recolour it — and that only works if three things hold, which is what is
-//! pinned here. The branches have to exist, one per stroke, coloured by the
-//! clade they sit in. Their geometry has to reach them, since it depends on a
-//! radius nothing knows until the plot is drawn. And each one has to reach the
-//! screen through the probe, or there is nothing for a click to land on.
+//! Exercises `examples/phylogeny.py`: it builds a vertical tree from lineage
+//! strings, paints it, and answers the prelude's query protocol keyed by row.
 
 use dex_core::prelude::*;
-use dex_core::refs::NodeRefs;
-use dex_nodes::primitives::shapes::{GetAnchors, GetStroke, Path, SetPathStrokeColor};
-use dex_nodes::scripting::{ScriptOutput, run_script};
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
-use std::sync::Arc;
+use dex_nodes::scripting::{ScriptOutput, ScriptValue, run_script};
 
-/// Colours are compared channelwise; `Color` is not `PartialEq`.
-fn channels(c: Color) -> (u8, u8, u8) {
-    (c.r, c.g, c.b)
-}
+const PHYLOGENY: &str = include_str!("../../../examples/phylogeny.py");
+const PRELUDE: &str = include_str!("../../../examples/prelude.py");
+const SCREEN: egui::Vec2 = egui::vec2(760.0, 520.0);
 
-const CIRCOS3: &str = include_str!("../../../examples/circos3.py");
-const SCREEN: egui::Vec2 = egui::vec2(900.0, 900.0);
-
-/// Run the example module and return its namespace, for the pure functions.
-fn load<'py>(py: Python<'py>) -> Bound<'py, PyDict> {
-    let globals = PyDict::new(py);
-    globals
-        .set_item("dex", dex_dynamic::build_python_module(py).unwrap())
-        .unwrap();
-    let src = std::ffi::CString::new(CIRCOS3).unwrap();
-    py.run(src.as_c_str(), Some(&globals), Some(&globals))
-        .expect("example module runs");
-    globals
-}
-
-fn eval<T>(py: Python<'_>, globals: &Bound<'_, PyDict>, expr: &str) -> T
-where
-    T: for<'a, 'py> pyo3::FromPyObject<'a, 'py>,
-{
-    let code = std::ffi::CString::new(expr).unwrap();
-    let value = py
-        .eval(code.as_c_str(), Some(globals), None)
-        .unwrap_or_else(|e| panic!("`{expr}` evaluates: {e}"));
-    match value.extract() {
-        Ok(out) => out,
-        Err(_) => panic!("`{expr}` has the expected type"),
-    }
-}
-
-/// Run the example's `transform()` into `ws`, exactly as a lambda would.
-///
-/// It has to go through a real script run rather than a bare `eval`, because
-/// the branch nodes are built against `dex.ws` — which only exists inside a
-/// transform.
-fn build_phylogeny(ws: &mut Workspace) -> Arc<dyn Node> {
-    let graph = GraphSnapshot::capture(ws);
-    let (handle, actions) = WorkspaceActionHandle::buffered();
-    let built = match run_script(CIRCOS3, "", &handle, &[], graph) {
-        Ok(ScriptOutput::Node(node)) => node,
-        Ok(_) => panic!("the example returns the phylogeny it built"),
-        Err(e) => panic!("{e}"),
-    };
-    drop(handle);
+fn apply(ws: &mut Workspace, actions: std::sync::mpsc::Receiver<Action>) {
     for action in actions.try_iter() {
         ws.submit_action_dyn(action);
     }
     ws.process_pending();
-    built
 }
 
-/// Draw `frames` frames of the whole workspace at `SCREEN`.
-///
-/// More than one, because the branch geometry is queued as actions the frame
-/// that notices the size — so the first frame a size is seen is the one that
-/// asks, and a later one is the first to draw the answer.
-fn draw(ws: &mut Workspace, frames: usize) {
-    let egui_ctx = egui::Context::default();
-    dex_nodes::fonts::install_fonts(&egui_ctx);
-    let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN);
-    for _ in 0..frames {
+/// Build the tree over its built-in sample and seat it (with its taxa and hover
+/// sensor) as the root of a fresh workspace.
+fn phylogeny_workspace() -> (Workspace, NodeUid) {
+    dex_nodes::scripting::init_python();
+    let mut ws = Workspace::new_empty();
+
+    let (handle, actions) = WorkspaceActionHandle::buffered();
+    let node = match run_script(PHYLOGENY, PRELUDE, &handle, &[], GraphSnapshot::capture(&ws)) {
+        Ok(ScriptOutput::Node(node)) => node,
+        Ok(_) => panic!("the tree is returned as a node"),
+        Err(e) => panic!("{e}"),
+    };
+    let root = ws.action_handle().insert_node_dyn(node);
+    drop(handle);
+    apply(&mut ws, actions);
+    ws.set_root(root);
+    (ws, root)
+}
+
+fn painted(ws: &mut Workspace, ctx: &egui::Context) -> Vec<egui::epaint::ClippedShape> {
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN);
+    let mut shapes = Vec::new();
+    for _ in 0..2 {
         let input = egui::RawInput {
-            screen_rect: Some(rect),
+            screen_rect: Some(screen),
             ..Default::default()
         };
-        let ws = &mut *ws;
-        let _ = egui_ctx.clone().run_ui(input, |c| {
-            egui::CentralPanel::default().show(c, |ui| {
-                ws.draw_frame(ui, rect);
-            });
+        shapes = ctx
+            .clone()
+            .run_ui(input, |c| {
+                egui::CentralPanel::default().show(c, |ui| {
+                    ws.draw_frame(ui, screen);
+                });
+            })
+            .shapes;
+    }
+    shapes
+}
+
+fn painted_something(shapes: &[egui::epaint::ClippedShape]) -> bool {
+    fn walk(shape: &egui::Shape) -> bool {
+        match shape {
+            egui::Shape::Mesh(mesh) => !mesh.vertices.is_empty(),
+            egui::Shape::Vec(inner) => inner.iter().any(walk),
+            egui::Shape::Circle(_) | egui::Shape::LineSegment { .. } | egui::Shape::Path(_) => true,
+            _ => false,
+        }
+    }
+    shapes.iter().any(|c| walk(&c.shape))
+}
+
+fn frame(ws: &mut Workspace, ctx: &egui::Context, events: Vec<egui::Event>) -> usize {
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN);
+    let input = egui::RawInput {
+        screen_rect: Some(screen),
+        events,
+        ..Default::default()
+    };
+    let out = ctx.clone().run_ui(input, |c| {
+        egui::CentralPanel::default().show(c, |ui| {
+            ws.draw_frame(ui, screen);
         });
-        ws.process_pending();
+    });
+    fn count(shape: &egui::Shape) -> usize {
+        match shape {
+            egui::Shape::Vec(inner) => inner.iter().map(count).sum(),
+            _ => 1,
+        }
+    }
+    out.shapes.iter().map(|c| count(&c.shape)).sum()
+}
+
+fn button(pos: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
     }
 }
 
-/// The uids of the branch paths the phylogeny owns, in tree order.
-fn branches(node: &Arc<dyn Node>) -> Vec<NodeUid> {
-    let mut out = Vec::new();
-    node.owned_refs(&mut |uid| out.push(uid));
-    out
+/// A drawn leaf's screen coordinate, read off the tree after a frame.
+fn a_leaf(ws: &Workspace, target: NodeUid) -> egui::Pos2 {
+    let script = r#"
+def transform():
+    pts = dex.snapshot.send_request(target, DrawnPoints())
+    (_rid, (x, y)) = sorted(pts.items())[0]
+    return "%f,%f" % (x, y)
+"#;
+    let (handle, _actions) = WorkspaceActionHandle::buffered();
+    let args = [("target".to_owned(), ScriptValue::Node(target))];
+    let out = run_script(script, PRELUDE, &handle, &args, GraphSnapshot::capture(ws)).unwrap();
+    let ScriptOutput::Node(node) = out else {
+        panic!("returns a coordinate string")
+    };
+    let text = dex_nodes::scripting::node_to_value(&*node)
+        .map(|v| v.display())
+        .expect("a coordinate string");
+    let (x, y) = text.split_once(',').expect("x,y");
+    egui::pos2(x.parse().unwrap(), y.parse().unwrap())
 }
 
-/// A branch per stroke, each starting in the colour of the clade it sits in.
 #[test]
-fn every_branch_is_its_own_path_coloured_by_its_clade() {
-    dex_nodes::scripting::init_python();
-    let mut ws = Workspace::new_empty();
-    let plot = build_phylogeny(&mut ws);
-    let uids = branches(&plot);
-
-    // One node per stroke the tree asks for: the arc under each fork, plus the
-    // radial line out to each child.
-    let wanted: usize = Python::attach(|py| {
-        let globals = load(py);
-        eval(
-            py,
-            &globals,
-            "(lambda r: (layout(r), len(branch_inks(r, CLADES)))[1])(parse_newick(NEWICK))",
-        )
-    });
-    assert_eq!(uids.len(), wanted, "a path per branch stroke");
-    assert!(wanted > 100, "the tree is a real one, not a sketch");
-
-    // Every one of them really is a path, and the clade colours reached them:
-    // a subtree reads as one colour, and the backbone above every clade — which
-    // belongs to no clade — stays plain.
-    let mut per_colour = std::collections::HashMap::new();
-    for uid in &uids {
-        // A `GetStroke` only a path answers: the branch is a `Path`, and so
-        // it carries a path's inspector.
-        let stroke = ws
-            .send_request(*uid, GetStroke)
-            .expect("a branch is a path");
-        *per_colour
-            .entry((stroke.color.r, stroke.color.g, stroke.color.b))
-            .or_insert(0usize) += 1;
-    }
-    let clades: Vec<(u8, u8, u8)> = Python::attach(|py| {
-        let globals = load(py);
-        eval(py, &globals, "list(CLADES.values())")
-    });
-    for clade in &clades {
-        assert!(
-            per_colour.get(clade).copied().unwrap_or(0) > 10,
-            "the {clade:?} clade colours a subtree, not a single branch"
-        );
-    }
-    let backbone: (u8, u8, u8) = Python::attach(|py| {
-        let globals = load(py);
-        eval(py, &globals, "BRANCH_INK")
-    });
+fn the_tree_builds_and_paints() {
+    let (mut ws, _root) = phylogeny_workspace();
+    let ctx = egui::Context::default();
+    dex_nodes::fonts::install_fonts(&ctx);
     assert!(
-        per_colour.contains_key(&backbone),
-        "the branches above every clade belong to none of them"
+        painted_something(&painted(&mut ws, &ctx)),
+        "the tree painted its sample"
     );
 }
 
-/// The geometry reaches the branch nodes, and each of them reaches the probe.
-///
-/// Both halves matter and neither implies the other: a branch with no anchors
-/// draws nothing to click on, and a branch drawn as paint has anchors nobody
-/// can address.
+/// Clicking a leaf overlays its record; clicking empty space dismisses it. No
+/// inspectable nodes — one sensor over the whole tree.
 #[test]
-fn the_branches_are_sized_to_the_plot_and_land_in_the_inspector() {
-    dex_nodes::scripting::init_python();
-    let mut ws = Workspace::new_empty();
-    let plot = build_phylogeny(&mut ws);
-    let uids = branches(&plot);
+fn clicking_a_leaf_opens_and_dismisses_the_overlay() {
+    let (mut ws, root) = phylogeny_workspace();
+    let ctx = egui::Context::default();
+    dex_nodes::fonts::install_fonts(&ctx);
 
-    // Built empty: the radius depends on a box nothing has been given yet.
-    for uid in &uids {
-        let anchors = ws.send_request(*uid, GetAnchors).unwrap_or_default();
-        assert!(anchors.is_empty(), "a branch starts with no geometry");
-    }
+    let corner = egui::pos2(4.0, 4.0); // top-left margin, over no node
+    frame(&mut ws, &ctx, vec![]);
+    let leaf = a_leaf(&ws, root);
 
-    let root = ws.insert_node_dyn(plot.clone());
-    ws.set_root(root);
-    ws.process_pending();
-    draw(&mut ws, 4);
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(corner)]);
+    let baseline = frame(&mut ws, &ctx, vec![]);
 
-    // The tree fills the middle of the plot: `R_LEAF` of the radius, and the
-    // radius itself is most of the half-box.
-    let (r_leaf, padding): (f32, f32) = Python::attach(|py| {
-        let globals = load(py);
-        eval(py, &globals, "(R_LEAF, PADDING)")
-    });
-    let outermost = uids
-        .iter()
-        .flat_map(|uid| ws.send_request(*uid, GetAnchors).unwrap_or_default())
-        .map(|a| a.pos.x.hypot(a.pos.y))
-        .fold(0.0f32, f32::max);
-    assert!(outermost > 0.0, "the branches were given their geometry");
-
-    let half = SCREEN.x.min(SCREEN.y) / 2.0 - padding;
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(leaf)]);
+    frame(&mut ws, &ctx, vec![button(leaf, true)]);
+    frame(&mut ws, &ctx, vec![button(leaf, false)]);
+    frame(&mut ws, &ctx, vec![]);
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(corner)]);
+    let selected = frame(&mut ws, &ctx, vec![]);
     assert!(
-        outermost > half * r_leaf * 0.75,
-        "the tip ring sits at {outermost}, well short of the {} it has room for",
-        half * r_leaf
-    );
-    assert!(
-        outermost <= half * r_leaf + 1.0,
-        "the tree at {outermost} overruns the {} the bands leave it",
-        half * r_leaf
+        selected > baseline,
+        "the overlay adds shapes (baseline {baseline}, selected {selected})"
     );
 
-    // Every branch is addressable: the probe knows where each one drew, which
-    // is what a click on one has to find.
-    let addressable = uids
-        .iter()
-        .filter(|uid| ws.inspectable_rect(**uid).is_some())
-        .count();
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(corner)]);
+    frame(&mut ws, &ctx, vec![button(corner, true)]);
+    frame(&mut ws, &ctx, vec![button(corner, false)]);
+    frame(&mut ws, &ctx, vec![]);
+    frame(&mut ws, &ctx, vec![egui::Event::PointerMoved(corner)]);
+    let dismissed = frame(&mut ws, &ctx, vec![]);
+    assert!(
+        dismissed < selected,
+        "dismissing removes the overlay (selected {selected}, dismissed {dismissed})"
+    );
+}
+
+/// After a frame, the tree answers the protocol: it lists its rows, locates the
+/// leaf each was drawn at, and hands back the record behind a row.
+#[test]
+fn the_tree_answers_the_query_protocol() {
+    let (mut ws, root) = phylogeny_workspace();
+    let ctx = egui::Context::default();
+    dex_nodes::fonts::install_fonts(&ctx);
+    let _ = painted(&mut ws, &ctx);
+
+    let sender = r#"
+def transform():
+    keys = dex.snapshot.send_request(target, RowKeys())
+    assert keys == list(range(len(keys))) and len(keys) > 0, keys
+
+    drawn = dex.snapshot.send_request(target, DrawnPoints())
+    assert isinstance(drawn, dict) and len(drawn) == len(keys), (len(drawn), len(keys))
+
+    xy = dex.snapshot.send_request(target, DrawnPoint(keys[0]))
+    assert xy is not None and len(xy) == 2, xy
+
+    values = dex.snapshot.send_request(target, RowValues(keys[0]))
+    assert isinstance(values, dict) and values, values
+    return "ok"
+"#;
+
+    let (handle, _actions) = WorkspaceActionHandle::buffered();
+    let args = [("target".to_owned(), ScriptValue::Node(root))];
+    let out = run_script(sender, PRELUDE, &handle, &args, GraphSnapshot::capture(&ws))
+        .expect("the query script runs and its assertions hold");
+    let ScriptOutput::Node(node) = out else {
+        panic!("the sender returns \"ok\"")
+    };
     assert_eq!(
-        addressable,
-        uids.len(),
-        "every branch offered itself to the inspector"
-    );
-}
-
-/// Recolouring one branch recolours that branch, and nothing else.
-///
-/// This is what the whole arrangement is for, and it is the part a plot that
-/// merely paints its tree cannot do: the colour lives in the node, so it
-/// survives the next frame instead of being overwritten by the redraw.
-#[test]
-fn a_branch_keeps_a_colour_chosen_for_it() {
-    dex_nodes::scripting::init_python();
-    let mut ws = Workspace::new_empty();
-    let plot = build_phylogeny(&mut ws);
-    let uids = branches(&plot);
-    let root = ws.insert_node_dyn(plot.clone());
-    ws.set_root(root);
-    ws.process_pending();
-    draw(&mut ws, 4);
-
-    let chosen = Color::rgb(255, 0, 128);
-    let target = uids[7];
-    let before: Vec<_> = uids
-        .iter()
-        .map(|uid| ws.send_request(*uid, GetStroke).map(|s| channels(s.color)))
-        .collect();
-    ws.submit_action(
-        target,
-        "Set stroke colour",
-        SetPathStrokeColor { color: chosen },
-    );
-    ws.process_pending();
-    draw(&mut ws, 3);
-
-    let after: Vec<_> = uids
-        .iter()
-        .map(|uid| ws.send_request(*uid, GetStroke).map(|s| channels(s.color)))
-        .collect();
-    let changed: Vec<usize> = (0..uids.len())
-        .filter(|i| before[*i] != after[*i])
-        .collect();
-    assert_eq!(changed, [7], "one branch changed colour, and only that one");
-    assert_eq!(
-        after[7],
-        Some((255, 0, 128)),
-        "and it kept the colour across the redraws"
-    );
-}
-
-/// A path carries its own inspector, which is what makes a branch clickable to
-/// any effect. An unfilled one is offered its stroke; there is no interior to
-/// colour.
-#[test]
-fn a_path_inspects_as_its_colours() {
-    let mut ws = Workspace::new_empty();
-    let line = ws.insert_node(Path::polyline(
-        vec![Vector::ZERO, Vector { x: 10.0, y: 10.0 }],
-        Stroke::new(1.0, Color::BLACK),
-    ));
-    ws.process_pending();
-    let node = ws.get_node(line.erase()).expect("the path is there");
-    let menu = node
-        .build_inspector(NodeContext {
-            id: line.erase(),
-            workspace: &ws,
-        })
-        .expect("a path offers an inspector");
-    ws.process_pending();
-    assert!(
-        ws.get_node(menu).is_some(),
-        "the menu it names was really built"
+        dex_nodes::scripting::node_to_value(&*node).map(|v| v.display()),
+        Some("ok".to_owned()),
     );
 }
