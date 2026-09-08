@@ -22,11 +22,11 @@ const SCREEN: egui::Vec2 = egui::vec2(720.0, 520.0);
 /// it. A band that misplaces itself by its own origin is exactly right at zero.
 const INSET: egui::Vec2 = egui::vec2(120.0, 60.0);
 
-/// Where the surface is drawn, and the window it is drawn in.
-fn pane() -> (egui::Rect, egui::Rect) {
+/// Where a surface of `size` is drawn, and the window it is drawn in.
+fn pane(size: egui::Vec2) -> (egui::Rect, egui::Rect) {
     (
-        egui::Rect::from_min_size(egui::pos2(INSET.x, INSET.y), SCREEN),
-        egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN + INSET * 2.0),
+        egui::Rect::from_min_size(egui::pos2(INSET.x, INSET.y), size),
+        egui::Rect::from_min_size(egui::pos2(0.0, 0.0), size + INSET * 2.0),
     )
 }
 
@@ -36,6 +36,9 @@ struct Harness {
     ctx: egui::Context,
     canvas: NodeUid<Canvas>,
     pos: egui::Pos2,
+    /// The size of the pane the surface is drawn into. The backdrop caches its
+    /// geometry against this, so a test can change it to make it rebuild.
+    size: egui::Vec2,
 }
 
 impl Harness {
@@ -64,11 +67,12 @@ impl Harness {
             ctx,
             canvas: canvas.cast::<Canvas>(),
             pos: egui::pos2(-100.0, -100.0),
+            size: SCREEN,
         }
     }
 
     fn frame(&mut self, events: Vec<egui::Event>) -> Vec<egui::epaint::ClippedShape> {
-        let (pane, window) = pane();
+        let (pane, window) = pane(self.size);
         let input = egui::RawInput {
             screen_rect: Some(window),
             events,
@@ -176,18 +180,17 @@ fn vertices(shapes: &[egui::epaint::ClippedShape]) -> Vec<(u32, u32)> {
     found
 }
 
-/// The bounds of the largest mesh in the frame: the backdrop's own sky.
+/// The bounds of the widest plain quad in the frame: the backdrop's own sky.
 ///
-/// Nothing else in the scene is anywhere near it — the ground stops at the
-/// treeline and the fire's glow is a few hundred pixels across — so the widest
-/// shape painted is the one the forest starts with, and where its corners land
-/// is where the whole backdrop landed.
+/// Not simply the widest mesh — the moon's outermost ring is wider than a small
+/// window. The sky is the one full-viewport shape drawn from four corners, and
+/// a radial glow is drawn from dozens, so counting vertices tells them apart.
 fn sky_bounds(shapes: &[egui::epaint::ClippedShape]) -> egui::Rect {
     let mut widest = egui::Rect::NOTHING;
     for clipped in shapes {
         meshes(&clipped.shape, &mut |mesh| {
             let bounds = mesh.calc_bounds();
-            if bounds.area() > widest.area() {
+            if mesh.vertices.len() <= 8 && bounds.area() > widest.area() {
                 widest = bounds;
             }
         });
@@ -229,9 +232,10 @@ fn the_example_builds_a_surface_with_a_band_at_each_end() {
 fn the_forest_and_the_fire_both_paint() {
     let mut h = Harness::new();
     let painted = triangles(&h.settled());
-    // The forest alone is a sky, a moon, seventy stars and sixty-odd trees;
-    // the fire is another eighty shapes over it. A few hundred triangles would
-    // mean one of the two never ran.
+    // The forest alone is a sky, cloud, a moon and its rings, ninety-odd
+    // stars, a hundred and forty trees and three swarms of fireflies; the fire
+    // is another eighty shapes over it. A few hundred triangles would mean one
+    // of the two never ran.
     assert!(
         painted > 2000,
         "the wood and the fire both painted: {painted} triangles"
@@ -247,7 +251,7 @@ fn the_forest_and_the_fire_both_paint() {
 fn the_forest_covers_the_whole_viewport() {
     let mut h = Harness::new();
     let sky = sky_bounds(&h.settled());
-    let (screen, _window) = pane();
+    let (screen, _window) = pane(h.size);
     assert!(
         (sky.min.x - screen.min.x).abs() < 1.0
             && (sky.min.y - screen.min.y).abs() < 1.0
@@ -257,9 +261,12 @@ fn the_forest_covers_the_whole_viewport() {
     );
 }
 
-/// The fire moves without anything being told to animate it.
+/// The scene moves without anything being told to animate it.
+///
+/// Both bands read the clock — the fire in every frame, the backdrop for its
+/// stars and its fireflies — and nothing subscribes to anything to do it.
 #[test]
-fn the_fire_moves_by_itself() {
+fn the_scene_moves_by_itself() {
     let mut h = Harness::new();
     let first = vertices(&h.settled());
     std::thread::sleep(Duration::from_millis(120));
@@ -316,5 +323,29 @@ fn panning_the_plane_leaves_the_camp_where_it_is() {
             after_sky.max.y
         ),
         "the forest is a band, so the pan went straight past it"
+    );
+}
+
+/// A resized window gets a backdrop built for it, not the one before it.
+///
+/// The still half of the forest is cached against the viewport it was built
+/// for. A cache that never notices the size changed is the failure this is here
+/// for: it paints the old wood, at the old scale, in the corner of the new one.
+#[test]
+fn the_backdrop_is_rebuilt_when_the_window_changes() {
+    let mut h = Harness::new();
+    let first = sky_bounds(&h.settled());
+    let (screen, _window) = pane(h.size);
+    assert!((first.max.x - screen.max.x).abs() < 1.0);
+
+    h.size = egui::vec2(SCREEN.x * 0.6, SCREEN.y * 1.4);
+    let second = sky_bounds(&h.settled());
+    let (screen, _window) = pane(h.size);
+    assert!(
+        (second.min.x - screen.min.x).abs() < 1.0
+            && (second.min.y - screen.min.y).abs() < 1.0
+            && (second.max.x - screen.max.x).abs() < 1.0
+            && (second.max.y - screen.max.y).abs() < 1.0,
+        "the wood was rebuilt for the new window: {second:?} against {screen:?}"
     );
 }

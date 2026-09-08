@@ -121,10 +121,15 @@ MOON = (246, 246, 232)
 MOON_DIM = (196, 200, 206)
 MOON_HALO = (128, 150, 196)
 
+# Night cloud is not white. It is the sky a shade lighter where the moon is
+# behind it and a shade darker where it is not, and that is the whole of it.
+CLOUD = (52, 61, 92)
+CLOUD_LIT = (142, 160, 200)
+
 # Four flat tones, each range a step darker than the one behind it. The steps
 # are what the eye reads as distance; nothing else here says how far away
 # anything is.
-TREE_DEEP = (46, 55, 84)
+TREE_DEEP = (40, 48, 75)
 TREE_FAR = (30, 37, 58)
 TREE_MID = (15, 19, 32)
 TREE_NEAR = (5, 6, 12)
@@ -133,8 +138,8 @@ MIST = (78, 92, 124)
 GROUND_FAR = (17, 20, 31)
 GROUND_NEAR = (5, 5, 10)
 
-FIREFLY = (172, 226, 126)
-FIREFLY_CORE = (238, 255, 198)
+FIREFLY = (236, 214, 104)
+FIREFLY_CORE = (255, 248, 176)
 
 # Where the far trees stand, as a fraction of the height, and how far the ground
 # wanders either side of it. A ruled horizon reads as a table edge.
@@ -147,6 +152,30 @@ def _ground_y(w, h, x):
     u = x / max(w, 1.0)
     roll = 0.62 * math.sin(u * 5.1 + 0.7) + 0.38 * math.sin(u * 11.3 + 1.9)
     return h * HORIZON + h * GROUND_ROLL * roll
+
+
+def _canopy(u):
+    """How tall the wood is at `u` across the width, and why it is not even.
+
+    Trees that only vary tree by tree give an even band with a ragged top edge,
+    which is a hedge. A wood has *swells* — a stand of tall ones here, a dip
+    there — and they are much wider than any one tree, so they cannot come out
+    of the same roll the trees do. Three slow waves across the frame, and every
+    tree in every range multiplies its height by whatever this says where it
+    stands.
+
+    The second term is the clearing. Something has to explain why the camp is
+    where it is, and a fire in a wood is in the one place the wood is not: the
+    canopy lies down through the middle of the frame, which both says *clearing*
+    and keeps a hundred-foot fir from growing straight up out of the fire.
+    """
+    swell = (
+        0.54 * math.sin(u * 2.3 + 0.6)
+        + 0.31 * math.sin(u * 5.7 + 2.4)
+        + 0.15 * math.sin(u * 9.1 + 4.1)
+    )
+    clearing = 1.0 - 0.54 * math.exp(-(((u - 0.5) / 0.17) ** 2))
+    return (1.0 + 0.44 * swell) * clearing
 
 
 def _fir(x, base, height, half, tiers, seed, trunk_frac=0.12, droop=1.0):
@@ -163,6 +192,9 @@ def _fir(x, base, height, half, tiers, seed, trunk_frac=0.12, droop=1.0):
     trunk carries a lean that gathers with height, so it curves rather than
     rules. And the reach falls off faster than the height climbs, which is what
     leaves the thin bare spire at the top that says conifer from a mile off.
+
+    The caller decides the rest. `tiers` few and `half` small is a spindly snag;
+    `trunk_frac` large is an old tree with its lower branches long gone.
     """
     lean = (_rand(seed, 21) - 0.5) * 0.17
     # Some trees are full and some are spindly. One roll, applied to every
@@ -196,9 +228,9 @@ def _fir(x, base, height, half, tiers, seed, trunk_frac=0.12, droop=1.0):
 # height, how wide against their own height, tiers, how far the branches fall,
 # colour, how much haze gathers at their feet).
 RANGES = (
-    (52, -0.05, 1.05, -0.012, 0.052, 0.030, 0.30, 6, 0.85, TREE_DEEP, 74),
-    (40, -0.05, 1.05, 0.014, 0.082, 0.048, 0.31, 7, 0.95, TREE_FAR, 54),
-    (26, -0.06, 1.06, 0.058, 0.125, 0.080, 0.33, 8, 1.05, TREE_MID, 34),
+    (56, -0.05, 1.05, -0.012, 0.062, 0.044, 0.30, 6, 0.85, TREE_DEEP, 74),
+    (42, -0.05, 1.05, 0.014, 0.100, 0.066, 0.31, 7, 0.95, TREE_FAR, 54),
+    (28, -0.06, 1.06, 0.058, 0.138, 0.092, 0.33, 8, 1.05, TREE_MID, 34),
 )
 
 # The near range is drawn out at the edges only: the middle of the frame is the
@@ -219,7 +251,7 @@ NEAR_TREES = (
     (1.048, 0.50),
 )
 
-STARS = 84
+STARS = 96
 
 
 def _sky(w, h):
@@ -227,42 +259,156 @@ def _sky(w, h):
     return _ramp(whole, SKY_LOW, SKY_HIGH, 270.0, 255, 255)
 
 
+def _lens(cx, cy, half_w, half_h, seed, steps=22):
+    """The centre line of a long soft shape, and its half-thickness along it.
+
+    Pinched to nothing at both ends and rippling as it goes, so a cloud is not
+    an ellipse. Handed back as points rather than a polygon, because it is drawn
+    twice: once fading up out of the line and once fading down.
+    """
+    phase = _rand(seed, 3) * TAU
+    line = []
+    for i in range(steps + 1):
+        u = i / steps
+        taper = math.sin(math.pi * u) ** 0.62
+        ripple = 0.55 + 0.45 * math.sin(u * 5.1 + phase)
+        x = cx - half_w + 2.0 * half_w * u
+        # Sagging along its own length, so a bank drifts rather than rules.
+        y = cy + math.sin(u * 2.2 + phase) * half_h * 0.9
+        line.append((x, y, half_h * taper * ripple))
+    return line
+
+
+def _cloud(cx, cy, half_w, half_h, seed, colour, alpha, strands=5, spread=1.4):
+    """A bank of night cloud: soft strands piled along one line.
+
+    Drawn as strands rather than as one body, and that is the whole of it. A
+    single soft lens the size of a cloud has a definite underside however gently
+    it fades, and against a dark sky a long shape with an underside is a ridge —
+    the eye reads it as land every time. Several of them at slightly different
+    heights never resolve into an edge, because no two of them end in the same
+    place — but keep them wispy: thin strands well scattered in height, not a
+    stack of them at one level, or the piled edges line up into rings.
+
+    Each is two halves meeting on its centre line, one ramping up and one down,
+    because a band can only fade one way and the side it does not fade is the
+    edge that made the ridge. Linear ramps, not radial fills, so a whole sky of
+    them costs a fraction of what the same weather drawn as soft discs would.
+    """
+    shapes = []
+    for k in range(strands):
+        seed_k = seed * 13 + k
+        line = _lens(
+            cx + (_rand(seed_k, 72) - 0.5) * half_w * 0.34,
+            cy + (_rand(seed_k, 71) - 0.5) * half_h * spread * 2.0,
+            half_w * (0.66 + 0.40 * _rand(seed_k, 73)),
+            half_h * (0.50 + 0.65 * _rand(seed_k, 74)),
+            seed_k,
+        )
+        # Divided down by how many are piling up, so adding strands makes a
+        # bank softer rather than simply darker.
+        weight = alpha * (0.66 + 0.54 * _rand(seed_k, 75)) * (3.0 / strands)
+        for side, angle, strength in ((-1.0, 270.0, weight), (1.0, 90.0, weight * 0.8)):
+            near = [_v(x, y) for x, y, _t in line]
+            far = [_v(x, y + side * t) for x, y, t in line]
+            far.reverse()
+            shapes.append(_ramp(near + far, colour, colour, angle, strength, 0))
+    return shapes
+
+
 def _moon(w, h):
-    """A moon in the corner, and the ombre it puts on the sky around it.
+    """A moon behind cloud, and the ombre it puts on the sky around it.
 
     One ramp cannot fall off the way light does — it is a straight line from
-    here to there, and a moon lit that way has a visible end. Four rings, each
-    wider and fainter than the last, add up to something that keeps fading the
-    whole way out, because the sum of four ramps is not a ramp.
+    here to there, and a moon lit that way has a visible end. Rings, each wider
+    and fainter than the last, add up to something that keeps fading the whole
+    way out, because the sum of five ramps is not a ramp.
 
     The disc is a ramp of its own, running across it rather than out from the
     middle: a flat white circle is a hole punched in the sky, and one that is
     brighter on the side it is lit from is a moon.
+
+    Then the cloud goes over the top of all of it. A bank thin enough to see the
+    disc through is worth more than a clear sky: it is the one thing in the
+    frame that says the air has any depth to it, and it puts a lit edge in the
+    sky for the fire's glow further down to answer.
     """
-    cx, cy = w * 0.865, h * 0.125
+    cx, cy = w * 0.865, h * 0.135
     r = max(12.0, h * 0.030)
-    rings = ((16.0, 22), (9.0, 30), (4.8, 40), (2.4, 58), (1.5, 86))
+    # (how wide, how strong, how many sides). A radial fill is chased with
+    # subdivision until the ramp across it reads as smooth, and the chase starts
+    # from every side of the outline — so sides are the expensive number here,
+    # not radius. The wide rings get few: a twenty-sided ring three hundred
+    # pixels across is a pixel off round at its flattest, and it is fading to
+    # nothing there anyway.
+    rings = ((16.0, 22, 20), (9.0, 30, 20), (4.8, 40, 24), (2.4, 58, 28), (1.5, 86, 32))
     shapes = [
-        _halo(_disc(cx, cy, r * scale, r * scale, 40), MOON_HALO, MOON_HALO, alpha, 0)
-        for scale, alpha in rings
+        _halo(_disc(cx, cy, r * scale, r * scale, sides), MOON_HALO, MOON_HALO, alpha, 0)
+        for scale, alpha, sides in rings
     ]
     # 45 degrees is clockwise from due right, so the far end is down and to the
     # right and the light comes over the top-left shoulder.
     shapes.append(_ramp(_disc(cx, cy, r, r, 28), MOON, MOON_DIM, 45.0, 240, 190))
+
+    # The bank across it: a few wispy strands spread wider than the disc and
+    # well scattered in height, so some cross the moon and some pass above and
+    # below — a moon seen *between* cloud, not one behind a curtain, and too few
+    # and too scattered to stack into a ring.
+    shapes += _cloud(cx - w * 0.04, cy, w * 0.20, r * 0.66, 7, CLOUD, 176, 4, 2.6)
+    # And one lit strand, because a cloud in front of the moon is the brightest
+    # thing in the sky rather than the darkest.
+    shapes += _cloud(cx - w * 0.01, cy + r * 0.20, w * 0.11, r * 0.16, 8, CLOUD_LIT, 84, 2, 2.2)
     return shapes
 
 
-def _stars(w, h, t):
-    """Soft points, thinning out towards the trees, each breathing on its own.
+# Cloud elsewhere in the sky: (across, down, half width, half height, how
+# strong). Few and low-contrast — they are there to keep the sky from being a
+# flat sheet with one moon on it, not to be looked at.
+CLOUDS = (
+    (0.14, 0.13, 0.30, 0.058, 96),
+    (0.54, 0.22, 0.24, 0.044, 74),
+    (0.78, 0.06, 0.20, 0.034, 62),
+    (0.34, 0.34, 0.21, 0.026, 44),
+)
 
-    Drawn as a single radial ramp rather than a shape with an edge: a star is
-    the brightest at its middle and nothing at all a few pixels out, which is
-    exactly what a radial fill from opaque to transparent is. A hard little
-    quad, however small, reads as a chip of glass.
+
+def _clouds(w, h):
+    shapes = []
+    for i, (u, v, half_w, half_h, alpha) in enumerate(CLOUDS):
+        shapes += _cloud(
+            w * u, h * v, w * half_w, h * half_h, 20 + i, CLOUD, alpha, 5, 1.5
+        )
+    return shapes
+
+
+def _sparkle(x, y, r, alpha, colour):
+    """A four-armed star: eight points, alternating long and short.
+
+    For the brightest few only. A radial fill from the middle runs out along the
+    arms, so the spikes fade rather than ending — which is what an eye does with
+    a bright point, and what a hard cross drawn over one never looks like.
+    """
+    pts = []
+    for i in range(8):
+        reach = r if i % 2 == 0 else r * 0.22
+        a = TAU * i / 8.0
+        pts.append(_v(x + reach * math.cos(a), y + reach * math.sin(a)))
+    return _halo(pts, colour, colour, alpha, 0)
+
+
+def _stars(w, h, t):
+    """A hard point with a bloom around it, thinning out towards the trees.
+
+    A star drawn as a soft blob is a smudge, and one drawn as a hard chip is a
+    speck of dirt on the glass. It is the two together that read: a core one or
+    two pixels across, sharp, with a faint halo three or four times its size.
+    The halo alone is what was wrong before — all bloom and nothing to bloom
+    from.
 
     They do not all twinkle at the same rate, and the slowest of them barely
     twinkle at all — a sky where every point pulses together is a string of
-    fairy lights.
+    fairy lights. The core is worked harder than the halo, because scintillation
+    is the point moving in and out of visibility and not the air around it.
     """
     shapes = []
     ceiling = h * HORIZON
@@ -274,72 +420,81 @@ def _stars(w, h, t):
         # Mostly slow. A handful are nearly steady, which is what gives the
         # restless ones something to be restless against.
         rate = 0.25 + 2.2 * _rand(i, 44) ** 2.0
-        breath = 0.52 + 0.48 * math.sin(t * rate + _rand(i, 45) * TAU)
+        breath = 0.5 + 0.5 * math.sin(t * rate + _rand(i, 45) * TAU)
         # Hazier towards the horizon, as a real sky is.
         haze = 1.0 - 0.55 * (y / max(ceiling, 1.0))
-        alpha = (26 + 190 * weight) * (0.45 + 0.55 * breath) * haze
-        size = 1.6 + 3.4 * weight + 0.6 * breath
         colour = STAR if _rand(i, 46) > 0.3 else STAR_COOL
-        shapes.append(_halo(_disc(x, y, size, size, 8), colour, colour, alpha, 0))
+
+        bloom = (1.7 + 3.0 * weight) * (0.9 + 0.2 * breath)
+        shapes.append(
+            _halo(
+                _disc(x, y, bloom, bloom, 8),
+                colour,
+                colour,
+                (16 + 104 * weight) * (0.5 + 0.5 * breath) * haze,
+                0,
+            )
+        )
+        # The point itself. Square, and never more than a couple of pixels: a
+        # diamond this small loses its corners to the antialiasing and comes
+        # back as the blur it was supposed to fix.
+        core = 0.55 + 0.85 * weight
+        shapes.append(
+            _solid(
+                [
+                    _v(x - core, y - core),
+                    _v(x + core, y - core),
+                    _v(x + core, y + core),
+                    _v(x - core, y + core),
+                ],
+                colour,
+                alpha=(96 + 159 * weight) * (0.42 + 0.58 * breath) * haze,
+            )
+        )
+        # Three or four of them carry arms. Any more and it is a Christmas
+        # card, which is the whole risk of drawing a spike on a star at all.
+        if weight > 0.90:
+            shapes.append(
+                _sparkle(x, y, bloom * 1.9, 84 * (0.3 + 0.7 * breath) * haze, colour)
+            )
     return shapes
 
 
 # (how many, the band of the frame they keep to, how far they wander, how big
-# their light is). The deep ones are drawn among the trees and the near ones in
-# front of the whole wood, so the same insect is sometimes behind a trunk and
-# sometimes over it.
+# their light is, how sharp it is). Read as depth: the far swarm is many, tiny
+# and pin-sharp, the near one is a handful, large and out of focus. They are
+# drawn at three different points in the wood, so the same insect is sometimes
+# behind a trunk and sometimes over it — and a firefly the size of the near
+# ones, back among the deep trees, would be a lantern rather than a long way
+# off.
 SWARMS = (
-    (24, -0.16, 0.07, 0.22, 0.11, 6.0),
-    (13, -0.04, 0.25, 0.28, 0.14, 9.5),
+    (170, -0.14, 0.06, 0.06, 0.026, 3.2, 1.00),
+    (70, -0.09, 0.17, 0.08, 0.038, 5.6, 0.60),
+    (14, 0.00, 0.28, 0.10, 0.050, 8.6, 0.20),
 )
-# How far back in time the tail of the wake is, and how many points that curve
-# is drawn through.
-TRAIL_LAG = 0.45
-TRAIL_STEPS = 10
-
-
-def _wake(at, t, width):
-    """Where something has been over the last `TRAIL_LAG` seconds, as a ribbon.
-
-    Sampling the path and drawing a light at each sample gives a string of
-    beads: the samples have to overlap to read as one streak, and by the time
-    they do there are far too many of them. One tapered polygon laid along the
-    same points is smooth however fast the thing is moving, and costs a single
-    linear fill — which, unlike a radial one, is not subdivided at all.
-
-    Hands back the ribbon and the two ends, because the ramp along it has to
-    know which way it runs.
-    """
-    pts = [at(t - TRAIL_LAG * k / TRAIL_STEPS) for k in range(TRAIL_STEPS + 1)]
-    left, right = [], []
-    for k, (x, y) in enumerate(pts):
-        u = k / TRAIL_STEPS
-        half = width * (1.0 - u) ** 0.85
-        # The local direction, from the neighbours on either side.
-        ax, ay = pts[max(k - 1, 0)]
-        bx, by = pts[min(k + 1, TRAIL_STEPS)]
-        dx, dy = bx - ax, by - ay
-        span = math.hypot(dx, dy) or 1.0
-        nx, ny = -dy / span, dx / span
-        left.append(_v(x + nx * half, y + ny * half))
-        right.append(_v(x - nx * half, y - ny * half))
-    right.reverse()
-    return left + right, pts[0], pts[-1]
 
 
 def _fireflies(w, h, t, swarm):
-    """A drifting light with the last second of itself trailing behind it.
+    """Points of light adrift in the wood, each on its own slow pulse.
 
-    There is no state here and nothing is remembered between frames: the flight
-    is a function of time, so the wake is that same function sampled a little
-    way into the past. It bends when the insect does, because it is the same
-    curve.
+    A firefly does not streak. It hangs, drifts a foot, hangs again — so the
+    flight here is slow enough that a whole second of it would be a few pixels,
+    and what is left to draw is the light itself: a soft round glow with a
+    brighter point inside it, which is what one looks like across a clearing.
 
-    The body is almost nothing — a bright point two pixels across. What reads at
-    this distance is the light around it and the light it has left behind, which
-    is why those are drawn large and the insect is not really drawn at all.
+    The body is a *solid* disc with a glow around it, which is the whole of
+    what makes it read as a light rather than a smudge. Two radial fades stacked
+    on each other have no middle: they are falloff all the way down, and what
+    arrives is a soft green stain. A flat bright disc with a soft ring around it
+    is a lamp — the same thing that fixes a star, for the same reason.
+
+    Depth is carried by *sharpness* as much as by size. The far ones are hard
+    little points barely wider than a star; the near ones are wide, flat and
+    dim, the way a light closer than anything the eye is focused on goes. Take
+    the sharpness away and they all read as being at the same distance, however
+    carefully their sizes are graded.
     """
-    count, top, bottom, sway, rise, size = SWARMS[swarm]
+    count, top, bottom, sway, rise, size, sharp = SWARMS[swarm]
     shapes = []
     for i in range(count):
         seed = swarm * 97 + i
@@ -347,46 +502,71 @@ def _fireflies(w, h, t, swarm):
         # Spaced across the width and then nudged, rather than scattered: a
         # dozen rolls of the dice leave half the wood empty and the other half
         # in a heap, and a swarm that clumps by accident looks like a bug.
-        home_x = w * (-0.05 + 1.10 * (i + 0.5 + (_rand(seed, 61) - 0.5) * 1.2) / count)
+        home_x = w * (-0.05 + 1.10 * (i + 0.5 + (_rand(seed, 61) - 0.5) * 1.3) / count)
         home_y = h * (HORIZON + top + (bottom - top) * _rand(seed, 62))
-        speed = 0.14 + 0.24 * _rand(seed, 63)
+        speed = 0.05 + 0.08 * _rand(seed, 63)
         px, py = _rand(seed, 64) * TAU, _rand(seed, 65) * TAU
-        # A blink that is off more than it is on: squared, so the pulse has a
-        # longer dark tail than a sine's even in-and-out.
-        blink_rate = 0.55 + 1.15 * _rand(seed, 66)
+        # Not all the same lamp: a spread of sizes inside the swarm does more
+        # for depth than the difference between one swarm and the next.
+        own = size * (0.62 + 0.80 * _rand(seed, 68) ** 1.5)
+        # Each on its own count and phase, so the wood blinks all over rather
+        # than pulsing as one. With a swarm this size every one can fade the
+        # whole way out and there are still plenty alight at any moment — which
+        # is the wood the eye expects, dark with sparks coming and going in it.
+        blink_rate = 0.9 + 2.1 * _rand(seed, 66)
         blink_phase = _rand(seed, 67) * TAU
 
-        def at(when, sway=sway, rise=rise, speed=speed, px=px, py=py,
-               home_x=home_x, home_y=home_y):
-            s = when * speed
-            # Two rates on the long axis, so it wanders rather than orbits.
-            x = home_x + w * sway * (
-                0.72 * math.sin(s * 1.7 + px) + 0.28 * math.sin(s * 4.3 + px * 2.1)
-            )
-            y = home_y + h * rise * math.sin(s * 2.3 + py)
-            return x, y
-
-        glow = max(0.0, math.sin(t * blink_rate + blink_phase)) ** 2.0
-        # Never quite out: a firefly that vanishes between pulses reads as a
-        # rendering fault rather than as an insect.
-        lit = 0.22 + 0.78 * glow
-
-        ribbon, (hx, hy), (tx, ty) = _wake(at, t, size * 0.46)
-        # Degrees clockwise from due right, and the far end of the ramp is the
-        # tail — so the light runs out along the way it came.
-        angle = math.degrees(math.atan2(ty - hy, tx - hx)) % 360.0
-        shapes.append(_ramp(ribbon, FIREFLY, FIREFLY, angle, 78 * lit, 0))
-        shapes.append(
-            _halo(_disc(hx, hy, size, size, 12), FIREFLY, FIREFLY, 165 * lit, 0)
+        s = t * speed
+        # What drift there is runs on two rates so it wanders rather than
+        # orbits, but it hangs far more than it travels: a firefly is a light
+        # held still and flashed, not one carried across the clearing.
+        x = home_x + w * sway * (
+            0.72 * math.sin(s * 1.7 + px) + 0.28 * math.sin(s * 4.3 + px * 2.1)
         )
+        y = home_y + h * rise * math.sin(s * 2.3 + py)
+
+        # A soft pulse that swells up and dies right back down to nothing, not a
+        # lamp left half-on. A gentle exponent keeps each one visible through
+        # most of its swell, so a whole field of them is always fading in and
+        # out at once rather than the wood standing dark between flashes.
+        glow = max(0.0, math.sin(t * blink_rate + blink_phase)) ** 1.3
+        lit = 0.05 + 0.95 * glow
+
+        # A radial fade is subdivided until it reads as smooth, which is dear —
+        # and dearer still, every shape drawn costs a fixed toll no matter how
+        # simple, so the way to keep a crowded wood cheap is fewer shapes, not
+        # only cheaper ones. The background is drawn in flat discs for that: a
+        # far firefly is a single warm dot, too small to want anything around
+        # it; a mid one a bright dot over a faint wider one, a two-step glow that
+        # never hollows the way a lone faint disc with a point in it does. Only
+        # the near swarm, a handful of big soft ones up front, is worth a true
+        # radial halo and the lamp inside it.
+        if sharp > 0.85:
+            r = own * (0.85 + 0.16 * _rand(seed, 69))
+            shapes.append(
+                _solid(_disc(x, y, r, r, 8), blend(FIREFLY, FIREFLY_CORE, 0.45), alpha=210 * lit)
+            )
+            continue
+        if sharp > 0.4:
+            r = own * (0.62 + 0.14 * _rand(seed, 69))
+            shapes.append(_solid(_disc(x, y, r * 2.2, r * 2.2, 10), FIREFLY, alpha=68 * lit))
+            shapes.append(
+                _solid(_disc(x, y, r, r, 10), blend(FIREFLY, FIREFLY_CORE, 0.5), alpha=225 * lit)
+            )
+            continue
         shapes.append(
             _halo(
-                _disc(hx, hy, size * 0.26, size * 0.26, 6),
-                FIREFLY_CORE,
-                FIREFLY_CORE,
-                245 * lit,
+                _disc(x, y, own * 1.9, own * 1.9, 12),
+                FIREFLY,
+                FIREFLY,
+                (120 + 60 * (1.0 - sharp)) * lit,
                 0,
             )
+        )
+        # And the lamp itself: small and fierce far off, wide and mild close to.
+        core = own * (0.62 - 0.40 * sharp)
+        shapes.append(
+            _solid(_disc(x, y, core, core, 10), FIREFLY_CORE, alpha=(118 + 137 * sharp) * lit)
         )
     return shapes
 
@@ -423,6 +603,14 @@ def _mist(w, h, at, thickness, alpha):
 def _range(w, h, spec, seed):
     """One range of trees with its haze, and the seed left where it got to.
 
+    The range gives every tree its rough size and its colour; almost everything
+    else about a particular tree is rolled here. A stand where only the height
+    varies reads as one tree at several scales, which is what a range of firs
+    must never look like — so the branch count, the width against the height,
+    how far the branches fall and how much bare trunk shows are all rolled
+    apart, and one tree in eight is an emergent that stands half again as tall
+    as its neighbours.
+
     Sorted shortest-first within the range. They are all one flat shade, so
     overlapping silhouettes only read if the taller of any two wins — sort them
     the other way and a small tree in front of a big one simply disappears.
@@ -435,19 +623,33 @@ def _range(w, h, spec, seed):
         # row of trees is a fence, and a wood is mostly gaps and thickets.
         u = start + (stop - start) * (i + 0.5 + (_rand(seed, 1) - 0.5) * 1.5) / count
         x = w * u
-        tall = h * (height + spread * _rand(seed, 2))
+        tall = h * (height + spread * _rand(seed, 2)) * _canopy(u)
+        # One in eight stands well clear of the rest. A canopy with nothing
+        # coming through it is a hedge, however uneven its top edge is.
+        if _rand(seed, 3) > 0.875:
+            tall *= 1.42
+        # Anything from a spindle to a broad fir, and anything from a young tree
+        # branched to the ground to an old one with a long bare trunk.
+        own_width = width * (0.66 + 0.68 * _rand(seed, 4))
+        own_tiers = max(4, tiers + int(_rand(seed, 5) * 4.0) - 1)
+        own_droop = droop * (0.72 + 0.62 * _rand(seed, 6))
+        trunk = 0.07 + 0.26 * _rand(seed, 7) ** 1.6
+        # And not all standing on the same line, so the range has some depth of
+        # its own rather than being a row at one distance.
+        base = _ground_y(w, h, x) + h * (drop + 0.016 * (_rand(seed, 8) - 0.35))
         trees.append(
             (
                 tall,
                 _solid(
                     _fir(
                         x,
-                        _ground_y(w, h, x) + h * drop,
+                        base,
                         tall,
-                        tall * width,
-                        tiers,
+                        tall * own_width,
+                        own_tiers,
                         seed,
-                        droop=droop,
+                        trunk_frac=trunk,
+                        droop=own_droop,
                     ),
                     colour,
                 ),
@@ -468,7 +670,7 @@ class Forest:
 
     The trees do not move, so they are built once for a viewport size and kept.
     The stars and the fireflies do, so they are built every frame. That is the
-    only reason the drawing is in three pieces rather than one: the cached
+    only reason the drawing is in four pieces rather than one: the cached
     stretches are the ones a frame has nothing new to say about, and the live
     ones are drawn between them so that a firefly can pass behind a trunk.
     """
@@ -476,20 +678,16 @@ class Forest:
     def __init__(self):
         self.started = time.monotonic()
         self._size = None
-        # Sky and moon; the deep range; everything from the far range forward.
-        self._far, self._wood, self._near = [], [], []
+        # Sky, cloud and moon; then the wood, one range at a time.
+        self._sky, self._deep, self._far, self._near = [], [], [], []
 
     def _build(self, w, h):
-        self._far = [_sky(w, h)] + _moon(w, h)
+        self._sky = [_sky(w, h)] + _clouds(w, h) + _moon(w, h)
 
         seed = 0
-        deep, seed = _range(w, h, RANGES[0], seed)
-        self._wood = deep
-
-        self._near = []
-        for spec in RANGES[1:]:
-            shapes, seed = _range(w, h, spec, seed)
-            self._near.extend(shapes)
+        self._deep, seed = _range(w, h, RANGES[0], seed)
+        self._far, seed = _range(w, h, RANGES[1], seed)
+        self._near, seed = _range(w, h, RANGES[2], seed)
         self._near.append(_ground(w, h))
 
         for u, height in NEAR_TREES:
@@ -502,10 +700,10 @@ class Forest:
                         x,
                         _ground_y(w, h, x) + h * 0.21,
                         tall,
-                        tall * 0.32,
-                        10,
+                        tall * (0.26 + 0.14 * _rand(seed, 9)),
+                        max(7, 9 + int(_rand(seed, 10) * 4.0) - 1),
                         seed,
-                        trunk_frac=0.17,
+                        trunk_frac=0.12 + 0.16 * _rand(seed, 11),
                         droop=1.15,
                     ),
                     TREE_NEAR,
@@ -533,15 +731,17 @@ class Forest:
             self._size = key
             self._build(w, h)
 
-        # Sky, stars, the deep trees, the fireflies among them, and then the
-        # rest of the wood over the top of those.
+        # Sky, stars, and then the wood a range at a time with a swarm of
+        # fireflies let loose between each pair of them.
         for shape in (
-            self._far
+            self._sky
             + _stars(w, h, t)
-            + self._wood
+            + self._deep
             + _fireflies(w, h, t, 0)
-            + self._near
+            + self._far
             + _fireflies(w, h, t, 1)
+            + self._near
+            + _fireflies(w, h, t, 2)
         ):
             ctx.draw_node(shape, box)
 

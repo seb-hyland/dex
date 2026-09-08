@@ -140,8 +140,9 @@ fn the_sky_paints() {
 ///
 /// A path is painted from the position its constraints carry, so a background
 /// that adds its own origin to its points as well lands at twice the origin —
-/// and paints a picture of a viewport in the corner of one. The widest mesh in
-/// the frame is the sky itself; nothing else here is anywhere near its size.
+/// and paints a picture of a viewport in the corner of one. The sky is the one
+/// full-viewport shape drawn from four corners; the streaks over it are drawn
+/// from dozens, so counting vertices picks it out.
 #[test]
 fn the_sky_covers_the_whole_viewport() {
     let (mut ws, ctx) = shown();
@@ -151,7 +152,7 @@ fn the_sky_covers_the_whole_viewport() {
     for clipped in &shapes {
         meshes(&clipped.shape, &mut |mesh| {
             let bounds = mesh.calc_bounds();
-            if bounds.area() > sky.area() {
+            if mesh.vertices.len() <= 8 && bounds.area() > sky.area() {
                 sky = bounds;
             }
         });
