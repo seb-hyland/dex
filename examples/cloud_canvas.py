@@ -11,12 +11,18 @@ viewport, so it stays put while everything on the surface pans and zooms over
 it. Drag the canvas about and the sky does not move — which is what you want
 from a sky and would be wrong for a gridline.
 
-The clouds are cirrus rather than the cartoon kind: long tapered streaks laid
-in loose bands, each faint enough that what you notice is where several of them
-overlap. Each is drawn as two halves meeting on its centre line, one fading
-upwards and one down, so both of its edges go soft — a single band can only ramp
-one way, and the edge it does not fade is an edge, which makes a shape rather
-than weather.
+The clouds are cirrus rather than the cartoon kind: a few fine streaks drawn
+across the middle of the frame and nothing at all above or below them, so the
+sky is mostly sky. Each is drawn as two halves meeting on its centre line, one
+fading upwards and one down, so both of its edges go soft — a single band can
+only ramp one way, and the edge it does not fade is an edge, which makes a
+shape rather than weather. They are faint on purpose: what you notice is where
+two or three of them cross, and a streak solid enough to see on its own is a
+brush stroke.
+
+Everything is authored from (0, 0) and offset to wherever the band was placed,
+at the last moment: a path is painted from the position its constraints carry,
+so adding the origin to its points as well would put it there twice.
 
 Every id is minted here rather than read back: the action queue does not drain
 until this returns, so nothing built along the way can be looked up before then.
@@ -31,17 +37,24 @@ SKY_LOW = (188, 220, 244)
 CLOUD = (255, 255, 255)
 
 # Bands of cirrus, as fractions of the viewport: (y, how far it sweeps, length,
-# thickness, how solid, how many streaks in the band).
+# thickness, how solid, how many streaks in the band). Gathered around the
+# middle of the frame and left off elsewhere — a sky evenly hazed over is a
+# sky with no weather in it.
 BANDS = (
-    (0.08, 0.022, 0.70, 0.036, 0.34, 5),
-    (0.19, -0.016, 0.30, 0.020, 0.26, 5),
-    (0.31, 0.028, 0.84, 0.046, 0.40, 5),
-    (0.44, -0.008, 0.26, 0.017, 0.24, 6),
-    (0.55, 0.020, 0.64, 0.032, 0.32, 5),
-    (0.67, -0.012, 0.36, 0.021, 0.26, 4),
-    (0.78, 0.016, 0.76, 0.040, 0.34, 5),
-    (0.91, 0.010, 0.32, 0.018, 0.22, 5),
+    (0.36, 0.020, 0.30, 0.017, 0.17, 4),
+    (0.44, -0.012, 0.22, 0.012, 0.13, 4),
+    (0.51, 0.024, 0.38, 0.021, 0.20, 5),
+    (0.58, -0.009, 0.20, 0.011, 0.13, 4),
+    (0.65, 0.015, 0.28, 0.015, 0.16, 4),
 )
+
+# Where the streaks start, as a fraction of the width. They run to the right of
+# wherever they begin, so the band has to start off the left edge and stop well
+# before the right one for the weather to carry the whole way across and off
+# both sides. A streak that ends inside the frame ends *somewhere*, and the eye
+# finds it.
+SPREAD_FROM = -0.24
+SPREAD_TO = 0.86
 
 
 def _v(x, y):
@@ -125,13 +138,10 @@ class Sky:
             should_clip=True,
         )
 
-        def at(x, y):
-            return _v(origin.x + x, origin.y + y)
-
         # The sky: deeper overhead, paler towards the bottom.
         ctx.draw_node(
             _ramp(
-                [at(0.0, 0.0), at(w, 0.0), at(w, h), at(0.0, h)],
+                [_v(0.0, 0.0), _v(w, 0.0), _v(w, h), _v(0.0, h)],
                 SKY_LOW,
                 SKY_HIGH,
                 270.0,
@@ -147,18 +157,19 @@ class Sky:
         for by, tilt, length, thickness, weight, count in BANDS:
             for i in range(count):
                 seed += 1
-                start = -0.12 + (i + _drift(seed, 1) * 0.7) / count * 1.24
-                jitter = (_drift(seed, 2) - 0.5) * 0.05
+                spread = SPREAD_TO - SPREAD_FROM
+                start = SPREAD_FROM + (i + _drift(seed, 1) * 0.8) / count * spread
+                jitter = (_drift(seed, 2) - 0.5) * 0.04
                 span = length * (0.6 + 0.7 * _drift(seed, 4))
                 alpha = 255 * weight * (0.55 + 0.45 * _drift(seed, 5))
                 # Above the centre line fading upwards, below it fading down.
-                def wisp(length, width, weight, seed=seed, start=start, jitter=jitter):
+                def wisp(length, width, weight, drop=0.0, seed=seed, start=start, jitter=jitter):
                     for side, angle in ((-1.0, 270.0), (1.0, 90.0)):
                         ctx.draw_node(
                             _ramp(
                                 _streak_half(
-                                    origin.x + w * start,
-                                    origin.y + h * (by + jitter),
+                                    w * start,
+                                    h * (by + jitter) + drop,
                                     length,
                                     width,
                                     tilt,
@@ -174,13 +185,17 @@ class Sky:
                             box,
                         )
 
+                # Each streak is three strands rather than one body: the long
+                # one, and two shorter and finer laid along it and offset a
+                # little. That is what makes cirrus feathery instead of smooth
+                # — the fringe is where strands end at different places, not
+                # anything the outline itself does. Density comes from strands
+                # piling up, never from drawing a thin bright one: below a
+                # couple of points across, a tapered shape stops being soft and
+                # starts being a dash.
                 wisp(w * span, h * thickness, alpha)
-                # Some streaks carry a second, shorter one along the same
-                # line. Density comes from streaks piling up, never from
-                # drawing a thin bright one: below a couple of points across a
-                # tapered shape stops being soft and starts being a dash.
-                if _drift(seed, 6) > 0.45:
-                    wisp(w * span * 0.62, h * thickness * 0.62, alpha * 0.9)
+                wisp(w * span * 0.66, h * thickness * 0.58, alpha * 0.85, h * thickness * 0.5)
+                wisp(w * span * 0.40, h * thickness * 0.44, alpha * 0.7, -h * thickness * 0.55)
 
         return dex.DrawResult.Complete(
             region=dex.ScreenRegion.from_min_size(origin, dex.Vector.new(w, h))

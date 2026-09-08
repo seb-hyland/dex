@@ -1,3 +1,5 @@
+//! Running a node's work off the UI thread.
+
 use std::{collections::VecDeque, sync::mpsc, thread};
 
 use crate::{Action, NodeUid};
@@ -16,44 +18,61 @@ impl ComputeTask {
     }
 }
 
+/// Which dispatch a worker is reporting on, so a report cannot be mistaken for a later one that reused the thread.
+type RunId = u64;
+
+/// Something for the scheduler to do, in the order it was asked. Channel order is semantic.
+enum Request {
+    Run(ComputeTask),
+    /// Throw away everything this node has asked for so far.
+    CancelAllFor(NodeUid),
+    /// A worker with nothing to do, waiting to be given something.
+    Free(oneshot::Sender<Assignment>),
+    /// A worker reporting that a dispatch is over, cancelled or not.
+    Finished(RunId),
+    /// The workspace is gone; wind the pool up. Sent by the handle's own `Drop`.
+    Shutdown,
+}
+
 pub struct ComputeSchedulerHandle {
-    task_sender: mpsc::Sender<ComputeTask>,
-    cancellation_sender: mpsc::Sender<NodeUid>,
+    requests: mpsc::Sender<Request>,
 }
 
 impl ComputeSchedulerHandle {
     /// A handle attached to no scheduler, with submission dropped on the floor. For detached workspaces.
     pub fn disconnected() -> Self {
-        let (task_sender, _) = mpsc::channel();
-        let (cancellation_sender, _) = mpsc::channel();
-        Self {
-            task_sender,
-            cancellation_sender,
-        }
+        let (requests, _) = mpsc::channel();
+        Self { requests }
     }
 
     pub fn submit_task(&self, task: ComputeTask) {
-        let _ = self.task_sender.send(task);
+        let _ = self.requests.send(Request::Run(task));
     }
 
     pub fn cancel_all_tasks_for(&self, node: NodeUid) {
-        let _ = self.cancellation_sender.send(node);
+        let _ = self.requests.send(Request::CancelAllFor(node));
+    }
+}
+
+impl Drop for ComputeSchedulerHandle {
+    fn drop(&mut self) {
+        // The workspace this pool was working for has gone.
+        let _ = self.requests.send(Request::Shutdown);
     }
 }
 
 pub struct ComputeScheduler {
-    /// Continually pushed into [`Self::queued_tasks`]
-    incoming_tasks: mpsc::Receiver<ComputeTask>,
-    /// Removes tasks from [`Self::queued_tasks`] and cancels relevant threads in [`Self::active_threads`]
-    incoming_cancellation_signals: mpsc::Receiver<NodeUid>,
+    /// Everything the scheduler acts on, in the order it happened
+    incoming: mpsc::Receiver<Request>,
 
     /// Tasks that have not yet been started
     queued_tasks: VecDeque<ComputeTask>,
-    /// Threads available to do work
-    free_workers: mpsc::Receiver<FreeThreadInfo>, // Only communication channel shared with workers
-
-    /// Threads currently doing work
-    active_workers: Vec<ActiveWorker>,
+    /// Workers waiting to be given one
+    free_workers: VecDeque<oneshot::Sender<Assignment>>,
+    /// Dispatches still running, and the means to throw each one away
+    active: Vec<ActiveRun>,
+    /// Names the next dispatch
+    next_run: RunId,
 }
 
 impl ComputeScheduler {
@@ -66,147 +85,142 @@ impl ComputeScheduler {
         // Spawn 1 compute thread minimum
         let num_workers = avail_threads.saturating_sub(2).max(1);
 
-        // Scheduler <-> worker channel
-        let (free_thread_sender, free_thread_recv) = mpsc::channel();
+        let (requests, incoming) = mpsc::channel();
 
-        // Spawn all workers
+        // Spawn all workers. Each holds a sender of its own.
         for _ in 0..num_workers {
-            let free_thread_tx = free_thread_sender.clone();
+            let requests = requests.clone();
             let action_queue = action_queue.clone();
-
-            thread::spawn(|| Self::worker_compute_loop(free_thread_tx, action_queue));
+            thread::spawn(|| Self::worker_compute_loop(requests, action_queue));
         }
 
-        // Scheduler thread
-        let (task_tx, task_recv) = mpsc::channel();
-        let (cancel_tx, cancel_recv) = mpsc::channel();
         thread::spawn(|| {
             let mut scheduler = Self {
-                incoming_tasks: task_recv,
-                incoming_cancellation_signals: cancel_recv,
-
+                incoming,
                 queued_tasks: VecDeque::new(),
-                free_workers: free_thread_recv,
-
-                active_workers: Vec::new(), // No tasks running yet
+                free_workers: VecDeque::new(),
+                active: Vec::new(), // No tasks running yet
+                next_run: 0,
             };
             scheduler.drive();
         });
 
-        ComputeSchedulerHandle {
-            task_sender: task_tx,
-            cancellation_sender: cancel_tx,
-        }
+        ComputeSchedulerHandle { requests }
     }
 
+    /// Take work as it comes, and cost nothing while there is none.
     fn drive(&mut self) {
         loop {
-            // Check if any workers have finished their work
-            self.active_workers.retain(|worker| {
-                if worker.complete_recv.try_recv().is_ok() {
-                    false // Finished!
-                } else {
-                    true
+            // Nothing to do until somebody says so.
+            let Ok(first) = self.incoming.recv() else {
+                return;
+            };
+            if !self.take(first) {
+                return;
+            }
+            // Whatever else piled up behind it, before deciding anything.
+            while let Ok(request) = self.incoming.try_recv() {
+                if !self.take(request) {
+                    return;
                 }
+            }
+            self.dispatch_all();
+        }
+    }
+
+    /// Fold one request into what the scheduler knows; [`false`] to stop.
+    fn take(&mut self, request: Request) -> bool {
+        match request {
+            Request::Run(task) => self.queued_tasks.push_back(task),
+            Request::CancelAllFor(node) => self.cancel(node),
+            Request::Free(worker) => self.free_workers.push_back(worker),
+            // Over is over: there is nothing left to cancel.
+            Request::Finished(run) => self.active.retain(|active| active.run != run),
+            // Returning drops the receiver, which is how the workers find out.
+            Request::Shutdown => return false,
+        }
+        true
+    }
+
+    /// Drop `node`'s queued work and ask for its running work to be thrown away.
+    fn cancel(&mut self, node: NodeUid) {
+        self.queued_tasks.retain(|task| task.requester != node);
+        self.active.retain(|active| {
+            if active.requester != node {
+                return true;
+            }
+            // A run that ended between its report and this sweep has already dropped its end.
+            let _ = active.kill.send(());
+            false
+        });
+    }
+
+    /// Pair queued work with waiting workers until one side runs out.
+    fn dispatch_all(&mut self) {
+        while !self.queued_tasks.is_empty() && !self.free_workers.is_empty() {
+            let (Some(task), Some(worker)) =
+                (self.queued_tasks.pop_front(), self.free_workers.pop_front())
+            else {
+                return;
+            };
+
+            let run = self.next_run;
+            self.next_run += 1;
+            let (kill, killed) = mpsc::channel();
+            // Read before the task goes: cancellation is by node, while the task is about to belong to the worker.
+            let requester = task.requester;
+
+            // A worker that has gone away takes its task with it.
+            if worker.send(Assignment { run, task, killed }).is_err() {
+                continue;
+            }
+            self.active.push(ActiveRun {
+                run,
+                requester,
+                kill,
             });
-
-            // Check if a new task has come in
-            if let Ok(task) = self.incoming_tasks.try_recv() {
-                self.queued_tasks.push_back(task);
-            }
-
-            // Check if any nodes have cancelled their work
-            if let Ok(id) = self.incoming_cancellation_signals.try_recv() {
-                // Remove queued tasks for this node
-                self.queued_tasks.retain(|task| task.requester != id);
-                // Send kill signals to active workers for this node
-                self.active_workers.retain(|worker| {
-                    if worker.requester == id {
-                        worker.kill_tx.send(()).expect("Sends should not fail"); // Graceful shutdown
-                        false // Do not retain
-                    } else {
-                        true
-                    }
-                });
-            }
-
-            while !self.queued_tasks.is_empty() {
-                if let Ok(worker) = self.free_workers.try_recv() {
-                    // Compute available to do this task!
-                    let task = self
-                        .queued_tasks
-                        .pop_front()
-                        .expect("Queue should not be empty");
-
-                    // Scheduler <-> worker communication channels
-                    let (kill_tx, kill_recv) = mpsc::channel();
-                    let (complete_tx, complete_recv) = mpsc::channel();
-
-                    let worker_info = ActiveWorker {
-                        requester: task.requester,
-                        kill_tx,
-                        complete_recv,
-                    };
-                    self.active_workers.push(worker_info);
-
-                    worker
-                        .response
-                        .send(ComputeTaskContext {
-                            ctask: task,
-                            kill_recv,
-                            complete_tx,
-                        })
-                        .expect("Sends should not fail");
-                }
-            }
         }
     }
 
-    fn worker_compute_loop(
-        free_thread_tx: mpsc::Sender<FreeThreadInfo>,
-        action_queue: mpsc::Sender<Action>,
-    ) -> ! {
+    fn worker_compute_loop(requests: mpsc::Sender<Request>, action_queue: mpsc::Sender<Action>) {
         loop {
-            // Inform the scheduler that this thread is ready for work
-            let (tx, rx) = oneshot::channel();
-            free_thread_tx
-                .send(FreeThreadInfo { response: tx })
-                .expect("Scheduler should not be dropped");
+            // Offer this thread.
+            let (respond, assignment) = oneshot::channel();
 
-            if let Ok(ctx) = rx.recv() {
-                // Do the work of the task
-                let res = (ctx.ctask.task)();
-
-                // Should we cancel before committing the results?
-                let should_cancel = ctx.kill_recv.try_recv().is_ok();
-                if !should_cancel {
-                    for action in res {
-                        let _ = action_queue.send(action);
-                    }
-                }
-
-                // Tell the scheduler this task is done — if it is still there to be told.
-                let _ = ctx.complete_tx.send(());
+            // Scheduler has hung up.
+            if requests.send(Request::Free(respond)).is_err() {
+                return;
             }
+            let Ok(Assignment { run, task, killed }) = assignment.recv() else {
+                return;
+            };
+
+            let produced = (task.task)();
+
+            // Cancelled while it ran: the work is finished and thrown away.
+            if killed.try_recv().is_err() {
+                for action in produced {
+                    let _ = action_queue.send(action);
+                }
+            }
+
+            // Report in, so this run stops being one the scheduler can cancel.
+            let _ = requests.send(Request::Finished(run));
         }
     }
 }
 
-struct FreeThreadInfo {
-    /// A mailbox for a task and cancellation channel
-    response: oneshot::Sender<ComputeTaskContext>,
+/// One dispatch, as the worker receives it.
+struct Assignment {
+    run: RunId,
+    task: ComputeTask,
+    /// Signalled when the results should be thrown away rather than committed.
+    killed: mpsc::Receiver<()>,
 }
 
-/// Passed to the worker
-struct ComputeTaskContext {
-    ctask: ComputeTask,
-    kill_recv: mpsc::Receiver<()>,
-    complete_tx: mpsc::Sender<()>,
-}
-
-/// Held by the scheduler
-struct ActiveWorker {
+/// One dispatch, as the scheduler remembers it.
+struct ActiveRun {
+    run: RunId,
     requester: NodeUid,
-    kill_tx: mpsc::Sender<()>,
-    complete_recv: mpsc::Receiver<()>,
+    kill: mpsc::Sender<()>,
 }

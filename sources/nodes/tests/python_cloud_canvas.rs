@@ -15,6 +15,17 @@ use dex_nodes::scripting::{ScriptOutput, run_script};
 
 const CLOUDS: &str = include_str!("../../../examples/cloud_canvas.py");
 const SCREEN: egui::Vec2 = egui::vec2(640.0, 440.0);
+/// The surface is drawn *inset* in the window, as the app's own sidebar insets
+/// it. A band that misplaces itself by its own origin is exactly right at zero.
+const INSET: egui::Vec2 = egui::vec2(120.0, 60.0);
+
+/// Where the surface is drawn, and the window it is drawn in.
+fn pane() -> (egui::Rect, egui::Rect) {
+    (
+        egui::Rect::from_min_size(egui::pos2(INSET.x, INSET.y), SCREEN),
+        egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN + INSET * 2.0),
+    )
+}
 
 /// Run the example as a lambda would, and give back the surface it built.
 fn built() -> (Workspace, NodeUid) {
@@ -63,49 +74,95 @@ fn the_example_builds_a_surface_with_a_backdrop() {
     );
 }
 
-/// It paints, which is the only way to know the backdrop ran at all.
-#[test]
-fn the_sky_paints() {
-    let (mut ws, canvas) = built();
-    ws.set_root(canvas);
-    let ctx = egui::Context::default();
-    dex_nodes::fonts::install_fonts(&ctx);
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN);
-
-    // Several frames: egui's first pass over a layout it has not seen is a
-    // sizing pass, and it fades a new one in over the few after that.
+/// Draw the surface until it has settled, and hand back what it painted.
+///
+/// Several frames: egui's first pass over a layout it has not seen is a sizing
+/// pass, and it fades a new one in over the few after that.
+fn painted(ws: &mut Workspace, ctx: &egui::Context) -> Vec<egui::epaint::ClippedShape> {
+    let (pane, window) = pane();
     let mut shapes = Vec::new();
     for _ in 0..12 {
         shapes = ctx
             .clone()
             .run_ui(
                 egui::RawInput {
-                    screen_rect: Some(screen),
+                    screen_rect: Some(window),
                     ..Default::default()
                 },
                 |c| {
                     egui::CentralPanel::default().show(c, |ui| {
-                        ws.draw_frame(ui, screen);
+                        ws.draw_frame(ui, pane);
                     });
                 },
             )
             .shapes;
     }
+    shapes
+}
 
-    fn meshes(shape: &egui::Shape, found: &mut usize) {
-        match shape {
-            egui::Shape::Vec(inner) => inner.iter().for_each(|s| meshes(s, found)),
-            egui::Shape::Mesh(mesh) => *found += mesh.indices.len() / 3,
-            _ => {}
-        }
+/// Walk the frame's meshes.
+fn meshes(shape: &egui::Shape, found: &mut impl FnMut(&egui::Mesh)) {
+    match shape {
+        egui::Shape::Vec(inner) => inner.iter().for_each(|s| meshes(s, found)),
+        egui::Shape::Mesh(mesh) => found(mesh),
+        _ => {}
     }
+}
+
+/// A workspace showing the surface, and the context it was drawn with.
+fn shown() -> (Workspace, egui::Context) {
+    let (mut ws, canvas) = built();
+    ws.set_root(canvas);
+    let ctx = egui::Context::default();
+    dex_nodes::fonts::install_fonts(&ctx);
+    (ws, ctx)
+}
+
+/// It paints, which is the only way to know the backdrop ran at all.
+#[test]
+fn the_sky_paints() {
+    let (mut ws, ctx) = shown();
+    let shapes = painted(&mut ws, &ctx);
+
     let mut triangles = 0;
     for clipped in &shapes {
-        meshes(&clipped.shape, &mut triangles);
+        meshes(&clipped.shape, &mut |mesh| {
+            triangles += mesh.indices.len() / 3;
+        });
     }
     assert!(
         triangles > 100,
         "the sky and its cirrus painted: {triangles} triangles"
+    );
+}
+
+/// And it covers the viewport it was handed, corner to corner.
+///
+/// A path is painted from the position its constraints carry, so a background
+/// that adds its own origin to its points as well lands at twice the origin —
+/// and paints a picture of a viewport in the corner of one. The widest mesh in
+/// the frame is the sky itself; nothing else here is anywhere near its size.
+#[test]
+fn the_sky_covers_the_whole_viewport() {
+    let (mut ws, ctx) = shown();
+    let shapes = painted(&mut ws, &ctx);
+
+    let mut sky = egui::Rect::NOTHING;
+    for clipped in &shapes {
+        meshes(&clipped.shape, &mut |mesh| {
+            let bounds = mesh.calc_bounds();
+            if bounds.area() > sky.area() {
+                sky = bounds;
+            }
+        });
+    }
+    let (screen, _window) = pane();
+    assert!(
+        (sky.min.x - screen.min.x).abs() < 1.0
+            && (sky.min.y - screen.min.y).abs() < 1.0
+            && (sky.max.x - screen.max.x).abs() < 1.0
+            && (sky.max.y - screen.max.y).abs() < 1.0,
+        "the sky spans {sky:?}, and the window is {screen:?}"
     );
 }
 
