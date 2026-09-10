@@ -195,6 +195,21 @@ impl Registry {
         self.history.current_epoch_mut().map.remove_mut(&uid);
     }
 
+    /// A copy of this registry holding only the present.
+    pub(crate) fn trimmed(&self) -> Self {
+        let mut pool = NodePool::default();
+        let mut snapshot = WorldSnapshot::default();
+
+        for (uid, nobj) in self.history.current_epoch().data.map.iter() {
+            snapshot.push(nobj.current(&self.pool), *uid, &mut pool);
+        }
+
+        Self {
+            pool,
+            history: HistoryGraph::new(snapshot),
+        }
+    }
+
     pub(crate) fn start_epoch(&mut self, edge: Action) {
         let ts = Timestamp::now();
         self.history.start_epoch(edge, ts);

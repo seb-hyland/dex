@@ -1,10 +1,4 @@
 //! The Controls tab, the folding panels, and the two ways into a canvas.
-//!
-//! Saving is the one with teeth. A workspace file carries the whole registry —
-//! every node, and every node's history — so a load has to replace the world
-//! from inside it: the sidebar that asked is one of the nodes being swapped
-//! out. That is why the swap is a workspace-level action rather than one
-//! addressed to a node, and why the queue is drained when it lands.
 
 use dex_core::prelude::*;
 use dex_nodes::composites::button::Button;
@@ -221,9 +215,9 @@ fn the_controls_tab_carries_the_three_things_it_is_for() {
 }
 
 /// A workspace round-trips through a file: what was on the canvas is on it
-/// again, and the history that put it there came too.
+/// again, under the same ids, and the nodes come back live.
 #[test]
-fn a_workspace_saves_and_loads_with_its_history() {
+fn a_workspace_saves_and_loads_its_current_state() {
     dex_nodes::scripting::init_python();
     let dir = scratch("roundtrip");
     let path = dir.join("saved.dex");
@@ -277,10 +271,53 @@ fn a_workspace_saves_and_loads_with_its_history() {
         "with the item still on it, under the same id"
     );
 
-    // The history came too, which is what "everything" was chosen to mean.
+    // A version token, so the loaded canvas is a real registry entry rather
+    // than a lookup that quietly missed.
     assert!(
         other.version_of(canvas.erase()) > 0,
-        "the canvas remembers having been edited"
+        "the canvas came back as a live node"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A save file carries the present, not the road to it. History has nowhere to
+/// go yet, so the epochs — and the pool of every node they ever named — are
+/// dropped on the way out: repeating an edit does not grow the file.
+#[test]
+fn a_save_drops_the_epochs_that_led_to_it() {
+    dex_nodes::scripting::init_python();
+    let dir = scratch("trimmed");
+
+    fn saved_size(path: &std::path::Path, edits: usize) -> u64 {
+        let mut ws = Desktops::new_workspace();
+        let root = ws.root();
+        ws.submit_action_dyn(Action {
+            dest: root,
+            description: "add item".into(),
+            body: Box::new(AddCanvasItem {
+                child: Arc::new(Label::new("remember me".to_owned())),
+                size: Vector { x: 200.0, y: 60.0 },
+            }),
+        });
+        // An even number of toggles, so the state saved is the same either way
+        // and only the history behind it differs.
+        for _ in 0..edits {
+            ws.submit_action(root.cast::<Desktops>(), "fold", ToggleSidebar);
+        }
+        ws.process_pending();
+        ws.save_to(path).expect("the workspace saves");
+        std::fs::metadata(path).expect("a save file").len()
+    }
+
+    let quiet = saved_size(&dir.join("quiet.dex"), 0);
+    let busy = saved_size(&dir.join("busy.dex"), 200);
+
+    assert!(quiet > 0, "the quiet workspace wrote something");
+    assert!(
+        busy <= quiet + quiet / 20,
+        "200 edits deep, the file is still the size of the state it holds: \
+         {busy} against {quiet}"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

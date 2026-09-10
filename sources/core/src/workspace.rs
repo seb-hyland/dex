@@ -427,10 +427,12 @@ impl Workspace {
     #[dynamic(skip)] // writes a file; not something a script should reach for
     pub fn save_to(&self, path: &std::path::Path) -> Result<(), SaveError> {
         let file = std::fs::File::create(path)?;
+        // Only the present is worth writing while history has nowhere to go.
+        let registry = self.registry.trimmed();
         ciborium::into_writer(
             &Saved {
                 root: self.root_node,
-                registry: &self.registry,
+                registry: &registry,
             },
             std::io::BufWriter::new(file),
         )
