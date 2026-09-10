@@ -16,19 +16,28 @@ It paints **no background**, so it sits on whatever it is put on and the surface
 shows through. A drawing that brings its own paper can only ever be a rectangle
 on a canvas; one that does not is a part of it.
 
-**Everything is drawn from the node's own corner.** A shape carries absolute
-points, so the origin the constraints hand over is added in as each one is
-built. Nothing here needs to know where on a canvas it ended up.
+**It comes out the size of the box it is given.** `WIDTH` and `HEIGHT` are
+proportions, not pixels: a symbol has a shape rather than a size, so the numbers
+below say where things sit relative to each other and nothing more. They are
+mapped into whatever room there is the way an image is — one scale on both axes,
+centred, with the room left over on the longer side left empty — so the drawing
+never distorts, and it is a symbol at any size from a thumbnail up.
+
+*Everything* takes that scale, not just the geometry: the wire gauge, the
+detector's face, the gap a designator sits at, and the type. A drawing whose
+lettering held still while its circuit grew would stop being one picture. Which
+is why nothing below is written in pixels — the one place art coordinates become
+screen coordinates is `Placement`, and every helper goes through it.
 """
 
 import math
 
-#: The drawing's own size. Fixed, because a symbol has a shape rather than a
-#: size that means something.
+#: The drawing's proportions. Read as a ratio: it is drawn at whatever size the
+#: box allows, and only the shape of it is fixed.
 WIDTH = 476.0
 HEIGHT = 384.0
 
-# Where the diamond's corners and rails fall, in the node's own coordinates.
+# Where the diamond's corners and rails fall, in the drawing's own coordinates.
 RAIL_TOP = 70.0
 RAIL_BOTTOM = 274.0
 COL_LEFT = 190.0
@@ -50,13 +59,68 @@ LABEL_SIZE = 11.0
 
 
 # =======================================================================
-# Drawing, in the node's own frame
+# Where the drawing landed, and how big it came out
+# =======================================================================
+
+
+def _room(v):
+    """How much of an axis there is, or `None` for one with no bound at all."""
+    return v if (math.isfinite(v) and v > 0.0) else None
+
+
+class Placement:
+    """The one place the drawing's coordinates become the screen's.
+
+    Holds the corner the drawing was actually placed at and the scale it came
+    out at, and maps a point through both. Every helper below takes one, which
+    is what lets the schematic further down read as geometry rather than as
+    arithmetic about where the node happens to be or how big it happens to be.
+    """
+
+    def __init__(self, x, y, s):
+        (self.x, self.y, self.s) = (x, y, s)
+
+    def at(self, x, y):
+        """An art point as a screen point."""
+        return (self.x + x * self.s, self.y + y * self.s)
+
+    def of(self, v):
+        """An art length — a radius, a stroke, a font — as a screen length."""
+        return v * self.s
+
+    @staticmethod
+    def fitted(ctx):
+        """Fit the drawing into the room the constraints offer, centred.
+
+        Whichever axes are actually bounded decide the scale, and the smaller
+        fit wins so the drawing stays inside both. Bounded by neither — which is
+        what a shape asked how big it would like to be gets — it comes out at
+        the size it was written at.
+        """
+        origin = ctx.constraints.pos
+        avail = ctx.constraints.available()
+        (w, h) = (_room(avail.x), _room(avail.y))
+        fits = [room / art for (room, art) in ((w, WIDTH), (h, HEIGHT))
+                if room is not None]
+        s = min(fits) if fits else 1.0
+        dx = (w - WIDTH * s) / 2.0 if w is not None else 0.0
+        dy = (h - HEIGHT * s) / 2.0 if h is not None else 0.0
+        return Placement(origin.x + dx, origin.y + dy, s)
+
+    def region(self):
+        """The box the drawing actually filled — the ink, not the room."""
+        return dex.ScreenRegion.from_min_size(
+            dex.ScreenPos.new(self.x, self.y),
+            dex.Vector.new(WIDTH * self.s, HEIGHT * self.s))
+
+
+# =======================================================================
+# Drawing, in the drawing's own frame
 # =======================================================================
 #
-# Each of these takes the origin the constraints handed over and bakes it into
-# the coordinates, because a path holds absolute points and is drawn from
-# nowhere in particular. Written once here so the schematic below reads as
-# geometry rather than as arithmetic about where the node happens to be.
+# Each of these takes a `Placement` and maps through it, because a path holds
+# absolute points and is drawn from nowhere in particular. Written once here so
+# that the schematic below is only ever about the circuit.
 
 
 def _rgb(c):
@@ -76,26 +140,27 @@ def _at(x, y):
     )
 
 
-def _line(ctx, o, pts, colour=WIRE, width=STROKE):
+def _line(ctx, p, pts, colour=WIRE, width=STROKE):
     ctx.draw_node(
         dex.Path.polyline(
-            [dex.Vector.new(o.x + x, o.y + y) for (x, y) in pts],
-            dex.Stroke.new(width, _rgb(colour)),
+            [dex.Vector.new(*p.at(x, y)) for (x, y) in pts],
+            dex.Stroke.new(p.of(width), _rgb(colour)),
         ),
         _unplaced(),
     )
 
 
-def _dot(ctx, o, cx, cy, r, colour=WIRE):
-    ctx.draw_node(dex.Circle.new(r, _rgb(colour)), _at(o.x + cx - r, o.y + cy - r))
+def _dot(ctx, p, cx, cy, r, colour=WIRE):
+    ctx.draw_node(dex.Circle.new(p.of(r), _rgb(colour)), _at(*p.at(cx - r, cy - r)))
 
 
-def _ring(ctx, o, cx, cy, r, colour=WIRE, width=STROKE):
+def _ring(ctx, p, cx, cy, r, colour=WIRE, width=STROKE):
     ctx.draw_node(
         dex.Circle.bordered(
-            r, dex.Color.transparent(), dex.Stroke.new(width, _rgb(colour))
+            p.of(r), dex.Color.transparent(),
+            dex.Stroke.new(p.of(width), _rgb(colour))
         ),
-        _at(o.x + cx - r, o.y + cy - r),
+        _at(*p.at(cx - r, cy - r)),
     )
 
 
@@ -105,27 +170,37 @@ def _font(size, bold):
     return font
 
 
-def _text(ctx, o, s, x, y, anchor="start", middle_y=False, size=LABEL_SIZE, bold=True):
+def _text(ctx, p, s, x, y, anchor="start", middle_y=False, size=LABEL_SIZE, bold=True):
     """A designator at `(x, y)`, anchored by its start, middle or end.
 
     `middle_y` centres it on the line as well, which is what a letter inside a
     symbol wants and what a label beside a wire does not.
+
+    The anchoring is done in screen coordinates rather than art ones, because
+    that is where the measurement is: text is measured in the font it will
+    actually be drawn in, and that font is the scaled one.
     """
-    measured = ctx.measure_text(s, _font(size, bold), dex.TextWrap.singleline())
+    font = _font(p.of(size), bold)
+    measured = ctx.measure_text(s, font, dex.TextWrap.singleline())
+    (sx, sy) = p.at(x, y)
     if anchor == "end":
-        x -= measured.width
+        sx -= measured.width
     elif anchor == "middle":
-        x -= measured.width / 2.0
+        sx -= measured.width / 2.0
     if middle_y:
-        y -= measured.height / 2.0
+        sy -= measured.height / 2.0
     label = dex.Label.new(s)
-    label.font = _font(size, bold)
+    label.font = font
     label.color = _rgb(LEAD)
-    ctx.draw_node(label, _at(o.x + x, o.y + y))
+    ctx.draw_node(label, _at(sx, sy))
 
 
 def _zigzag(x0, y0, x1, y1, teeth=6, amp=7.0):
-    """A resistor's body: leads at each end and a zigzag between them."""
+    """A resistor's body: leads at each end and a zigzag between them.
+
+    In art coordinates, like everything else here — it is handed to `_line`,
+    which is what maps it.
+    """
     (dx, dy) = (x1 - x0, y1 - y0)
     span = math.hypot(dx, dy) or 1.0
     (ux, uy) = (dx / span, dy / span)
@@ -169,38 +244,36 @@ class Schematic:
         return "A Wheatstone Bridge"
 
     def draw(self, ctx):
-        o = ctx.constraints.pos
+        p = Placement.fitted(ctx)
 
         # The two rails, and the source across them.
-        _line(ctx, o, [(COL_LEFT, RAIL_TOP), (COL_RIGHT, RAIL_TOP)])
-        _line(ctx, o, [(COL_LEFT, RAIL_BOTTOM), (COL_RIGHT, RAIL_BOTTOM)])
-        self._source(ctx, o)
-        self._ground(ctx, o)
+        _line(ctx, p, [(COL_LEFT, RAIL_TOP), (COL_RIGHT, RAIL_TOP)])
+        _line(ctx, p, [(COL_LEFT, RAIL_BOTTOM), (COL_RIGHT, RAIL_BOTTOM)])
+        self._source(ctx, p)
+        self._ground(ctx, p)
 
         # The four arms, each a resistor between a rail and a midpoint.
         for (name, x, y0, y1, side) in ARMS:
-            _line(ctx, o, _zigzag(x, y0, x, y1))
+            _line(ctx, p, _zigzag(x, y0, x, y1))
             edge = x - LABEL_GAP if side == "end" else x + LABEL_GAP
-            _text(ctx, o, name, edge, (y0 + y1) / 2.0, anchor=side, middle_y=True)
+            _text(ctx, p, name, edge, (y0 + y1) / 2.0, anchor=side, middle_y=True)
 
         # The detector, bridging the two midpoints. Its leads stop at the face
         # rather than running under it: nothing here is painted over anything,
         # because there is no background to hide a line against.
-        _line(ctx, o, [(COL_LEFT, MIDDLE), (CENTRE - METER_R, MIDDLE)])
-        _line(ctx, o, [(CENTRE + METER_R, MIDDLE), (COL_RIGHT, MIDDLE)])
-        _ring(ctx, o, CENTRE, MIDDLE, METER_R)
-        _text(ctx, o, "G", CENTRE, MIDDLE, anchor="middle", middle_y=True, size=12.0)
+        _line(ctx, p, [(COL_LEFT, MIDDLE), (CENTRE - METER_R, MIDDLE)])
+        _line(ctx, p, [(CENTRE + METER_R, MIDDLE), (COL_RIGHT, MIDDLE)])
+        _ring(ctx, p, CENTRE, MIDDLE, METER_R)
+        _text(ctx, p, "G", CENTRE, MIDDLE, anchor="middle", middle_y=True, size=12.0)
 
         # The two midpoints: the only junctions in the circuit that are neither
         # driven nor grounded, and so the only two worth marking.
         for x in (COL_LEFT, COL_RIGHT):
-            _dot(ctx, o, x, MIDDLE, 3.4)
+            _dot(ctx, p, x, MIDDLE, 3.4)
 
-        return dex.DrawResult.Complete(
-            region=dex.ScreenRegion.from_min_size(o, dex.Vector.new(WIDTH, HEIGHT))
-        )
+        return dex.DrawResult.Complete(region=p.region())
 
-    def _source(self, ctx, o):
+    def _source(self, ctx, p):
         """A battery on a branch of its own, joining the two rails.
 
         It has to *join* them. A source drawn on a stub off one rail, going up
@@ -209,9 +282,9 @@ class Schematic:
         down the outside past two cells, and back into the bottom rail, and the
         loop the bridge sits inside is a loop you can trace with a finger.
         """
-        _line(ctx, o, [(COL_LEFT, RAIL_TOP), (SOURCE_X, RAIL_TOP),
+        _line(ctx, p, [(COL_LEFT, RAIL_TOP), (SOURCE_X, RAIL_TOP),
                        (SOURCE_X, MIDDLE - 16.0)])
-        _line(ctx, o, [(SOURCE_X, MIDDLE + 16.0), (SOURCE_X, RAIL_BOTTOM),
+        _line(ctx, p, [(SOURCE_X, MIDDLE + 16.0), (SOURCE_X, RAIL_BOTTOM),
                        (COL_LEFT, RAIL_BOTTOM)])
         # Two cells, each a long thin plate and a short thick one. Alternating
         # them is what says "a battery" rather than "a capacitor", and the long
@@ -219,15 +292,15 @@ class Schematic:
         for (k, y) in enumerate((MIDDLE - 9.0, MIDDLE - 3.0, MIDDLE + 3.0, MIDDLE + 9.0)):
             long_plate = k % 2 == 0
             half = 12.0 if long_plate else 6.0
-            _line(ctx, o, [(SOURCE_X - half, y), (SOURCE_X + half, y)],
+            _line(ctx, p, [(SOURCE_X - half, y), (SOURCE_X + half, y)],
                   width=STROKE if long_plate else STROKE * 1.7)
 
-    def _ground(self, ctx, o):
+    def _ground(self, ctx, p):
         """Three bars, shortening: the return the source is measured against."""
-        _line(ctx, o, [(CENTRE, RAIL_BOTTOM), (CENTRE, RAIL_BOTTOM + 20.0)])
+        _line(ctx, p, [(CENTRE, RAIL_BOTTOM), (CENTRE, RAIL_BOTTOM + 20.0)])
         for (k, half) in enumerate((15.0, 9.0, 4.0)):
             y = RAIL_BOTTOM + 20.0 + k * 5.0
-            _line(ctx, o, [(CENTRE - half, y), (CENTRE + half, y)])
+            _line(ctx, p, [(CENTRE - half, y), (CENTRE + half, y)])
 
 
 def transform():

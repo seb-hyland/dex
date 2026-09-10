@@ -87,6 +87,11 @@ pub(crate) fn draw_scrolled<R>(
     id: egui::Id,
     body: impl FnOnce(&mut DrawContext) -> (DrawResult, R),
 ) -> (DrawResult, R) {
+    // An unbounded axis is *no viewport at all* on that axis, not an unlimited
+    // one: there is no height to scroll within and nothing to clamp to. So a
+    // scroller has to be given an explicit extent — and in particular must not
+    // be nested inside another scroller on the same axis, which hands its child
+    // an unbounded axis precisely so the child can report its full length.
     let avail_w = ctx.constraints.x.map(|a| a.provided_value()).unwrap_or(0.0);
     let avail_h = ctx.constraints.y.map(|a| a.provided_value()).unwrap_or(0.0);
     let origin = ctx.constraints.pos;

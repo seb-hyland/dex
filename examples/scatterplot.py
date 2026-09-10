@@ -39,6 +39,9 @@ class LinkedPair:
         self.left = left
         self.right = right
         self.joiner = joiner
+        #: What `sync_selection` last settled on, so it can tell which view
+        #: changed this frame. See its docstring.
+        self.sync = None
 
     def owned_nodes(self):
         return [self.left, self.right, self.joiner]
@@ -64,13 +67,10 @@ class LinkedPair:
         ctx.draw_inspectable_node(
             self.right, at(x + VIEW[0] + GAP, y, VIEW[0], VIEW[1]))
 
-        # Clicking either view selects in both, so a record found in one is
-        # found in the other.
+        # Clicking either view selects in both, and clearing either clears
+        # both — two-way, so a linked pair can be put away. See `sync_selection`.
         ws = ctx.node.workspace
-        if ws.send_request(self.left, Selection()) is not None:
-            mirror_selection(ws, self.left, [self.right])
-        elif ws.send_request(self.right, Selection()) is not None:
-            mirror_selection(ws, self.right, [self.left])
+        self.sync = sync_selection(ws, self.left, self.right, self.sync)
 
         # Last, and over everything: it reads what the two just recorded.
         width = VIEW[0] * 2.0 + GAP

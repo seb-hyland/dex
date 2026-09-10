@@ -1,44 +1,5 @@
-"""A factorial, computed by a lambda that feeds itself until it is told to stop.
+"""A factorial, computed by a lambda that feeds itself until it is told to stop."""
 
-Nothing here loops. The transform below runs once and builds a machine: two
-numbers on a canvas and one lambda wired to both, which reads them, writes them
-back, and is re-run by that write. The recursion is the dataflow graph noticing
-its own inputs moved.
-
-    n:   10 -> 9 -> 8 -> ... -> 1 -> 0
-    acc:  1 -> 10 -> 90 -> ... -> 3628800
-
-The base case is the *declaration* on the argument, not a branch in the script.
-`n` is declared `satisfying n > 0`, and an argument is checked before the script
-is handed it — so the step that would have run at `n = 0` never runs at all.
-That is why the script has no `if`: it is only ever called on values it was
-promised, and the promise is what ends the recursion.
-
-Two things make this writable at all, and neither is obvious:
-
-  * `dex.args` gives a transform the *node* each of its values was read from.
-    `n` arrives as the integer 10, which names nothing and cannot be written to;
-    `dex.args.n` is the `Integer` on the canvas holding it. Writing there moves
-    a version, and a moved version is what re-runs the lambda.
-  * A lambda whose input is still recomputing does not run at all. Without that
-    a step could fire on the gap a mid-flight source leaves behind and count
-    with a number that was not there.
-
-Wire a number into an argument named `n` and press Run — or run it with nothing
-wired and it counts down from `DEFAULT_START`. Open the box it returns to watch
-the countdown; the answer settles on the canvas lambda's output row. Past 20 the
-result outgrows a machine word, and is still exact, because Python integers are.
-"""
-
-#: What it counts down from with nothing wired into `n`.
-DEFAULT_START = 10
-
-
-# One step of the countdown, as the inner lambda runs it.
-#
-# `n` and `acc` are its two arguments, bound to the integers on the canvas.
-# Folding before stepping matters: `acc * n` is this step's product, and `n` is
-# about to become something else.
 STEP_SOURCE = '''def transform():
     """Fold `n` into `acc`, then step `n` down. Runs only while `n > 0`."""
     product = acc * n
@@ -83,13 +44,7 @@ def number(ws, canvas, value, at):
 
 
 def step_lambda(ws, canvas, counter, total):
-    """The lambda that runs one step, wired to `counter` and `total`.
-
-    Its two arguments are declared, and the declaration on `n` is the whole of
-    the control flow: it must satisfy `n > 0`, so the check refuses the step
-    that would have run at zero and the machine stops with `acc` holding the
-    answer.
-    """
+    """The lambda that runs one step, wired to `counter` and `total`."""
     uid, args, output = dex.NodeUid.mint(), dex.NodeUid.mint(), dex.NodeUid.mint()
     ws.insert_node_at_dyn(
         uid,
@@ -138,4 +93,4 @@ def build(ws, start):
 
 def transform():
     """The machine, counting down from whatever is wired into `n`."""
-    return build(dex.ws, int(globals().get("n") or DEFAULT_START))
+    return build(dex.ws, int(n))

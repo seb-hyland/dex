@@ -819,6 +819,8 @@ class Frame:
         self.columns = list(self.table.column_names)
         self.data = {}
         self.kinds = {}
+        #: `(column, cap) -> levels`, filled on demand. See `levels`.
+        self._levels = {}
         for name in self.columns:
             column = self.table.column(name)
             self.data[name] = column.to_pylist()
@@ -880,13 +882,29 @@ class Frame:
         return self.table.take(rows)
 
     def levels(self, column, cap=MAX_CATEGORIES):
-        """The distinct categories of `column`, in first-seen order, capped."""
-        out = []
+        """The distinct categories of `column`, in first-seen order, capped.
+
+        Kept, because the table is read once in `__init__` and never changes
+        after — and because this is asked by things that draw *per mark*. A tree
+        colouring ten thousand nodes asked it ten thousand times a frame, and
+        each ask walked the whole column; that alone was ninety seconds of a
+        hundred-second frame. Nothing here mutates what it hands back, so one
+        list is shared rather than copied.
+        """
+        hit = self._levels.get((column, cap))
+        if hit is not None:
+            return hit
+        (out, seen) = ([], set())
         for v in self.values(column):
-            if v is not None and v not in out:
+            # A set for the membership test. `v not in out` is a linear scan, so
+            # a column with many distinct values made one pass a quadratic one —
+            # which is the same walk `_distinct_count` already does this way.
+            if v is not None and v not in seen:
+                seen.add(v)
                 out.append(v)
                 if len(out) >= cap:
                     break
+        self._levels[(column, cap)] = out
         return out
 
     def tally(self, column):
@@ -1119,6 +1137,32 @@ class Plot:
 
     def type_name(self):
         return "%s of %s" % (self.KIND.title(), self.title())
+
+    # -- what the axes cover ---------------------------------------------
+
+    def x_bounds(self, values):
+        """The domain the x axis covers, as `(lo, hi, step)`.
+
+        Read off the data, because a view built from a table has no domain but
+        the one its rows describe: the table is the whole of what there is.
+
+        A view of something defined more widely than it has been *read* — a
+        function, sampled wherever the reader has looked so far — overrides this
+        and says what it actually covers. That is what keeps the mapping from
+        being re-derived out of the last answer, which is the difference between
+        sampling more as you scroll and a picture that walks off on its own.
+        See `examples/plot_equation.py`.
+        """
+        return nice_bounds(min(values), max(values)) if values else (0.0, 1.0, 0.5)
+
+    def y_bounds(self, values):
+        """The same, for the y axis. See `x_bounds`.
+
+        Both, because which axis a view was sampled along is the view's business:
+        `y = f(x)` pins x and lets y fall where it may, and a curve lying on its
+        side pins the other one.
+        """
+        return nice_bounds(min(values), max(values)) if values else (0.0, 1.0, 0.5)
 
     def point_label(self, row):
         """One row as a readout line: the columns this view plotted, and their
@@ -1376,7 +1420,12 @@ class Plot:
         self.hovered = self.nearest(pointer) if pointer is not None else None
 
         if ws.send_request(self.sensor, dex.TakeClicked()):
-            self.selected = self.hovered
+            # A click toggles: on a mark, select it — but click the selected one
+            # again, or empty space, and the selection clears. Empty space alone
+            # was not enough to dismiss it on a crowded picture (a tree of
+            # thousands of nodes has one within reach of almost anywhere), so
+            # clicking what is lit is the reliable way to put it away.
+            self.selected = None if self.hovered == self.selected else self.hovered
 
         if not self.chrome:
             return
@@ -1640,8 +1689,8 @@ class Scatter(Plot):
             return
         xs = [float(self.frame.value(xc, i)) for i in rows]
         ys = [float(self.frame.value(yc, i)) for i in rows]
-        (ylo, yhi, ystep) = nice_bounds(min(ys), max(ys))
-        (xlo, xhi, xstep) = nice_bounds(min(xs), max(xs))
+        (ylo, yhi, ystep) = self.y_bounds(ys)
+        (xlo, xhi, xstep) = self.x_bounds(xs)
         axis = ValueAxis(x, y, w, h, ylo, yhi, ystep, yc)
         xspan = (xhi - xlo) if xhi > xlo else 1.0
 
@@ -2624,6 +2673,10 @@ class Phylogeny(Plot):
     #: Replaced the moment the columns are read; here so an instance that
     #: `become`s a tree has one before `on_encoding_changed` runs.
     tree = Tree([])
+    #: `{value: colour}` for the colour column, and which column it is for. See
+    #: `node_ink`; declared here for the same reason `tree` is.
+    ink_of = None
+    ink_col = None
 
     def __init__(self, frame, sensor, shape="hierarchical",
                  parent=None, depth=None, leaf_order=None, **encoding):
@@ -2641,6 +2694,8 @@ class Phylogeny(Plot):
 
     def on_encoding_changed(self):
         """The tree is derived from columns, so it is rebuilt when they change."""
+        # And so is the colour map, which is keyed by the colour column's values.
+        self.ink_of = None
         column = self.enc.get("x")
         if column is None:
             self.tree = Tree([])
@@ -2682,17 +2737,26 @@ class Phylogeny(Plot):
         return list(self.tree.nodes[leaf]["rows"])
 
     def node_ink(self, key):
-        """A node's colour: by the clade it falls in, if a colour column says so."""
+        """A node's colour: by the clade it falls in, if a colour column says so.
+
+        The `{value: colour}` behind it is built once per column rather than per
+        node. This is asked for every node of the tree on every frame, and the
+        three steps it used to take each frame — the levels, the palette, and an
+        `index` scan of the levels — are each a walk of something. On a
+        ten-thousand-tip tree that was the frame.
+        """
         column = self.enc.get("color")
         if not column:
             return BRANCH
         rows = self.tree.nodes[key]["rows"]
         if not rows:
             return BRANCH
-        levels = self.frame.levels(column)
-        palette = spread_palette(len(levels))
-        value = self.frame.value(column, rows[0])
-        return palette[levels.index(value)] if value in levels else BRANCH
+        if self.ink_of is None or self.ink_col != column:
+            levels = self.frame.levels(column)
+            palette = spread_palette(len(levels))
+            self.ink_of = {v: palette[j] for (j, v) in enumerate(levels)}
+            self.ink_col = column
+        return self.ink_of.get(self.frame.value(column, rows[0]), BRANCH)
 
     def paint(self, ctx, x, y, w, h):
         if not self.tree or not self.tree.nodes:
@@ -3517,11 +3581,42 @@ def mirror_selection(ws, source, targets):
     The other half of linking: a line shows two marks are the same record, and
     this makes clicking one light up the other. Called from a `tick` or a draw,
     once a frame.
+
+    One-way. For a pair that should light up *and go dark* together whichever
+    one you click, use `sync_selection` — mirroring one way alone means a
+    selection cleared on the far view is written straight back from the near
+    one, and can never be dismissed.
     """
     row = ws.send_request(source, Selection())
     for target in targets:
         ws.send_request(target, SetSelection(row))
     return row
+
+
+def sync_selection(ws, a, b, last=None):
+    """Keep two views' selections in step, in whichever direction just changed.
+
+    `mirror_selection` only ever pushes one way, so clicking a mark in one view
+    lights up both — but clearing the selection on either does not, because the
+    frame after, the still-set view writes its selection straight back. Both
+    views then stay lit and nothing can put them away.
+
+    This pushes from the view that *changed* since the last frame, so a cleared
+    selection propagates as readily as a set one. `last` is the pair this
+    returned the frame before — keep it on the node that calls this and hand it
+    back in, so a change can be told from what was already there.
+    """
+    (sel_a, sel_b) = (ws.send_request(a, Selection()), ws.send_request(b, Selection()))
+    # First frame (nothing remembered yet): take what is there as the baseline
+    # rather than reading an accident of startup order as a change to mirror.
+    (was_a, was_b) = last if last is not None else (sel_a, sel_b)
+    if sel_a != was_a:
+        ws.send_request(b, SetSelection(sel_a))
+        sel_b = sel_a
+    elif sel_b != was_b:
+        ws.send_request(a, SetSelection(sel_b))
+        sel_a = sel_b
+    return (sel_a, sel_b)
 
 
 # ======================================================================
@@ -3850,7 +3945,7 @@ def build_explorer_lambda(ws):
     args = dex.NodeUid.mint()
     output = dex.NodeUid.mint()
     lam = dex.Lambda.new_with(
-        ws, args, output, "Generate data explorer", EXPLORER_SCRIPT)
+        ws, args, output, "Data explorer", EXPLORER_SCRIPT)
 
     arg = dex.NodeUid.mint()
     port = dex.NodeUid.mint()
@@ -3861,4 +3956,4 @@ def build_explorer_lambda(ws):
 
 
 dex.prelude_prototypes.add(
-    "Generate data explorer", build_explorer_lambda, EXPLORER_SIZE)
+    "Data explorer", build_explorer_lambda, EXPLORER_SIZE)

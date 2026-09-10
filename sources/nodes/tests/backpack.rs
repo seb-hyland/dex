@@ -27,15 +27,49 @@ fn popup_id() -> egui::Id {
 }
 
 fn frame(ws: &mut Workspace, ctx: &egui::Context, events: Vec<egui::Event>) {
+    let _ = frame_shapes(ws, ctx, events);
+}
+
+/// The same, handing back every shape painted and the clip it was painted under.
+///
+/// The clip is the point: a widget inside a scroll area is laid out and answers
+/// `read_response` whether or not the area has any height to show it in, so
+/// where something *drew* says nothing about whether it can be seen. What it was
+/// clipped to does.
+fn frame_shapes(
+    ws: &mut Workspace,
+    ctx: &egui::Context,
+    events: Vec<egui::Event>,
+) -> Vec<egui::epaint::ClippedShape> {
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN);
     let input = egui::RawInput {
         screen_rect: Some(screen),
         events,
         ..Default::default()
     };
-    let _ = ctx.run_ui(input, |c| {
+    ctx.run_ui(input, |c| {
         egui::CentralPanel::default().show(c, |ui| ws.draw_frame(ui, screen));
-    });
+    })
+    .shapes
+}
+
+/// How much of `rect` was actually left visible by the clips it was drawn under.
+fn visible_height(shapes: &[egui::epaint::ClippedShape], rect: egui::Rect) -> f32 {
+    let mut best: f32 = 0.0;
+    for clipped in shapes {
+        let painted = clipped.shape.visual_bounding_rect();
+        // Shapes *of* the row, not merely overlapping it: a panel background
+        // covers every row and is clipped to the whole window, so counting it
+        // would report everything as visible however little of it can be seen.
+        if !painted.is_finite() || !rect.contains_rect(painted) {
+            continue;
+        }
+        let shown = clipped.clip_rect.intersect(painted);
+        if shown.is_positive() {
+            best = best.max(shown.height());
+        }
+    }
+    best
 }
 
 fn button_event(pos: egui::Pos2, pressed: bool) -> egui::Event {
@@ -443,4 +477,43 @@ fn a_polygon_offers_the_same_commands_and_comes_back_as_an_editor() {
             .is_some_and(|node| (*node).as_any_ref().is::<PathEditor>()),
         "and it came back editable, not wrapped in a plain frame"
     );
+}
+
+/**
+    The backpack gets the rest of the sidebar, so a few entries do not scroll.
+
+    It was drawn wrapped in a `ScrollLayout` *and* is itself a scrollable
+    `VerticalDnD` — two scrollers on one axis. The outer one hands its child an
+    unbounded height, on purpose, so the child can report how long it really is;
+    the inner one read that as no viewport at all and clipped the list to
+    nothing. Three entries were enough to scroll.
+
+    Measured by what the clip left visible rather than by where the rows landed:
+    a row inside a zero-height scroll area is laid out and answers
+    `read_response` exactly as it does inside a tall one.
+*/
+#[test]
+fn the_backpack_fills_the_space_below_it() {
+    let mut open = open_the_menu();
+    for _ in 0..3 {
+        run_placement(&mut open, "Clone to", "Backpack");
+    }
+    let kept = entries(&open.ws);
+    assert_eq!(kept.len(), 3, "three entries went in");
+
+    let shapes = frame_shapes(&mut open.ws, &open.ctx, vec![]);
+    for (i, entry) in kept.iter().enumerate() {
+        let row = row_rect(&open.ws, &open.ctx, *entry);
+        assert!(
+            row.height() > 0.0,
+            "entry {i} was laid out with a height of its own"
+        );
+        let shown = visible_height(&shapes, row);
+        assert!(
+            shown >= row.height() - 1.0,
+            "entry {i} should be wholly visible, not clipped: {shown}px of {}px \
+             shown, row {row:?}",
+            row.height()
+        );
+    }
 }

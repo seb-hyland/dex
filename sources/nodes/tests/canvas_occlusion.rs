@@ -662,3 +662,73 @@ impl Node for PlacedSensor {
 }
 
 defhandlers! { PlacedSensor {} }
+
+/// Zoom the outer plane with the pointer over its one item, and say what the
+/// outer plane's magnification did.
+fn zoom_over_the_item(h: &mut Harness) -> (f32, f32) {
+    for _ in 0..3 {
+        h.frame(vec![]);
+    }
+    let before = h.ws.send_request(h.canvas, CanvasZoom).unwrap_or(1.0);
+    let over = h.item_centre();
+    h.move_to(over);
+    h.frame(vec![egui::Event::PointerMoved(over), egui::Event::Zoom(2.0)]);
+    h.frame(vec![]);
+    (before, h.ws.send_request(h.canvas, CanvasZoom).unwrap_or(1.0))
+}
+
+/**
+    A surface a composite merely *keeps* still stops the plane under it zooming.
+
+    A wheel over a nested plane has to magnify that plane and not the one it sits
+    on, or one gesture zooms both at once. The surface was found by following the
+    item's child and a lambda's output — enough for a phylogeny, whose lambda
+    hands back its plane, and not enough for a data explorer, which is a node of
+    its own drawing a control bar above a plane it simply owns. So the wheel over
+    an explorer zoomed the explorer *and* the desktop under it.
+
+    Built here as the same shape rather than as a real explorer: a container that
+    owns a canvas without being one, without framing one as its child, and
+    without producing one as its output.
+*/
+#[test]
+fn a_surface_a_composite_owns_takes_the_wheel_from_the_plane_under_it() {
+    use dex_nodes::layouts::VerticalDnD;
+
+    let mut h = Harness::new(Arc::new(dex_nodes::primitives::nothing::Nothing));
+    let inner = Canvas::build(h.ws.action_handle()).erase();
+    h.ws.process_pending();
+    let keeper = VerticalDnD::build(h.ws.action_handle(), vec![inner], 0.0, false);
+    h.ws.process_pending();
+    h.ws.submit_action(
+        h.canvas,
+        "swap in something holding a surface",
+        SwapCanvasItem {
+            old: h.item(),
+            child: Arc::new(dex_nodes::layouts::mirror::Mirror::new(keeper.erase())),
+            pos: PLACE,
+            size: ITEM_SIZE,
+        },
+    );
+    h.ws.process_pending();
+
+    let (before, after) = zoom_over_the_item(&mut h);
+    assert!(
+        (before - after).abs() < 1e-3,
+        "the plane under it should not have zoomed too: {before} became {after}"
+    );
+}
+
+/// And an item holding no surface at all still lets the plane zoom.
+///
+/// The other half of the pair: a check that only ever says "it did not zoom" is
+/// also passed by a plane that has stopped zooming altogether.
+#[test]
+fn an_ordinary_item_still_lets_the_plane_zoom() {
+    let mut h = Harness::new(Arc::new(Rect::new(30.0, 30.0, BLOCK)));
+    let (before, after) = zoom_over_the_item(&mut h);
+    assert!(
+        after > before + 1e-3,
+        "the plane should magnify under an ordinary item: {before} became {after}"
+    );
+}

@@ -13,24 +13,42 @@ use crate::scripting::DataflowOutput;
 /// Follows the two ways one hides behind an item: a lambda whose output is the
 /// surface (a data explorer, a phylogeny hands one back), and a wrapper that
 /// frames a canvas as its child. Bounded so a cycle cannot spin.
-fn holds_surface(ws: &Workspace, node: NodeUid, depth: u8) -> bool {
-    if depth > 6 {
-        return false;
-    }
-    if ws.send_request(node, CanvasViewOrigin).is_some() {
-        return true;
-    }
-    if let Some(out) = ws.send_request(node, DataflowOutput).flatten()
-        && out != node
-        && holds_surface(ws, out, depth + 1)
-    {
-        return true;
-    }
-    if let Some(inner) = ws.send_request(node, CanvasNodeChild)
-        && inner != node
-        && holds_surface(ws, inner, depth + 1)
-    {
-        return true;
+fn holds_surface(ws: &Workspace, node: NodeUid) -> bool {
+    /// How many nodes the search will look at before giving up. It runs on the
+    /// pointer path, and the answer only has to be right for the handful of
+    /// nodes an item actually wraps.
+    const BUDGET: usize = 64;
+
+    let mut seen = std::collections::HashSet::new();
+    let mut queue = vec![node];
+    let mut looked = 0usize;
+    while let Some(uid) = queue.pop() {
+        if looked >= BUDGET {
+            return false;
+        }
+        if !seen.insert(uid) {
+            continue;
+        }
+        looked += 1;
+        if ws.send_request(uid, CanvasViewOrigin).is_some() {
+            return true;
+        }
+        // A lambda's output — a phylogeny hands back its plane.
+        if let Some(out) = ws.send_request(uid, DataflowOutput).flatten() {
+            queue.push(out);
+        }
+        // A canvas item's content.
+        if let Some(inner) = ws.send_request(uid, CanvasNodeChild) {
+            queue.push(inner);
+        }
+        // And whatever it merely *keeps*. A data explorer is a node of its own
+        // that draws a control bar above a plane: the plane is neither its
+        // output nor its child, only one of the things it owns — so without
+        // this the wheel over an explorer magnified the explorer's plane and
+        // the surface holding it at the same time.
+        if let Some(held) = ws.get_node(uid) {
+            held.owned_refs(&mut |child| queue.push(child));
+        }
     }
     false
 }
@@ -280,7 +298,7 @@ impl Canvas {
                 })
                 && ws
                     .send_request(child, CanvasNodeChild)
-                    .is_some_and(|inner| holds_surface(ws, inner, 0))
+                    .is_some_and(|inner| holds_surface(ws, inner))
         })
     }
 
@@ -684,6 +702,16 @@ defhandlers! { Canvas {
                 None => this.children.push(item),
             }
             ctx.workspace.delete_node(a.old);
+        },
+        /*
+            Look at `pos`: put that canvas point at the middle of the viewport.
+
+            Pins the anchor rather than nudging it, so it survives the settling
+            in `draw` — which is what lets a surface be built already looking at
+            what is on it instead of at its own origin.
+        */
+        CentreCanvasView { pos: Vector } => (this, a) {
+            this.screen_offset.set(a.pos);
         },
         // Back to life size, keeping the view where it is.
         ResetCanvasZoom => (this, _a) {

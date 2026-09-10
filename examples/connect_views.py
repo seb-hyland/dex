@@ -1,31 +1,4 @@
-"""Two visualizations already built, joined record by record.
-
-Wire a view into each of `thisView` and `thatView`. This lays them side by side
-and draws a line between every record the two have in common — the same join
-`scatterplot.py` uses, but over two views handed in rather than two it builds
-itself.
-
-Anything that answers the workspace protocol will do, and — this is the part
-that makes it useful — so does the *plane* a data explorer or a phylogeny hands
-back. A plane is a `Canvas`, which cannot say where it drew a row; the view on
-it can, so the library's join reaches through a plane to the single view it
-holds (`view_of`). That is why a data explorer on one column joins to a
-phylogeny on another from the same table with nothing declared: the rows carry
-the correspondence, and reaching through is all it takes to read it.
-
-**Each wired view is deep-cloned into this node.** A node is drawn in exactly
-one place — draw the very same view both where it already sits and here and its
-widgets take the same ids twice, which egui paints back as a "use of widget ID"
-error. So this copies each view, ids and all, and shows the copies; the
-originals stay where they were, untouched, and the pair owns what it made and
-takes it with it when deleted. Set `only_selected` to join just the record you
-clicked, which is what you want the moment there are more rows than there are
-pixels between them.
-
-For lines over two views left exactly where they already sit — no copy, nothing
-redrawn — hang a bare `link_views` in a plane's foreground instead. That reads
-the originals in place; it works only because a foreground draws each view once.
-"""
+"""Two visualizations already built, joined record by record."""
 
 import math
 
@@ -49,6 +22,9 @@ class Connected:
         #: Clicking either view selects in both, so a record found in one is
         #: found in the other.
         self.mirrors = True
+        #: The pair of selections `sync_selection` last settled on, so it can
+        #: tell which view changed this frame. See its docstring.
+        self.sync = None
 
     def owned_nodes(self):
         # The two views are this node's own copies, so they go with it: a clone
@@ -85,10 +61,9 @@ class Connected:
         ws = ctx.node.workspace
         if self.mirrors:
             (left, right) = (view_of(ws, self.left), view_of(ws, self.right))
-            if ws.send_request(left, Selection()) is not None:
-                mirror_selection(ws, left, [right])
-            elif ws.send_request(right, Selection()) is not None:
-                mirror_selection(ws, right, [left])
+            # Two-way, so clicking a mark lights both up and clearing either
+            # puts both away — see `sync_selection`.
+            self.sync = sync_selection(ws, left, right, self.sync)
 
         # Last, and over both: it reads what the two have just recorded, and
         # reaches through a plane to the view on it the same way this does.

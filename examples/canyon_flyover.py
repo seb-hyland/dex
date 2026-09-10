@@ -1,17 +1,19 @@
 """`canyon_watchtower.py` with a small plane climbing out of the gorge.
 
-Same canyon, same lookout on the bank, and above them an aircraft banking up out
-of the reach into the open sky, its contrail still hanging in the air behind it
-all the way back down to the bend it came round.
+Same canyon, same lookout on the bank, and above them the Cub from
+`dynabook_field.py` climbing up out of the reach into the open sky, a thin
+wisp of a trail still hanging in the air behind it back down to the bend it
+came round.
 
 The plane is authored once in its own frame, nose along +x, as a planform
-silhouette — fuselage, two swept wings, two tailplanes — which is the view you
-get of an aircraft seen from below and behind as it climbs away from you. Where
-it hangs, how big it comes out and which way it is pointed are not drawn in:
-they are read off two world points, the plane and the mouth it climbed out of.
-The projection sizes it, the screen-space bearing between those two points turns
-it, and the contrail is one tapering quad run between them, so it narrows into
-the distance and dissolves into the same haze the far rock does.
+silhouette — a long straight wing, a short fuselage, a straight tailplane —
+which is the view you get of an aircraft seen from below and behind as it
+climbs away from you. Where it hangs, how big it comes out and which way it is
+pointed are not drawn in: they are read off two world points, the plane and the
+mouth it climbed out of. The projection sizes it, the screen-space bearing
+between those two points turns it, and the trail is one tapering quad run
+between them, so it narrows into the distance and dissolves into the same haze
+the far rock does.
 """
 
 import math
@@ -614,22 +616,42 @@ P_AT = (-677.0, 1442.0, 1000.0)    # where it is now: out past the left rim and
 P_FROM = (-120.0, 1150.0, 2400.0)  # the reach it climbed out of, a long way back
 P_SPAN = 190.0                     # wingspan, in world units
 
-PLANE_BODY = (56, 62, 74)
-PLANE_LIT = (120, 130, 148)
-CANOPY = (168, 204, 220)
+# The paint scheme is `dynabook_field.py`'s, taken as colours rather than as
+# geometry: that drawing is three-quarter on from the grass, this one is a
+# planform from below and behind, so nothing about the shape carries over. What
+# does is which aeroplane it is — cub yellow, cream belly, red trim.
+PLANE_BODY = (250, 198, 58)     # the fuselage, out in the sun above the rim
+PLANE_LOW = (236, 170, 40)      # the same yellow underwing, in its own shade
+PLANE_CREAM = (252, 246, 232)
+PLANE_TRIM = (214, 72, 58)
 CONTRAIL = (250, 252, 254)
 
 # The silhouette, nose at +x, spanning 84 units tip to tip — `P_SPAN` scales it.
-_FUSELAGE = [(46, 0), (30, -4), (-30, -5), (-48, -3), (-52, 0),
-             (-48, 3), (-30, 5), (30, 4)]
-_WING = [(12, -2), (-28, -42), (-40, -40), (-6, -1)]
-_TAIL = [(-40, -1), (-56, -17), (-62, -16), (-46, 1)]
-_BELLY = [(40, 0), (22, -2), (-40, -2), (-48, 0), (-40, 2), (22, 2)]
-_CANOPY = [(30, 0), (18, -3), (6, -2), (16, 0)]
-
-
-def _mirror_y(pts):
-    return [(x, -y) for (x, y) in pts]
+#
+# It comes out about fifty pixels across, which is the whole point of the shot:
+# what fits in that is a planform, not an aeroplane. So the parts that say Cub
+# up close — the propeller, the wing struts, the cabin glass — are left out
+# rather than drawn as marks too small to read, and what identifies it here is
+# the one thing fifty pixels does carry: a long straight wing well forward of a
+# short fuselage, against the swept delta a jet would show.
+_WING = [(13, -40), (13, 40),           # the leading edge, tip to tip
+         (11, 42), (2, 42),             # the clipped tip
+         (0, 40), (0, -40),             # the trailing edge
+         (2, -42), (11, -42)]
+# Slim: a Cub's body is a sixteenth of its span, and drawing it any fatter is
+# what makes a light aeroplane read as a warbird.
+_FUSELAGE = [(30, 0), (27, -1.8), (14, -2.8), (-6, -2.6), (-24, -1.6), (-31, -0.8),
+             (-31, 0.8), (-24, 1.6), (-6, 2.6), (14, 2.8), (27, 1.8)]
+_TAILPLANE = [(-21, -17), (-21, 17), (-24, 18), (-27, 18),
+              (-30, 17), (-30, -17), (-27, -18), (-24, -18)]
+# The fin is edge-on from below, so it is a sliver on the centre line rather
+# than a shape — and it is where the red goes, as it does on the drawing.
+_FIN = [(-24, -1.4), (-34, -2.2), (-36, 0), (-34, 2.2), (-24, 1.4)]
+# A flash, not a whole underside: cream this bright over half the body reads as
+# a light left on rather than as paint.
+_BELLY = [(18, 0), (10, -1.5), (-8, -1.4), (-22, -0.9),
+          (-22, 0.9), (-8, 1.4), (10, 1.5)]
+_SPINNER = [(33, 0), (29, -1.9), (29, 1.9)]
 
 
 def draw_plane(tf):
@@ -652,26 +674,29 @@ def draw_plane(tf):
         return [(ax + lx * s * ux - ly * s * uy, ay + lx * s * uy + ly * s * ux)
                 for (lx, ly) in pts]
 
-    # The contrail, first, so the aircraft sits on its own trail: one quad from
-    # just off the tail back down to the bend, widening as it goes because it is
-    # older there, and fading to nothing over the same run.
-    tail = place([(-58, 0)])[0]
+    # The trail, first, so the aircraft sits on its own wake: one quad from just
+    # off the tail back down to the bend, widening as it goes because it is
+    # older there, and fading to nothing over the same run. Kept thin and faint
+    # — this is a light aeroplane, so what hangs behind it is a wisp catching
+    # the sun, not the hard contrail a jet at altitude would rule across the sky.
+    tail = place([(-38, 0)])[0]
     (px, py) = (-uy, ux)
-    (w0, w1) = (2.2 * s, 15.0 * s)
+    (w0, w1) = (1.0 * s, 7.0 * s)
     shapes.append(ramp(tf, [(tail[0] + px * w0, tail[1] + py * w0),
                             (fx + px * w1, fy + py * w1),
                             (fx - px * w1, fy - py * w1),
                             (tail[0] - px * w0, tail[1] - py * w0)],
                        CONTRAIL, CONTRAIL,
                        math.degrees(math.atan2(uy, ux)) + 180.0,
-                       near_alpha=125, far_alpha=0))
+                       near_alpha=70, far_alpha=0))
 
-    # The airframe: wings and tailplanes under the fuselage, the fuselage over
-    # them, a lit belly down its length, and the canopy.
-    for (shape, colour) in ((_WING, PLANE_BODY), (_mirror_y(_WING), PLANE_BODY),
-                            (_TAIL, PLANE_BODY), (_mirror_y(_TAIL), PLANE_BODY),
-                            (_FUSELAGE, PLANE_BODY), (_BELLY, PLANE_LIT),
-                            (_CANOPY, CANOPY)):
+    # The airframe, back to front. The wing goes down first and the fuselage
+    # over it, which is the high-wing showing: seen from underneath, the body
+    # of a Cub is the nearer thing and the wing passes behind it — the exact
+    # reverse of the low-wing jet that used to fly here.
+    for (shape, colour) in ((_WING, PLANE_LOW), (_FUSELAGE, PLANE_BODY),
+                            (_BELLY, PLANE_CREAM), (_TAILPLANE, PLANE_LOW),
+                            (_FIN, PLANE_TRIM), (_SPINNER, PLANE_TRIM)):
         shapes.append(solid(tf, place(shape), aerial(colour, P_AT[2])))
     return shapes
 

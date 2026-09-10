@@ -5,10 +5,12 @@
 //! which variable is bound decides what kind of picture comes out, and that
 //! sampling the same ground twice does not run it twice.
 //!
-//! And two things about the picture, both regressions: that it draws at all —
-//! the example shares a namespace with the prelude, so a constant named here
-//! that the prelude also names is a live hazard — and that the curve holds
-//! still while the plane moves under it.
+//! And three things about the picture. That it draws at all — the example
+//! shares a namespace with the prelude, so a constant named here that the
+//! prelude also names is a live hazard. That the curve holds still while the
+//! plane moves under it. And that bringing more of the picture into view
+//! computes more of the curve — which is only safe *because* of the second one,
+//! so the two are checked against the same gesture.
 
 use dex_core::prelude::*;
 use dex_nodes::composites::lambda::{
@@ -404,4 +406,148 @@ fn frame_text(
         walk(&clipped.shape, &mut text);
     }
     text
+}
+
+/// The view on `plane`.
+fn curve_on(ws: &Workspace, plane: NodeUid) -> NodeUid {
+    ws.send_request(plane, dex_nodes::layouts::canvas::layout::CanvasChildren)
+        .and_then(|items| items.first().copied())
+        .and_then(|item| ws.send_request(item, dex_nodes::layouts::canvas::nodes::CanvasNodeChild))
+        .expect("the curve is on the plane")
+}
+
+/// Ask the plot something, as a script run against a snapshot of the workspace.
+///
+/// `body` is the inside of a `transform()`, indented, and answers with a string.
+/// The example's own source is prepended so the question can use its classes.
+/// `ask` above binds the *equation*; this one binds the view it produced.
+fn ask_plot(ws: &Workspace, plot: NodeUid, body: &str) -> String {
+    let (handle, _actions) = WorkspaceActionHandle::buffered();
+    let args = [("target".to_owned(), ScriptValue::Node(plot))];
+    let out = run_script(
+        &format!("{EQUATION}\n\ndef transform():\n{body}\n"),
+        PRELUDE,
+        &handle,
+        &args,
+        GraphSnapshot::capture(ws),
+    )
+    .expect("the question runs");
+    let ScriptOutput::Node(node) = out else {
+        panic!("the question returns a value")
+    };
+    dex_nodes::scripting::node_to_value(&*node)
+        .map(|v| v.display())
+        .expect("an answer")
+}
+
+/// How many points have been computed so far.
+fn sampled(ws: &Workspace, plot: NodeUid) -> i64 {
+    ask_plot(
+        ws,
+        plot,
+        "    t = dex.snapshot.send_request(target, SourceTable())\n    return '%d' % (0 if t is None else t.num_rows)",
+    )
+    .parse()
+    .expect("a row count")
+}
+
+/// How the view maps the sampled axis onto the plane, as the axis reports it.
+fn mapping_of(ws: &Workspace, plot: NodeUid) -> String {
+    ask_plot(
+        ws,
+        plot,
+        "    a = (dex.snapshot.send_request(target, PlotScale()) or {}).get('x') or {}\n    return '%.6g %.6g' % (a.get('lo', 0.0), a.get('hi', 0.0))",
+    )
+}
+
+/**
+    Bringing more of the picture into view computes more of the curve.
+
+    The point of the whole arrangement, and the reason it is checked together
+    with the mapping: sampling more is only safe while the axis stays put. If
+    the mapping moved, the window that decides what to sample would be read
+    through a ruler the last sample had already shifted, and the two would chase
+    each other outward until the curve flew apart.
+
+    Zooming out rather than dragging, because it is the same claim — more of the
+    plane on screen means more of the curve in view — and needs no gesture.
+*/
+#[test]
+fn more_of_the_curve_is_computed_as_more_comes_into_view() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, f) = squared("x");
+    let plane = place_curve(&mut ws, f);
+    let ctx = egui::Context::default();
+    dex_nodes::fonts::install_fonts(&ctx);
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(900.0, 700.0));
+    for _ in 0..3 {
+        frame_text(&ctx, &mut ws, screen, Vec::new());
+    }
+
+    let plot = curve_on(&ws, plane);
+    let before = sampled(&ws, plot);
+    let mapping = mapping_of(&ws, plot);
+    assert!(before > 0, "it opened with a curve");
+    assert_ne!(mapping, "0 0", "the view published an x axis");
+
+    // Out, so the plane shows ground the curve has not been computed over.
+    let over = egui::pos2(450.0, 350.0);
+    frame_text(&ctx, &mut ws, screen, vec![egui::Event::PointerMoved(over)]);
+    for _ in 0..6 {
+        frame_text(&ctx, &mut ws, screen, vec![egui::Event::Zoom(0.7)]);
+    }
+    for _ in 0..4 {
+        frame_text(&ctx, &mut ws, screen, Vec::new());
+    }
+
+    let after = sampled(&ws, plot);
+    assert!(
+        after > before,
+        "more of the curve should have been computed: {before} points, then {after}"
+    );
+    assert_eq!(
+        mapping, mapping_of(&ws, plot),
+        "and computing it should not have moved the axis it was measured against"
+    );
+}
+
+/// It stops at the edge of the picture rather than sampling for ever.
+///
+/// A finite reachable domain is the price of the fixed mapping: the picture has
+/// a size, and the curve is defined over exactly that. Zooming out past it
+/// should settle rather than keep paying for points nobody asked for.
+#[test]
+fn the_curve_stops_at_the_edge_of_the_picture() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, f) = squared("x");
+    let plane = place_curve(&mut ws, f);
+    let ctx = egui::Context::default();
+    dex_nodes::fonts::install_fonts(&ctx);
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(900.0, 700.0));
+    let over = egui::pos2(450.0, 350.0);
+    frame_text(&ctx, &mut ws, screen, vec![egui::Event::PointerMoved(over)]);
+    // Far enough out that the whole domain is on screen several times over.
+    for _ in 0..24 {
+        frame_text(&ctx, &mut ws, screen, vec![egui::Event::Zoom(0.6)]);
+    }
+    for _ in 0..4 {
+        frame_text(&ctx, &mut ws, screen, Vec::new());
+    }
+
+    let plot = curve_on(&ws, plane);
+    let settled = sampled(&ws, plot);
+    for _ in 0..6 {
+        frame_text(&ctx, &mut ws, screen, Vec::new());
+    }
+    assert_eq!(
+        settled,
+        sampled(&ws, plot),
+        "with the whole domain in view there is nothing left to compute"
+    );
 }

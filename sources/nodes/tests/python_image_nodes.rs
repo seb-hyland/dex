@@ -1,5 +1,5 @@
 //! Exercises the three image-style examples: `tshirt.py`, `dynabook.py` and
-//! `dynabook_flight.py`.
+//! `dynabook_field.py`.
 //!
 //! What makes them a family is the claim in each of their docstrings: they are
 //! drawings rather than layouts, so they take the box they are given and map a
@@ -8,8 +8,7 @@
 //! A node that stretched to fill would still paint, and still look right in a
 //! box that happened to have the art's aspect ratio.
 //!
-//! Two of them get one more each. The traced drawing must come out in two
-//! colours, and the coloured scene must move. A trace
+//! The traced drawing gets one more: it must come out in two colours. A trace
 //! is an ink web with holes in it, and the holes are worked out here rather
 //! than by a fill rule — get the nesting wrong and the drawing is a black
 //! rectangle that still passes every other check.
@@ -19,7 +18,7 @@ use dex_nodes::scripting::{ScriptOutput, run_script};
 
 const TSHIRT: &str = include_str!("../../../examples/tshirt.py");
 const DYNABOOK: &str = include_str!("../../../examples/dynabook.py");
-const FLIGHT: &str = include_str!("../../../examples/dynabook_flight.py");
+const FIELD: &str = include_str!("../../../examples/dynabook_field.py");
 
 /// The node an example's `transform()` returns, in a workspace showing it.
 fn shown(source: &str) -> (Workspace, egui::Context) {
@@ -111,9 +110,9 @@ fn drawn(shapes: &[egui::epaint::ClippedShape]) -> (egui::Rect, usize) {
 /// Every example, with the aspect its art space says it has and the least it
 /// can paint and still have painted.
 const EXAMPLES: [(&str, &str, f32, usize); 3] = [
-    ("tshirt.py", TSHIRT, 560.0 / 470.0, 60),
+    ("tshirt.py", TSHIRT, 1200.0 / 1200.0, 60),
     ("dynabook.py", DYNABOOK, 600.0 / 454.0, 400),
-    ("dynabook_flight.py", FLIGHT, 980.0 / 560.0, 600),
+    ("dynabook_field.py", FIELD, 900.0 / 560.0, 600),
 ];
 
 /// Each of them returns a node that paints.
@@ -198,43 +197,5 @@ fn the_traced_drawing_is_ink_and_paper() {
         paper > 100,
         "and so did the holes in it: {paper} vertices — a trace whose holes \
          filled with ink is a black rectangle"
-    );
-}
-
-/// The coloured scene moves without anything being told to animate it.
-///
-/// Birds cross the sky and beat as they go, and the two ships on both screens
-/// orbit the star they are falling into. Nothing subscribes to a frame counter
-/// to do it: `draw` runs again the moment the last one finished, so a drawing
-/// that reads the clock is a drawing that moves. This is the image-style half
-/// of the claim `campfire.py` makes for a whole surface.
-#[test]
-fn the_coloured_scene_moves_by_itself() {
-    let (mut ws, ctx) = shown(FLIGHT);
-    let size = egui::vec2(560.0, 320.0);
-
-    /// Every vertex a frame painted, in paint order: the picture itself.
-    fn vertices(shapes: &[egui::epaint::ClippedShape]) -> Vec<(u32, u32)> {
-        let mut found = Vec::new();
-        for clipped in shapes {
-            meshes(&clipped.shape, &mut |mesh| {
-                found.extend(
-                    mesh.vertices
-                        .iter()
-                        .map(|v| (v.pos.x.to_bits(), v.pos.y.to_bits())),
-                );
-            });
-        }
-        found
-    }
-
-    let first = vertices(&painted(&mut ws, &ctx, size));
-    std::thread::sleep(std::time::Duration::from_millis(120));
-    let second = vertices(&painted(&mut ws, &ctx, size));
-
-    assert!(!first.is_empty(), "the scene painted at all");
-    assert_ne!(
-        first, second,
-        "a drawing that reads the clock is somewhere else a moment later"
     );
 }

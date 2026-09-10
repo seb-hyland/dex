@@ -908,7 +908,7 @@ fn the_offer_is_a_lambda_that_takes_a_table() {
             .iter()
             .map(|(n, _, _)| n.as_str())
             .collect::<Vec<_>>(),
-        ["Generate data explorer"],
+        ["Data explorer"],
         "the one offer, named for what it does — connecting two views is a \
          worked example (examples/connect_views.py), not a sidebar offer"
     );

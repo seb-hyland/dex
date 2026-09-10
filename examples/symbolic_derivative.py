@@ -1,17 +1,4 @@
-"""Symbolic differentiation of a canvas lambda.
-
-Bind a `CanvasLambda` to `f` and the name of one of its parameters to `var`.
-The transform reads `f`'s inner graph, differentiates it with respect to that
-parameter, and returns a new canvas lambda computing the derivative.
-
-Operators are recognised by their display name, so an inner lambda called
-`Mult` is a product and one called `Frobnicate` is an error rather than a
-silent zero. A nested canvas lambda is descended into.
-
-Nothing is simplified: every rule application becomes real nodes, so `* 1` and
-`+ 0` terms survive. The graph is bigger that way, but it maps one-for-one onto
-the rules below, which is what makes it checkable by eye.
-"""
+"""Symbolic differentiation of a canvas lambda."""
 
 ADD, SUB, MULT, DIV, POW = "add", "sub", "mult", "div", "pow"
 

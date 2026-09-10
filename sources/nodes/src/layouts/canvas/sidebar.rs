@@ -9,10 +9,13 @@ use crate::{
         lambda::{CanvasLambda, Lambda},
     },
     layouts::{
-        Bordered, HorizontalLayout, LayoutChild, ScrollLayout,
+        Bordered, HorizontalLayout, LayoutChild,
         canvas::{
             backpack::BackpackItem,
-            layout::{AddCanvasItem, PlaceOnCanvas},
+            layout::{
+                AddCanvasItem, Canvas, CanvasZoom, PlaceOnCanvas, ResetCanvasView,
+                ResetCanvasZoom,
+            },
             nodes::{CanvasNodeChild, shapes::CanvasRect},
         },
         desktops::Desktops,
@@ -72,6 +75,13 @@ pub struct PreludePrototype {
     button: NodeUid<Button>,
 }
 
+/// The nil default for `reset_canvases_button`, used when loading a workspace
+/// saved before that field existed. A nil id is the "rebuild me" sentinel that
+/// `poll_settings` watches for. See `CanvasSidebar::reset_canvases_button`.
+fn nil_button() -> NodeUid<Button> {
+    NodeUid::nil()
+}
+
 #[utils::dynamic_type]
 #[utils::portable]
 pub struct CanvasSidebar {
@@ -120,6 +130,14 @@ pub struct CanvasSidebar {
     save_dir_button: NodeUid<Button>,
     save_button: NodeUid<Button>,
     load_button: NodeUid<Button>,
+
+    /// Resets the zoom and position of every canvas across all desktops.
+    ///
+    /// `serde(default)` so a workspace saved before this button existed still
+    /// loads — the field comes back nil, and `poll_settings` rebuilds it on the
+    /// next tick via `RestoreResetButton`.
+    #[serde(default = "nil_button")]
+    reset_canvases_button: NodeUid<Button>,
     /// The browser opened to choose the folder, while it is open.
     save_browser: Option<NodeUid<FileBrowser>>,
     /// What the last save or load said, good or bad.
@@ -180,6 +198,7 @@ impl CanvasSidebar {
         let save_dir_button = small(&save_dir_button_label(false));
         let save_button = small("Save");
         let load_button = small("Load");
+        let reset_canvases_button = small("Reset all canvases");
 
         let mut editor = LabelEditable::new(crate::settings::DEFAULT_EDITOR.to_owned());
         editor.font = Font::monospaced(theme::TEXT_SM);
@@ -216,6 +235,7 @@ impl CanvasSidebar {
             save_dir_button,
             save_button,
             load_button,
+            reset_canvases_button,
             save_browser: None,
             save_note: None,
             save_failed: false,
@@ -466,10 +486,14 @@ impl CanvasSidebar {
             );
             y += drawn.region().map(|r| r.size().y).unwrap_or(0.0);
         } else {
-            // Scrolled: a backpack grows, and the sidebar does not.
-            ctx.draw_node(
-                &ScrollLayout::vertical(LayoutChild::Id(self.backpack.erase()))
-                    .with_id_salt("dex_backpack"),
+            // The whole of what is left, and drawn *directly*: the backpack is
+            // a scrollable `VerticalDnD` and already scrolls itself. Wrapping it
+            // in a `ScrollLayout` as well gave it two scrollers on one axis, and
+            // the outer one hands its child an unbounded height — which the
+            // inner one reads as no viewport at all. The list then had a
+            // zero-height window on to it and scrolled at three entries.
+            ctx.draw_workspace_node(
+                self.backpack.erase(),
                 DrawConstraints {
                     pos: origin + Vector { x: 0.0, y },
                     x: Some(AxisConstraint::Exactly(size.x)),
@@ -665,6 +689,28 @@ impl CanvasSidebar {
             *y += drawn.region().map(|r| r.size().y).unwrap_or(14.0) + ROW_GAP;
         };
 
+        // Canvases first: one button to bring every surface, across every
+        // desktop, back to life size at its origin — the way out of a view that
+        // has been dragged or zoomed off into nowhere.
+        row(ctx, &mut y, &heading("Canvases"), false);
+        row(
+            ctx,
+            &mut y,
+            &muted("Return every canvas across all desktops to life size at its origin."),
+            false,
+        );
+        row(
+            ctx,
+            &mut y,
+            &HorizontalLayout {
+                children: vec![LayoutChild::from(self.reset_canvases_button)],
+                spacing: ROW_GAP,
+                allow_wrap: false,
+            },
+            false,
+        );
+        y += GAP;
+
         row(ctx, &mut y, &heading("Global environment"), false);
         let shown = if self.venv.is_empty() {
             "None — scripts import from the interpreter dex was built against.".to_owned()
@@ -791,6 +837,18 @@ impl CanvasSidebar {
                 .unwrap_or(false)
         };
 
+        // A workspace saved before the reset button existed loads without it
+        // (nil, from the field's `serde(default)`). Rebuild it once so the
+        // control is there; the handler is idempotent, so a resubmit before it
+        // settles does not make a second button.
+        if self.reset_canvases_button == NodeUid::nil() {
+            ws.submit_action(
+                ctx.id.cast::<Self>(),
+                "Restore reset button",
+                RestoreResetButton,
+            );
+        }
+
         if taken(self.venv_button) {
             let start = (!self.venv.is_empty()).then(|| self.venv.clone());
             ws.submit_action(
@@ -838,6 +896,34 @@ impl CanvasSidebar {
         }
         if taken(self.load_button) {
             ws.submit_action(ctx.id.cast::<Self>(), "Load a workspace", RequestLoad);
+        }
+
+        // Reset every canvas — every desktop's surface and every plane nested on
+        // one — to life size at its origin, as a single undo step. A canvas is
+        // any live node that answers the zoom request; the rest are left alone.
+        if taken(self.reset_canvases_button) {
+            let mut group: Vec<Action> = Vec::new();
+            for id in ws.live_ids() {
+                if ws.send_request(id.cast::<Canvas>(), CanvasZoom).is_some() {
+                    group.push(Action {
+                        dest: id,
+                        description: "Reset zoom".into(),
+                        body: Box::new(ResetCanvasZoom),
+                    });
+                    group.push(Action {
+                        dest: id,
+                        description: "Reset position".into(),
+                        body: Box::new(ResetCanvasView),
+                    });
+                }
+            }
+            if !group.is_empty() {
+                ws.submit_action_dyn(Action {
+                    dest: NodeUid::nil(),
+                    description: "Reset all canvases".into(),
+                    body: Box::new(ActionGroup { actions: group }),
+                });
+            }
         }
 
         // The editor command, when the field commits an edit.
@@ -981,7 +1067,12 @@ impl Node for CanvasSidebar {
         ctx.workspace.delete_node(self.venv_clear_button.erase());
         ctx.workspace.delete_node(self.editor_field.erase());
         ctx.workspace.delete_node(self.save_name.erase());
-        for button in [self.save_dir_button, self.save_button, self.load_button] {
+        for button in [
+            self.save_dir_button,
+            self.save_button,
+            self.load_button,
+            self.reset_canvases_button,
+        ] {
             ctx.workspace.delete_node(button.erase());
         }
         for browser in [self.venv_browser, self.save_browser].into_iter().flatten() {
@@ -1002,6 +1093,17 @@ fn short_name(type_name: &str) -> String {
 defhandlers! {
     CanvasSidebar {
         actions: [
+            // Rebuild the "Reset all canvases" button for a workspace saved
+            // before it existed (its slot deserialised nil). Idempotent: it
+            // only builds when the slot is still empty, so a resubmit that
+            // arrives before this settles finds it filled and does nothing.
+            RestoreResetButton => (this, _a, ctx) {
+                if this.reset_canvases_button == NodeUid::nil() {
+                    let ws = ctx.workspace.action_handle();
+                    this.reset_canvases_button =
+                        Button::build(ws, Label::new("Reset all canvases".to_owned()));
+                }
+            },
             // Show or hide the browser used to choose an environment.
             ToggleVenvBrowser { start: Option<String> } => (this, a, ctx) {
                 let ws = ctx.workspace.action_handle();
