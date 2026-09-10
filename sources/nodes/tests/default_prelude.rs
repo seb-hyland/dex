@@ -889,8 +889,9 @@ fn a_selected_row_becomes_a_real_table_node() {
     );
 }
 
-/// What the sidebar offers is a lambda you wire a table into — named for what
-/// it does, declaring what it wants, and holding a script you can edit.
+/// What the sidebar offers is a pair of lambdas you wire things into — named
+/// for what they do, declaring what they want, and holding a script you can
+/// edit. This pins the first: a view of a table.
 #[test]
 fn the_offer_is_a_lambda_that_takes_a_table() {
     if !has_pyarrow() {
@@ -908,7 +909,8 @@ fn the_offer_is_a_lambda_that_takes_a_table() {
             .map(|(n, _, _)| n.as_str())
             .collect::<Vec<_>>(),
         ["Generate data explorer"],
-        "one offer, named for what it generates"
+        "the one offer, named for what it does — connecting two views is a \
+         worked example (examples/connect_views.py), not a sidebar offer"
     );
 
     // Seat it the way the sidebar does, with everything its factory queued.
@@ -2011,4 +2013,506 @@ fn the_explorer_survives_being_walked_through_every_pairing() {
         "pairings that error:\n{}",
         broken.join("\n")
     );
+}
+
+/// What a mark stands for is what a click on it picks up.
+///
+/// A scatter's mark is a record and answers one row. A bar chart's mark is a
+/// *category*, and every row of it was recorded at the same point — so a click
+/// lands on an arbitrary member of the group, and answering with that one row
+/// as though it were the bar is the wrong answer to the question the click
+/// asked. The same goes for a heatmap cell, and for a tip several identical
+/// lineages end on.
+#[test]
+fn a_mark_answers_for_everything_it_stands_for() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let checks = r#"
+def transform():
+    frame = Frame()
+
+    # A point is a record, and stands for itself.
+    scatter = build_plot(dex.ws, Scatter, frame=frame,
+                         x="body_mass_g", y="flipper_mm")
+    assert scatter.group(3) == [3], scatter.group(3)
+    assert scatter.group(frame.n + 5) == [], "a row that is not there is nothing"
+
+    # A bar is a category, and stands for every row counted into it.
+    bars = build_plot(dex.ws, Bars, frame=frame, x="species")
+    species = frame.values("species")
+    for row in (0, 5, 17):
+        want = [i for (i, v) in enumerate(species) if v == species[row]]
+        assert bars.group(row) == want, (row, len(bars.group(row)), len(want))
+    assert len(bars.group(0)) > 1, "the sample has more than one of each"
+
+    # A heatmap cell is the pair, and stands for every row that crosses it.
+    heat = build_plot(dex.ws, Heatmap, frame=frame, x="species", y="island")
+    islands = frame.values("island")
+    want = [i for i in range(frame.n)
+            if species[i] == species[0] and islands[i] == islands[0]]
+    assert heat.group(0) == want, (len(heat.group(0)), len(want))
+
+    # A tip is a node of the tree, and stands for every lineage ending on it.
+    lineages = {"lineage": ["A;B;C" if i % 2 else "A;B;D" for i in range(10)]}
+    tree = build_plot(dex.ws, Phylogeny, lineages, x="lineage")
+    assert sorted(tree.group(0)) == [0, 2, 4, 6, 8], tree.group(0)
+
+    # And re-pointing the view forgets what it worked out about the old one.
+    bars.request(SetEncoding(x="island"), None)
+    want = [i for (i, v) in enumerate(islands) if v == islands[0]]
+    assert bars.group(0) == want, "the group is about the columns now plotted"
+    return "ok"
+"#;
+    assert_eq!(checked(checks), "ok");
+}
+
+/// The readout's table holds every row the mark stood for, and is drawn the
+/// size of what it holds.
+///
+/// Both halves matter. A bar chart whose readout shows one arbitrary row of
+/// four hundred answers the wrong question; and a card built to a fixed height
+/// and handed one row leaves a row-shaped band of nothing under it, which reads
+/// as a second, empty record rather than as slack.
+#[test]
+fn the_readout_holds_the_whole_group() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, root) = built(
+        "def transform():\n    \
+             return build_plot(dex.ws, Bars, x='species')\n",
+    );
+    let ctx = context();
+    drawn(&mut ws, &ctx);
+    let wanted: usize = ask(
+        &ws,
+        root,
+        "len(dex.snapshot.send_request(target, RowGroup(0)))",
+    )
+    .parse()
+    .expect("a count");
+    assert!(wanted > 1, "a bar of the sample stands for several rows");
+
+    let _ = ask(
+        &ws,
+        root,
+        "dex.snapshot.send_request(target, SetSelection(0))",
+    );
+    drawn(&mut ws, &ctx);
+    ws.process_pending();
+    drawn(&mut ws, &ctx);
+
+    let rows = ws
+        .live_ids()
+        .into_iter()
+        .find_map(|uid| {
+            ws.get_node(uid).and_then(|node| {
+                (*node)
+                    .as_any_ref()
+                    .downcast_ref::<dex_nodes::primitives::table::Table>()
+                    .map(|t| t.batch().num_rows())
+            })
+        })
+        .expect("the selection became a table");
+    assert_eq!(
+        rows, wanted,
+        "the whole category, not one arbitrary member of it"
+    );
+
+    // And the card is built around that many rows rather than around one.
+    let height = |count: usize| -> f32 {
+        ask(&ws, root, &format!("row_table_height({count})"))
+            .parse()
+            .expect("a height")
+    };
+    assert!(
+        height(wanted) > height(1),
+        "a card for {wanted} rows is taller than a card for one"
+    );
+}
+
+/// A tree with more tips than there is room to name leaves them unnamed.
+///
+/// All of them or none, exactly as a crowded category axis is captioned: a wall
+/// of overlapping names is not a denser reading of the tree, and dropping only
+/// some reads as if the rest were missing rather than as if none were shown.
+#[test]
+fn crowded_tips_go_unnamed() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let tips = |count: usize| -> Vec<String> {
+        let (mut ws, _root) = built(&format!(
+            "def transform():\n    \
+                 rows = {{'lineage': ['Root;Clade;Zebra %d' % i \
+                 for i in range({count})]}}\n    \
+                 return build_plot(dex.ws, Phylogeny, rows, x='lineage')\n"
+        ));
+        let ctx = context();
+        drawn(&mut ws, &ctx);
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN);
+        let out = ctx.clone().run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |c| {
+                egui::CentralPanel::default().show(c, |ui| ws.draw_frame(ui, screen));
+            },
+        );
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Vec(inner) => inner.iter().for_each(|s| walk(s, out)),
+                egui::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+                _ => {}
+            }
+        }
+        let mut text = Vec::new();
+        out.shapes.iter().for_each(|c| walk(&c.shape, &mut text));
+        text
+    };
+
+    let few = tips(4);
+    assert!(
+        few.iter().any(|s| s.starts_with("Zebra ")),
+        "four tips have room for their names: {few:?}"
+    );
+    // Not one stump either: a truncation short enough to fit two hundred names
+    // side by side is a row of initials, which looks like words and is not.
+    let many = tips(200);
+    assert!(
+        !many.iter().any(|s| s.starts_with('Z')),
+        "two hundred do not, so none of them is written: {many:?}"
+    );
+}
+
+/// The join reaches through a plane to the view on it.
+///
+/// The join is between *views* — things that can say where they drew each row.
+/// What a data explorer or a phylogeny hands back is a *plane*, which cannot;
+/// the view is on it. So `link_views` given two planes has to reach through each
+/// to the single view it holds (`view_of`), or it draws nothing — which is the
+/// "doesn't join" the connect-views example was reported to have. The test:
+/// connecting two planes still adds lines, and only when it reaches through.
+#[test]
+fn the_join_reaches_through_a_plane_to_its_view() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    // A minimal stand-in for examples/connect_views.py: two views, each on a
+    // plane of its own, drawn side by side with the joiner over the top. The
+    // joiner is handed the two planes, not the plots inside them.
+    let build = |only_selected: bool| -> (Workspace, NodeUid) {
+        built(&format!(
+            "class Pair:\n    \
+                 def __init__(self, a, b, j):\n        \
+                     (self.a, self.b, self.j) = (a, b, j)\n    \
+                 def owned_nodes(self):\n        \
+                     return [self.j]\n    \
+                 def draw(self, ctx):\n        \
+                     base = ctx.constraints\n        \
+                     (w, h) = (base.x.provided_value(), base.y.provided_value())\n        \
+                     (x, y) = (base.pos.x, base.pos.y)\n        \
+                     ctx.draw_inspectable_node(self.a, at(x, y, w / 2 - 10, h))\n        \
+                     ctx.draw_inspectable_node(self.b, at(x + w / 2 + 10, y, w / 2 - 10, h))\n        \
+                     ctx.draw_node(self.j, at(x, y, w, h))\n        \
+                     return dex.DrawResult.Complete(\n            \
+                         region=dex.ScreenRegion.from_min_size(base.pos, dex.Vector.new(w, h)))\n\
+             def transform():\n    \
+                 frame = Frame()\n    \
+                 a = plot_on_plane(dex.ws, build_plot(\n        \
+                     dex.ws, Scatter, frame=frame, x='body_mass_g', y='flipper_mm'))\n    \
+                 b = plot_on_plane(dex.ws, build_plot(\n        \
+                     dex.ws, Violin, frame=frame, x='species', y='flipper_mm'))\n    \
+                 j = link_views(dex.ws, a, b, only_selected={})\n    \
+                 return dex.ws.insert_node_dyn(Pair(a, b, j))\n",
+            if only_selected { "True" } else { "False" }
+        ))
+    };
+
+    let ctx = context();
+    let (mut joined, _root) = build(false);
+    let with_lines = drawn(&mut joined, &ctx);
+    let (mut apart, _) = build(true);
+    // Nothing is selected, so the same two planes are drawn with no lines at all.
+    let without = drawn(&mut apart, &ctx);
+    assert!(
+        with_lines > without,
+        "reaching through the planes drew lines the pair alone did not: \
+         {with_lines} vs {without}"
+    );
+}
+
+/// `view_of` reaches a plane's view, and leaves a bare plot be.
+#[test]
+fn view_of_reaches_through_a_plane() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (plane_ws, plane) = built(
+        "def transform():\n    return plot_on_plane(dex.ws, build_plot(\n        \
+             dex.ws, Scatter, x='body_mass_g', y='flipper_mm'))\n",
+    );
+    assert_eq!(
+        ask(
+            &plane_ws,
+            plane,
+            "'through' if view_of(dex.snapshot, target) != target else 'same'",
+        ),
+        "through",
+        "a plane is not a view; view_of finds the plot on it",
+    );
+
+    let (plot_ws, plot) = built(
+        "def transform():\n    return build_plot(dex.ws, Scatter, \
+             x='body_mass_g', y='flipper_mm')\n",
+    );
+    assert_eq!(
+        ask(
+            &plot_ws,
+            plot,
+            "'through' if view_of(dex.snapshot, target) != target else 'same'",
+        ),
+        "same",
+        "a plot answers the protocol itself; view_of leaves it be",
+    );
+}
+
+/// The connect-views example clones the two views wired into it.
+///
+/// Drawing the very same node in two places hands its widgets the same ids
+/// twice, which egui paints back as a "use of widget ID" error — the clash the
+/// example is reported to have when the two views are also on the surface that
+/// holds the pair. Cloning is the fix: the copies have ids of their own, the
+/// originals keep their place, and the join still draws.
+#[test]
+fn the_connect_example_clones_its_views() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    dex_nodes::scripting::init_python();
+    let mut ws = Workspace::new_empty();
+
+    // Two views, each on a plane, the way a data explorer or a phylogeny hands
+    // one back. Seated in one workspace, then wired into the example.
+    let seat = |ws: &mut Workspace, script: &str, args: &[(String, ScriptValue)]| -> NodeUid {
+        let (handle, actions) = WorkspaceActionHandle::buffered();
+        let out = run_script(script, PRELUDE, &handle, args, GraphSnapshot::capture(ws))
+            .expect("the script runs");
+        let uid = match out {
+            ScriptOutput::Handle(uid) => uid,
+            ScriptOutput::Node(node) => ws.action_handle().insert_node_dyn(node),
+            ScriptOutput::Nothing => panic!("the script returns something"),
+        };
+        drop(handle);
+        for action in actions.try_iter() {
+            ws.submit_action_dyn(action);
+        }
+        ws.process_pending();
+        uid
+    };
+
+    let left = seat(
+        &mut ws,
+        "def transform():\n    return plot_on_plane(dex.ws, build_plot(\n        \
+             dex.ws, Scatter, x='body_mass_g', y='flipper_mm'))\n",
+        &[],
+    );
+    let right = seat(
+        &mut ws,
+        "def transform():\n    return plot_on_plane(dex.ws, build_plot(\n        \
+             dex.ws, Violin, x='species', y='flipper_mm'))\n",
+        &[],
+    );
+    let before = ws.live_ids().len();
+
+    let connected = seat(
+        &mut ws,
+        include_str!("../../../examples/connect_views.py"),
+        &[
+            ("thisView".to_owned(), ScriptValue::Node(left)),
+            ("thatView".to_owned(), ScriptValue::Node(right)),
+        ],
+    );
+
+    // The originals are left in place, and the clones were seated alongside.
+    assert!(
+        ws.get_node(left).is_some() && ws.get_node(right).is_some(),
+        "the two wired views were cloned, not consumed"
+    );
+    assert!(
+        ws.live_ids().len() > before,
+        "the clones joined the workspace beside the originals"
+    );
+
+    ws.set_root(connected);
+    ws.process_pending();
+    let ctx = context();
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN);
+    let mut texts: Vec<String> = Vec::new();
+    for _ in 0..5 {
+        let out = ctx.clone().run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |c| {
+                egui::CentralPanel::default().show(c, |ui| ws.draw_frame(ui, screen));
+            },
+        );
+        ws.process_pending();
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Vec(inner) => inner.iter().for_each(|s| walk(s, out)),
+                egui::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+                _ => {}
+            }
+        }
+        texts.clear();
+        for c in &out.shapes {
+            walk(&c.shape, &mut texts);
+        }
+    }
+    assert!(
+        !texts.iter().any(|s| s.contains("use of") && s.contains("ID")),
+        "no id clash: the views are copies with ids of their own, not the \
+         originals drawn a second time"
+    );
+}
+
+/// Every layout's readout works, and works the same way.
+///
+/// The readout is spine code — the table is sliced, seated and sized in one
+/// place — but each layout decides what a mark stands for and where it was
+/// drawn, and either of those going wrong shows up only here. So this walks the
+/// lot: select a row, draw, and check that what was seated is a real table
+/// holding exactly the rows the view says the mark stood for, with nothing on
+/// the plane complaining.
+#[test]
+fn every_layout_shows_the_records_behind_a_mark() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    // `x`/`y` chosen per layout the way the explorer would choose them, so each
+    // is asked for the picture it is actually for.
+    let layouts = [
+        ("Scatter", "x='body_mass_g', y='flipper_mm', color='species'"),
+        ("Bars", "x='species'"),
+        ("Strip", "x='species', y='body_mass_g'"),
+        ("Violin", "x='species', y='body_mass_g'"),
+        ("Heatmap", "x='species', y='island'"),
+        ("Phylogeny", "x='species', color='island'"),
+        ("Circos", "x='species', tracks=['body_mass_g']"),
+        ("Scatter3D", "x='body_mass_g', y='flipper_mm', z='bill_length_mm'"),
+    ];
+    let mut broken = Vec::new();
+    for (layout, encoding) in layouts {
+        let (mut ws, root) = built(&format!(
+            "def transform():\n    \
+                 return build_plot(dex.ws, {layout}, {encoding})\n"
+        ));
+        let ctx = context();
+        drawn(&mut ws, &ctx);
+        let _ = ask(
+            &ws,
+            root,
+            "dex.snapshot.send_request(target, SetSelection(0))",
+        );
+        drawn(&mut ws, &ctx);
+        ws.process_pending();
+        let painted = drawn(&mut ws, &ctx);
+
+        let wanted: usize = ask(
+            &ws,
+            root,
+            "len(dex.snapshot.send_request(target, RowGroup(0)))",
+        )
+        .parse()
+        .unwrap_or(0);
+        let rows = ws.live_ids().into_iter().find_map(|uid| {
+            ws.get_node(uid).and_then(|node| {
+                (*node)
+                    .as_any_ref()
+                    .downcast_ref::<dex_nodes::primitives::table::Table>()
+                    .map(|t| t.batch().num_rows())
+            })
+        });
+        if wanted == 0 {
+            broken.push(format!("{layout}: the mark stands for nothing"));
+        } else if rows != Some(wanted) {
+            broken.push(format!(
+                "{layout}: the readout holds {rows:?} rows, the mark stands for {wanted}"
+            ));
+        }
+        if painted < 20 {
+            broken.push(format!("{layout}: barely drew ({painted} shapes)"));
+        }
+    }
+    assert!(broken.is_empty(), "readouts that misbehave:\n{}", broken.join("\n"));
+}
+
+
+/// A readout table shares its view's layer, and must not clash with it.
+///
+/// The view's sensor claims the layer it is drawn on so egui can tell the
+/// pointer is over it; a `Table` node hosted in the same readout is a second
+/// thing that would claim the same layer, and egui hands both the layer's own
+/// `move` widget id at different rects — the "First/Second use of widget ID"
+/// error painted right into the frame. One area per layer per frame is what
+/// stops it. A bar's selection is the case that shows it: the table is tall
+/// enough to want a scrollbar, drawn on the same layer as the sensor.
+#[test]
+fn a_readout_table_does_not_clash_with_its_view() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, root) = built(
+        "def transform():\n    return build_plot(dex.ws, Bars, x='species')\n",
+    );
+    let ctx = context();
+    drawn(&mut ws, &ctx);
+    let _ = ask(&ws, root, "dex.snapshot.send_request(target, SetSelection(3))");
+
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), SCREEN);
+    let mut texts: Vec<String> = Vec::new();
+    for _ in 0..5 {
+        let out = ctx.clone().run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                events: Vec::new(),
+                ..Default::default()
+            },
+            |c| {
+                egui::CentralPanel::default().show(c, |ui| {
+                    ws.draw_frame(ui, screen);
+                });
+            },
+        );
+        ws.process_pending();
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Vec(inner) => inner.iter().for_each(|s| walk(s, out)),
+                egui::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+                _ => {}
+            }
+        }
+        texts.clear();
+        for clipped in &out.shapes {
+            walk(&clipped.shape, &mut texts);
+        }
+    }
+    let clashes: Vec<&String> = texts
+        .iter()
+        .filter(|s| s.contains("use of") && s.contains("ID"))
+        .collect();
+    assert!(clashes.is_empty(), "an egui id clash was painted: {clashes:?}");
 }

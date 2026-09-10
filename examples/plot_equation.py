@@ -18,17 +18,28 @@ time. So this uses the prelude's `LambdaRunner`, which reads the lambda's graph
 once, compiles every script in it once, and then evaluates cheaply — memoising
 as it goes, so re-sampling ground already covered costs nothing.
 
-That memo is what makes the plot follow the plane. The curve is sampled over the
-range currently on screen, so zooming in gets you *more* of the curve rather
-than the same points further apart — and panning back over somewhere you have
-already been redraws from the cache.
+**Sampled once, over a fixed range, and then left alone.** The curve is a table
+like any other: `x` and `y` columns, worked out at build time, handed to the
+library's `Scatter`, and put on a plane. Panning and zooming the plane moves the
+picture, and that is all it does — the mapping from a value to a place on the
+plane never changes, so the curve stays where you left it.
+
+That is worth saying because the obvious alternative does not work. Re-sampling
+whatever range is currently on screen sounds like a way to get more curve as you
+zoom in; but the range on screen is read *through* the view's own axis, and the
+axis is worked out from the data the last sample produced. Each frame then
+re-derives the window from a mapping the previous frame's answer had already
+moved, and since the axis rounds outward to a round number the two chase each
+other outward — a curve that flies apart on its own while nobody touches it.
+A fixed mapping has no loop in it to run away.
 """
 
-#: How many points the curve is sampled at across the visible range.
-SAMPLES = 240
+#: How many points the curve is sampled at across the range. Generous, because
+#: it is sampled once: this is the resolution of the curve at every zoom.
+SAMPLES = 480
 #: How many points a surface is sampled at along each side. The grid is the
 #: square of this, so it is much smaller.
-GRID = 26
+SURFACE_STEPS = 26
 #: The range sampled when nothing says otherwise.
 DEFAULT_SPAN = (-10.0, 10.0)
 
@@ -46,8 +57,7 @@ def plotted_variable(runner):
 
 
 def sample_curve(runner, variable, lo, hi, count=SAMPLES):
-    """`{"in": [...], "out": [...]}` over `[lo, hi]`, skipping what will not
-    evaluate.
+    """`([...], [...])` over `[lo, hi]`, skipping what will not evaluate.
 
     A function is allowed to be undefined somewhere — a division by zero, a root
     of a negative — and one bad sample should cost that sample rather than the
@@ -82,7 +92,7 @@ def curve_table(runner, variable, lo, hi):
     return {"x": ins, "y": outs}
 
 
-def surface_table(runner, lo, hi, count=GRID):
+def surface_table(runner, lo, hi, count=SURFACE_STEPS):
     """A function of both, sampled on a grid: `{x, y, z}`."""
     step = (hi - lo) / max(count - 1, 1)
     rows = {"x": [], "y": [], "z": []}
@@ -101,103 +111,31 @@ def surface_table(runner, lo, hi, count=GRID):
     return rows
 
 
-class EquationPlot(Plot):
-    """A scatter of a sampled function, re-sampled for whatever is on screen.
+class EquationPlot(Scatter):
+    """The sampled function, drawn as the library's scatter with a line through.
 
-    A `Scatter` whose table is not given but *made*, and made again whenever the
-    window over it moves. The runner underneath memoises, so what changes
-    between one frame and the next is only the samples that are new.
+    Everything a scatter does is wanted here — the axes, the picking, the hover
+    readout, the whole protocol — so this is that view, with two things turned
+    round. The points are joined in the order they were sampled, because a
+    function *is* a line and the samples are only where it was looked at. And
+    there is no least-squares fit, because there is nothing to fit: a regression
+    line through a curve worked out from a formula is a statement about noise
+    that is not there.
     """
 
     KIND = "equation"
-    CHANNELS = ("x", "y")
+    FIT = False
+    # See `Plot.become`.
+    variable = "x"
 
-    def __init__(self, frame, sensor, runner=None, variable="x",
-                 span=DEFAULT_SPAN, **encoding):
-        super().__init__(frame, sensor, **encoding)
-        self.runner = runner
-        self.variable = variable
-        #: The range last sampled, so a frame that has not moved re-uses it.
-        self.span = tuple(span)
+    def __init__(self, frame, sensor, variable="x", **encoding):
+        self.variable = variable if variable in ("x", "y") else "x"
+        # Joined along whichever variable it was sampled across: a curve on its
+        # side is in order of its y, and sorting it by x would zig-zag.
+        super().__init__(frame, sensor, connect=self.variable, **encoding)
 
     def type_name(self):
         return "y = f(x)" if self.variable == "x" else "x = f(y)"
-
-    def resample(self, lo, hi):
-        """Sample `[lo, hi]` and take the result as this view's table."""
-        if self.runner is None:
-            return
-        (lo, hi) = (min(lo, hi), max(lo, hi))
-        if hi - lo <= 0.0:
-            return
-        self.span = (lo, hi)
-        self.frame = Frame(curve_table(self.runner, self.variable, lo, hi))
-        self.n = self.frame.n
-        self.enc["x"] = "x"
-        self.enc["y"] = "y"
-
-    def paint(self, ctx, x, y, w, h):
-        # The same marks a scatter draws; the table under them is what differs.
-        Scatter.paint(self, ctx, x, y, w, h)
-
-
-class EquationSampler:
-    """Keeps the curve in step with the part of the plane you are looking at.
-
-    A background, because that is where the view's own mapping and the plane's
-    view origin are both readable — and because it has to run before the view
-    draws, which the background band is.
-    """
-
-    def __init__(self, canvas, plot):
-        self.canvas = canvas
-        self.plot = plot
-
-    def owned_nodes(self):
-        return []
-
-    def type_name(self):
-        return "An Equation Sampler"
-
-    def draw(self, ctx):
-        ws = ctx.node.workspace
-        origin = ws.send_request(self.canvas, dex.CanvasViewOrigin())
-        zoom = ws.send_request(self.canvas, dex.CanvasZoom()) or 1.0
-        scale = ws.send_request(self.plot, PlotScale())
-        base = ctx.constraints
-        w = base.x.provided_value() if base.x is not None else None
-        if origin is None or w is None or not scale or zoom <= 0.0:
-            return dex.DrawResult.Complete(region=None)
-
-        across = scale.get("x")
-        if not across or across.get("kind") != "value":
-            return dex.DrawResult.Complete(region=None)
-        # What the two edges of the window are worth in the data.
-        lo = axis_value(across, origin.x)
-        hi = axis_value(across, origin.x + w / zoom)
-        ws.send_request(self.plot, Resample(lo, hi))
-        return dex.DrawResult.Complete(region=None)
-
-
-class Resample(dex.Request):
-    """Ask a plotted equation to cover `[lo, hi]`. Answers the range it took."""
-
-    name = "dex.example.resample"
-
-    def __init__(self, lo, hi):
-        self.lo = lo
-        self.hi = hi
-
-
-class SampledPlot(EquationPlot):
-    """An `EquationPlot` that answers `Resample`."""
-
-    def request(self, req, ctx):
-        if getattr(req, "name", None) == Resample.name:
-            if abs(req.lo - self.span[0]) > 1e-9 or abs(req.hi - self.span[1]) > 1e-9:
-                self.resample(req.lo, req.hi)
-            return self.span
-        return super().request(req, ctx)
 
 
 def build_equation_plot(ws, equation, span=DEFAULT_SPAN):
@@ -212,20 +150,10 @@ def build_equation_plot(ws, equation, span=DEFAULT_SPAN):
                           x="x", y="y", z="z")
         return plot_on_plane(ws, plot, name="z = f(x, y)")
 
-    frame = Frame(curve_table(runner, variable, span[0], span[1]))
-    sensor = ws.insert_node_dyn(dex.InteractionBox.sensing(True, True, False))
-    plot = SampledPlot(frame, sensor, runner=runner, variable=variable,
-                       span=span, x="x", y="y")
-    plot.chrome = False
-    body = ws.insert_node_dyn(plot)
-    canvas = on_plane(ws, body, PLANE_SIZE, plot.type_name())
-    # The sampler first: it runs in the background band, before the view draws,
-    # so the curve it asks for is the curve that frame shows.
-    adopt(ws, canvas, EquationSampler(canvas, body), dex.Layer.background())
-    adopt(ws, canvas, PlotAxes(canvas, body), dex.Layer.background())
-    adopt(ws, canvas, PlotTitle(canvas, body), dex.Layer.foreground())
-    adopt(ws, canvas, PlotChrome(body), dex.Layer.foreground())
-    return canvas
+    plot = build_plot(ws, EquationPlot,
+                      curve_table(runner, variable, span[0], span[1]),
+                      x="x", y="y", variable=variable)
+    return plot_on_plane(ws, plot)
 
 
 def transform():

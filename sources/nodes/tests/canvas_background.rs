@@ -356,10 +356,27 @@ fn the_view_can_be_reset_to_life_size_and_to_the_origin() {
         (h.ws.send_request(h.canvas, CanvasZoom).unwrap() - 1.0).abs() < 1e-3,
         "reset zoom returns to life size"
     );
+    // "Where it was" is the *middle* of the view, because that is what a
+    // surface is anchored at. The corner cannot also stay put: zooming out
+    // reveals more plane on every side, so the top-left necessarily moves
+    // outward by half of what was revealed.
+    let centre_of = |origin: Vector, zoom: f32| Vector {
+        x: origin.x + SCREEN.x / zoom / 2.0,
+        y: origin.y + SCREEN.y / zoom / 2.0,
+    };
+    let before = centre_of(origin, zoom);
     let after_zoom_reset = h.ws.send_request(h.canvas, CanvasViewOrigin).unwrap();
+    let after = centre_of(
+        after_zoom_reset,
+        h.ws.send_request(h.canvas, CanvasZoom).unwrap(),
+    );
     assert!(
-        (after_zoom_reset.x - origin.x).abs() < 0.5 && (after_zoom_reset.y - origin.y).abs() < 0.5,
-        "reset zoom leaves the pan where it was"
+        (after.x - before.x).abs() < 0.5 && (after.y - before.y).abs() < 0.5,
+        "reset zoom leaves the middle of the view where it was: ({}, {}) against ({}, {})",
+        after.x,
+        after.y,
+        before.x,
+        before.y
     );
 
     // Reset the position: back to the origin.

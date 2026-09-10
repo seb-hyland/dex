@@ -22,6 +22,60 @@ use crate::{
     refs::{NodeRefs, remapped},
 };
 
+/// egui memory key for this frame's set of layers that already carry an area.
+fn claimed_layers_id() -> Id {
+    Id::new("dex_claimed_layer_areas")
+}
+
+/// Forget which layers have an interaction area. Called once at the top of a frame.
+pub fn reset_layer_areas(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(claimed_layers_id(), std::collections::HashSet::<Id>::new()));
+}
+
+/// Record that `layer` already carries an interaction area this frame.
+pub fn mark_layer_claimed(ctx: &egui::Context, layer: Id) {
+    ctx.data_mut(|d| {
+        let mut seen = d
+            .get_temp::<std::collections::HashSet<Id>>(claimed_layers_id())
+            .unwrap_or_default();
+        seen.insert(layer);
+        d.insert_temp(claimed_layers_id(), seen);
+    });
+}
+
+/// Register an interaction area over `clip` on `layer`, unless one is already
+/// claimed for it this frame.
+///
+/// egui decides which layer the pointer is over by the areas registered on
+/// each; a layer with none is passed over, so a scroll area or tooltip hosted
+/// on it never sees the wheel. One area per layer per frame is what is needed —
+/// and a *second* on the same layer clashes on egui's `<layer>.with("move")`
+/// widget (the "First/Second use of widget ID" a readout table drawn on a layer
+/// its canvas had already claimed tripped). So this is the single place an area
+/// is shown, and it shows one only the first time a layer asks.
+pub fn claim_layer_area(ctx: &egui::Context, layer: LayerId, clip: Rect) {
+    let fresh = ctx.data_mut(|d| {
+        let mut seen = d
+            .get_temp::<std::collections::HashSet<Id>>(claimed_layers_id())
+            .unwrap_or_default();
+        let fresh = seen.insert(layer.id);
+        d.insert_temp(claimed_layers_id(), seen);
+        fresh
+    });
+    if !fresh {
+        return;
+    }
+    egui::Area::new(layer.id)
+        .order(layer.order)
+        .fixed_pos(clip.min)
+        .movable(false)
+        .constrain(false)
+        .show(ctx, |ui| {
+            ui.set_clip_rect(clip);
+            ui.allocate_rect(clip, egui::Sense::hover());
+        });
+}
+
 /// What a save file holds, borrowed on the way out.
 #[derive(Serialize)]
 struct Saved<'ws> {
@@ -319,8 +373,12 @@ impl Workspace {
             should_clip: true,
         };
 
+        // A fresh frame's slate: no layer has an area yet.
+        reset_layer_areas(ui.ctx());
+
         // Using an `Area` allows egui to recognise the pointer as being over this area for scroll behaviour.
-        egui::Area::new(Id::new("root_node_painter"))
+        let root_layer = Id::new("root_node_painter");
+        egui::Area::new(root_layer)
             .order(Order::Middle)
             .fixed_pos(draw_area.min)
             .movable(false)
@@ -329,6 +387,9 @@ impl Workspace {
                 ui.set_clip_rect(draw_area);
                 // Claim the whole draw area so the layer's hit-test rect covers it.
                 ui.allocate_rect(draw_area, egui::Sense::hover());
+                // This surface is the root layer's area; a table hosted straight
+                // on it must not show a second one and clash. See `host_widgets`.
+                mark_layer_claimed(ui.ctx(), root_layer);
                 let mut ctx = DrawContext::root(
                     NodeContext {
                         id: root_node,
@@ -1130,21 +1191,14 @@ impl<'ctx> DrawContext<'ctx> {
         let rect: Rect = region.into();
         let clip = rect.intersect(self.ui.clip_rect());
         if !self.measuring() && !clip.is_negative() {
+            // egui asks which layer the pointer is over by the areas registered
+            // on each; this claims one for the layer these widgets are drawn on
+            // so a scroll area or tooltip among them sees the pointer. It is a
+            // no-op when the layer already has one (the root, a canvas surface),
+            // which is what keeps a readout table from showing a second area on
+            // a layer already claimed and clashing on its `move` widget.
             let layer = self.ui.layer_id();
-
-            // The area has to *be* this layer, not a fresh one beside it: egui
-            // asks which layer the pointer is over, and an area registered
-            // under some other id says nothing about the layer these widgets
-            // are actually drawn on.
-            egui::Area::new(layer.id)
-                .order(layer.order)
-                .fixed_pos(clip.min)
-                .movable(false)
-                .constrain(false)
-                .show(self.ui.ctx(), |ui| {
-                    ui.set_clip_rect(clip);
-                    ui.allocate_rect(clip, egui::Sense::hover());
-                });
+            crate::workspace::claim_layer_area(self.ui.ctx(), layer, clip);
         }
         self.ui
             .scope_builder(

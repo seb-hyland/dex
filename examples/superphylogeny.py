@@ -146,6 +146,15 @@ UNIPROT_SEARCH = (
 _UNIPROT_CACHE = {}
 
 
+def _uniprot_first(query):
+    """The first UniProt accession a `query` returns, or "" — one request."""
+    url = UNIPROT_SEARCH.format(q=urllib.parse.quote(query))
+    body = urllib.request.urlopen(
+        urllib.request.Request(url, headers=UA), timeout=TIMEOUT
+    ).read().decode("utf-8", "replace").strip()
+    return body.splitlines()[0].strip() if body else ""
+
+
 def resolve_uniprot(protein_id):
     """A UniProt accession for a RefSeq/GenBank `protein_id`, via UniProtKB.
 
@@ -153,21 +162,27 @@ def resolve_uniprot(protein_id):
     `/protein_id` (WP_…/NP_…). This maps one to the other so any annotated CDS —
     not just those with a UniProtKB `/db_xref` — can reach a model. A miss is
     cached as "" too, so it is not retried.
+
+    Asked more than one way, most specific first, because `xref:` alone is *not*
+    how UniProtKB indexes a RefSeq accession — it wants the database qualified,
+    `xref:refseq-WP_…`, and the bare form quietly matches nothing, which is why
+    this looked like AlphaFold having no model for anything. The qualified query
+    is tried first, then the bare `xref:`, then the accession as a plain term;
+    the first that answers wins.
     """
     if not protein_id:
         return ""
     if protein_id in _UNIPROT_CACHE:
         return _UNIPROT_CACHE[protein_id]
+    bare = protein_id.split(".")[0]  # UniProt xrefs are unversioned
     acc = ""
-    try:
-        bare = protein_id.split(".")[0]  # UniProt xrefs are unversioned
-        url = UNIPROT_SEARCH.format(q=urllib.parse.quote("xref:" + bare))
-        body = urllib.request.urlopen(
-            urllib.request.Request(url, headers=UA), timeout=TIMEOUT
-        ).read().decode("utf-8", "replace").strip()
-        acc = body.splitlines()[0].strip() if body else ""
-    except Exception:  # noqa: BLE001 - a lookup failure is just a miss
-        acc = ""
+    for query in ("xref:refseq-" + bare, "xref:" + bare, bare):
+        try:
+            acc = _uniprot_first(query)
+        except Exception:  # noqa: BLE001 - a lookup failure is just a miss
+            acc = ""
+        if acc:
+            break
     _UNIPROT_CACHE[protein_id] = acc
     return acc
 
@@ -226,29 +241,12 @@ INK = (58, 62, 70)
 FAINT = (120, 126, 136)
 
 
-def on_plane(ws, body_uid, size, what="Placed it", foreground=(), name=None):
-    """Put `body_uid` on a pan/zoom canvas of its own, and return the canvas.
-
-    Every view here that is bigger than the box it is shown in gets one of
-    these: the body is drawn once, life-size and generous, and the plane the
-    surface provides is how you move around it. Dragging empty space pans and
-    alt-scroll magnifies, so no view has to invent its own navigation — and
-    nothing that wants a drag for something else (turning a structure) may take
-    the whole surface for it. Those go in `foreground`, which stays put and
-    life-size while the plane moves under it.
-    """
-    canvas = dex.Canvas.build(ws)
-    item = dex.StaticCanvasItem.build(
-        ws, body_uid, dex.Vector.new(0.0, 0.0), dex.Vector.new(size[0], size[1]))
-    ws.submit_action(canvas, dex.AdoptCanvasNode(item, dex.Layer.midground()), what)
-    for node in foreground:
-        ws.submit_action(canvas, dex.AdoptCanvasNode(node, dex.Layer.foreground()),
-                         "Added the chrome")
-    # A plane is a means, not an end: the inspector's heading and every crumb in
-    # the trail should say what is on it, not that it is a canvas.
-    if name:
-        ws.submit_action(canvas, dex.NameCanvas(name=name), "Named the plane")
-    return canvas
+# `on_plane` is the prelude's: a body on a pan/zoom canvas of its own, with the
+# things that stay put while the plane moves under it handed in as `foreground`.
+# This file used to carry its own copy, which — sharing the prelude's namespace —
+# quietly shadowed it; the one place a view here differs (a structure gives up
+# the plane's drag to be turned by it) is expressed in what its sensor senses,
+# not in a second `on_plane`.
 
 
 def _abs():
@@ -856,8 +854,8 @@ def build_protein(ws, pdb_text):
     body = ws.insert_node_dyn(protein)
     model_button = dex.Button.build(ws, dex.Label.new("Open Fullscreen"))
     panel = ws.insert_node_dyn(AtomPanel(protein, model_button))
-    return on_plane(ws, body, (PROT_SIZE, PROT_SIZE), "Placed the structure",
-                    [panel], name="Structure")
+    return on_plane(ws, body, (PROT_SIZE, PROT_SIZE), name="Structure",
+                    foreground=[panel], what="Placed the structure")
 
 
 # ======================================================================
@@ -1223,8 +1221,8 @@ def build_genome_plane(ws, gbff_text):
     chrome = ws.insert_node_dyn(GenomeChrome(explorer.title, explorer.types_present))
     button = dex.Button.build(ws, dex.Label.new("Open structure"))
     panel = ws.insert_node_dyn(GenePanel(explorer, button))
-    return on_plane(ws, body, GENOME_SIZE, "Placed the genome", [chrome, panel],
-                    name="Genome")
+    return on_plane(ws, body, GENOME_SIZE, name="Genome",
+                    foreground=[chrome, panel], what="Placed the genome")
 
 
 # ======================================================================
@@ -1499,8 +1497,8 @@ def build(ws, source):
     button = dex.Button.build(ws, dex.Label.new("Open genome"))
     panel = ws.insert_node_dyn(TreePanel(body, button))
     # The rings first, so the panel sits over them.
-    return on_plane(ws, body, (TREE_SIZE, TREE_SIZE), "Placed the tree",
-                    [rings, panel], name="Phylogeny")
+    return on_plane(ws, body, (TREE_SIZE, TREE_SIZE), name="Phylogeny",
+                    foreground=[rings, panel], what="Placed the tree")
 
 
 def _find_table():

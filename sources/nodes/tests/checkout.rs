@@ -485,6 +485,7 @@ fn the_example_typechecks_against_the_stubs() {
         "circos2.py",
         "circos3.py",
         "factorial.py",
+        "connect_views.py",
     ] {
         let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../examples")

@@ -24,13 +24,15 @@ Two things make this writable at all, and neither is obvious:
     a step could fire on the gap a mid-flight source leaves behind and count
     with a number that was not there.
 
-Drop this in a lambda and press Run. Open the box it returns to watch the
-countdown; the answer settles on the canvas lambda's output row.
+Wire a number into an argument named `n` and press Run — or run it with nothing
+wired and it counts down from `DEFAULT_START`. Open the box it returns to watch
+the countdown; the answer settles on the canvas lambda's output row. Past 20 the
+result outgrows a machine word, and is still exact, because Python integers are.
 """
 
-# Edit this one. Past 20 the result outgrows a machine word, and is still exact,
-# because Python integers are.
-N = 10
+#: What it counts down from with nothing wired into `n`.
+DEFAULT_START = 10
+
 
 # One step of the countdown, as the inner lambda runs it.
 #
@@ -135,4 +137,5 @@ def build(ws, start):
 
 
 def transform():
-    return build(dex.ws, N)
+    """The machine, counting down from whatever is wired into `n`."""
+    return build(dex.ws, int(globals().get("n") or DEFAULT_START))

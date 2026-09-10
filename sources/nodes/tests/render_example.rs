@@ -8,15 +8,19 @@
 //!
 //! Env: DEX_SRC (source .py), DEX_OUT (.png path), DEX_W/DEX_H (pixels, default
 //! 512×384), DEX_DARK (any value forces the dark theme; the default is light,
-//! which is what an image-style node is drawn against). Text glyphs are not
-//! rasterised — everything a `dex.Path` paints is. The PNG writer below is
-//! dependency-free (uncompressed zlib blocks), so the file is large but needs no
-//! image crate.
+//! which is what an image-style node is drawn against), DEX_PRELUDE (any value
+//! runs the source under the default prelude, which is how the library's own
+//! views are drawn — without it a script naming `Frame` or `build_plot` is a
+//! `NameError`). Text glyphs are not rasterised — everything a `dex.Path` paints
+//! is. The PNG writer below is dependency-free (uncompressed zlib blocks), so
+//! the file is large but needs no image crate.
 
 use std::io::Write;
 
 use dex_core::prelude::*;
 use dex_nodes::scripting::{ScriptOutput, run_script};
+
+const PRELUDE: &str = include_str!("../src/default_prelude.py");
 
 #[test]
 #[ignore]
@@ -28,14 +32,26 @@ fn render() {
     let source = std::fs::read_to_string(&src_path).expect("read source");
 
     dex_nodes::scripting::init_python();
+    // The prelude needs pyarrow. The repo keeps an environment with it under
+    // `demoenv/`, so point a bare interpreter at that rather than failing with
+    // a message about a setting this harness has no way to reach.
+    if pyo3::Python::attach(|py| py.import("pyarrow").is_err()) {
+        let demoenv = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demoenv/.venv");
+        if demoenv.is_dir() {
+            let _ = dex_nodes::settings::set_venv(Some(demoenv));
+        }
+    }
     let mut ws = Workspace::new_empty();
     let (handle, actions) = WorkspaceActionHandle::buffered();
-    let node = match run_script(&source, "", &handle, &[], GraphSnapshot::capture(&ws)) {
-        Ok(ScriptOutput::Node(node)) => node,
-        Ok(_) => panic!("the example returns a node"),
+    let prelude = if std::env::var("DEX_PRELUDE").is_ok() { PRELUDE } else { "" };
+    let root = match run_script(&source, prelude, &handle, &[], GraphSnapshot::capture(&ws)) {
+        // A script may hand back the node itself, or the id of one it seated —
+        // anything built on a plane does the latter.
+        Ok(ScriptOutput::Node(node)) => ws.action_handle().insert_node_dyn(node),
+        Ok(ScriptOutput::Handle(uid)) => uid,
+        Ok(ScriptOutput::Nothing) => panic!("the example returns a node"),
         Err(e) => panic!("{e}"),
     };
-    let root = ws.action_handle().insert_node_dyn(node);
     drop(handle);
     for a in actions.try_iter() {
         ws.submit_action_dyn(a);

@@ -3,7 +3,37 @@ use egui::emath::TSTransform;
 use egui::{Id, LayerId, Pos2, Rect, Vec2};
 use utils::Transient;
 
-use crate::layouts::canvas::nodes::{CanvasEditor, CanvasItemBounds, CanvasNode, NudgeCanvasItem};
+use crate::layouts::canvas::nodes::{
+    CanvasEditor, CanvasItemBounds, CanvasNode, CanvasNodeChild, NudgeCanvasItem,
+};
+use crate::scripting::DataflowOutput;
+
+/// Whether `node`, or what it renders, is a pan/zoom surface — a canvas.
+///
+/// Follows the two ways one hides behind an item: a lambda whose output is the
+/// surface (a data explorer, a phylogeny hands one back), and a wrapper that
+/// frames a canvas as its child. Bounded so a cycle cannot spin.
+fn holds_surface(ws: &Workspace, node: NodeUid, depth: u8) -> bool {
+    if depth > 6 {
+        return false;
+    }
+    if ws.send_request(node, CanvasViewOrigin).is_some() {
+        return true;
+    }
+    if let Some(out) = ws.send_request(node, DataflowOutput).flatten()
+        && out != node
+        && holds_surface(ws, out, depth + 1)
+    {
+        return true;
+    }
+    if let Some(inner) = ws.send_request(node, CanvasNodeChild)
+        && inner != node
+        && holds_surface(ws, inner, depth + 1)
+    {
+        return true;
+    }
+    false
+}
 
 /**
     Where the canvas publishes the clip a wire should honour.
@@ -98,6 +128,7 @@ pub struct Canvas {
     background: Vec<NodeUid>,
     /// [`Layer::Foreground`] members, painted after them.
     foreground: Vec<NodeUid>,
+    /// The canvas point shown at the middle of the viewport.
     screen_offset: Transient<Vector>,
     /// The magnification of the surface: 1.0 is life size, >1 zoomed in.
     zoom: Transient<f32>,
@@ -140,8 +171,36 @@ impl Canvas {
         })
     }
 
-    fn screen_offset(&self) -> Vector {
-        self.screen_offset.val().unwrap_or(Vector::splat(0.0))
+    /**
+        The canvas point at the middle of the viewport.
+
+        Unset means "not looked at yet", and a surface that has not been looked
+        at shows its origin at the top-left, because that is where content is
+        authored from. Which point that is depends on the box, so it cannot be a
+        constant and is worked out from the last one drawn.
+    */
+    fn view_centre(&self) -> Vector {
+        self.screen_offset
+            .val()
+            .unwrap_or_else(|| self.visible_size() / 2.0)
+    }
+
+    /// The span of canvas the viewport covers, in canvas units.
+    fn visible_size(&self) -> Vector {
+        self.viewport
+            .val()
+            .map(|r| r.size())
+            .unwrap_or(Vector::splat(0.0))
+            / self.scale().max(f32::EPSILON)
+    }
+
+    /// The canvas point at the *top-left* of the viewport.
+    ///
+    /// What [`CanvasViewOrigin`] publishes, and the frame a background draws
+    /// its own points in — so this stays the corner however the surface is
+    /// anchored, and nothing outside this file has to know that changed.
+    fn view_origin(&self) -> Vector {
+        self.view_centre() - self.visible_size() / 2.0
     }
 
     /// The magnification the *user* set: 1.0 is life size, whatever box this
@@ -171,15 +230,19 @@ impl Canvas {
     /// was drawn in — pan and zoom, and nothing else.
     fn to_parent(&self) -> TSTransform {
         let zoom = self.scale();
-        let viewport_min = self
-            .viewport
-            .val()
-            .map(|r| r.min)
-            .unwrap_or(ScreenPos::zero());
-        // parent = viewport_min + (p - view_origin) * zoom
-        let translation = Vec2::new(viewport_min.x, viewport_min.y)
-            - zoom * Vec2::new(self.screen_offset().x, self.screen_offset().y);
+        let anchor = self.viewport_centre();
+        // parent = viewport_centre + (p - view_centre) * zoom
+        let centre = self.view_centre();
+        let translation = Vec2::new(anchor.x, anchor.y) - zoom * Vec2::new(centre.x, centre.y);
         TSTransform::new(translation, zoom)
+    }
+
+    /// The middle of the box this surface was last drawn in, in that box's frame.
+    fn viewport_centre(&self) -> ScreenPos {
+        self.viewport
+            .val()
+            .map(|r| r.min + r.size() / 2.0)
+            .unwrap_or(ScreenPos::zero())
     }
 
     /// The transform taking a canvas-space point to where it lands on screen.
@@ -196,6 +259,28 @@ impl Canvas {
                     .is_some_and(|bounds| {
                         Rect::from(self.map_to_screen(bounds)).contains(Pos2::from(pos))
                     })
+        })
+    }
+
+    /// The topmost item at `pos` that holds a pan/zoom surface.
+    ///
+    /// A nested canvas declines the inspector's lens, so `item_at` passes over
+    /// it the same way it passes over a plane's own see-through content — right
+    /// for a plot's marks, wrong for a whole surface, which will take the drag
+    /// to pan itself and so must stop this surface from panning under it. A
+    /// surface is what answers `CanvasViewOrigin`; the item holds it as its
+    /// child, and the child may be a lambda whose *output* is the surface (a
+    /// data explorer, a phylogeny), so the search follows the item's child and
+    /// then the output of whatever it finds.
+    fn surface_at(&self, ws: &Workspace, pos: ScreenPos) -> Option<NodeUid> {
+        self.children.iter().rev().copied().find(|&child| {
+            ws.send_request(child, CanvasItemBounds)
+                .is_some_and(|bounds| {
+                    Rect::from(self.map_to_screen(bounds)).contains(Pos2::from(pos))
+                })
+                && ws
+                    .send_request(child, CanvasNodeChild)
+                    .is_some_and(|inner| holds_surface(ws, inner, 0))
         })
     }
 
@@ -253,7 +338,27 @@ impl Node for Canvas {
             .unwrap_or(TSTransform::IDENTITY);
         self.outer.set(outer);
         self.fit.set(reference_fit(&egui_ctx, size));
-        let on_screen = outer * Rect::from(region);
+        // Settle where this surface is looking, once, the first time it is
+        // drawn into a box worth the name.
+        //
+        // It has to be *settled* rather than worked out afresh each frame. A
+        // surface shows its origin in the corner until someone moves it, and
+        // "the canvas point in the corner" is a different point in every box —
+        // so deriving it per frame would anchor an untouched surface to the
+        // corner again, which is the whole thing this is here to stop.
+        if self.screen_offset.val().is_none() && size.x > 0.0 && size.y > 0.0 {
+            self.screen_offset.set(self.visible_size() / 2.0);
+        }
+        // The span this surface may paint into, in its own (parent-local) frame:
+        // its region, but no wider than the clip it was handed. A top-level
+        // canvas is handed the whole window and this changes nothing; a canvas
+        // that is itself an item on another surface is handed that item's box,
+        // and this is what keeps its own items and chrome inside it. Its
+        // midground and foreground ride sublayers, which egui clips on their
+        // own — so without this a nested surface's marks and readouts spill past
+        // the item holding them, over its neighbours and out under the sidebar.
+        let visible = Rect::from(region).intersect(ctx.ui.clip_rect());
+        let on_screen = outer * visible;
 
         // Pointer gestures move the plane. A sizing pass sees the same cached
         // gesture as the real one, so it is only acted on for real.
@@ -264,7 +369,14 @@ impl Node for Canvas {
             // scroll leaves it untouched.
             let pointer = egui_ctx
                 .pointer_latest_pos()
-                .filter(|p| on_screen.contains(*p))
+                .filter(|p| {
+                    on_screen.contains(*p)
+                        // A nested surface under the cursor zooms itself, so this
+                        // one must not zoom too — otherwise a wheel over an inner
+                        // plane magnifies the plane *and* the surface holding it.
+                        // The pan gesture below reaches through the same way.
+                        && self.surface_at(ws, ScreenPos::from(*p)).is_none()
+                })
                 // Into this surface's own frame, where `region` is named.
                 .map(|p| outer.inverse() * p);
             if let Some(pointer) = pointer {
@@ -277,11 +389,14 @@ impl Node for Canvas {
                     // magnification taken down to the box there is room in.
                     let fit = self.fit().max(f32::EPSILON);
                     let k = 1.0 / (old * fit) - 1.0 / (new * fit);
+                    // Measured from whatever the surface is anchored at, which
+                    // is its middle.
+                    let anchor = self.viewport_centre();
                     self.screen_offset.set(
-                        self.screen_offset()
+                        self.view_centre()
                             + Vector {
-                                x: (pointer.x - region.min.x) * k,
-                                y: (pointer.y - region.min.y) * k,
+                                x: (pointer.x - anchor.x) * k,
+                                y: (pointer.y - anchor.y) * k,
                             },
                     );
                     self.zoom.set(new);
@@ -305,7 +420,15 @@ impl Node for Canvas {
             if down && egui_ctx.dragged_id().is_none() {
                 let panning = *self.panning.val_or_else(|| {
                     press.map(ScreenPos::from).is_some_and(|p| {
-                        on_screen.contains(Pos2::from(p)) && self.item_at(ws, p).is_none()
+                        on_screen.contains(Pos2::from(p))
+                            && self.item_at(ws, p).is_none()
+                            // A press over a nested surface is that surface's to
+                            // pan, not this one's: without this the drag pans the
+                            // inner plane *and* the desktop it sits on, because a
+                            // plane declines the inspector's lens and so slips
+                            // past `item_at` the way a plane's own see-through
+                            // content (plot marks, a shape) is meant to.
+                            && self.surface_at(ws, p).is_none()
                     })
                 });
                 if panning && delta != Vec2::ZERO {
@@ -314,7 +437,7 @@ impl Node for Canvas {
                     // so does one inside a magnified surface.
                     let scale = (outer.scaling * self.scale()).max(f32::EPSILON);
                     self.screen_offset.set(
-                        self.screen_offset()
+                        self.view_centre()
                             - Vector {
                                 x: delta.x,
                                 y: delta.y,
@@ -355,9 +478,17 @@ impl Node for Canvas {
             what is actually meant — the foreground is directly above the items —
             and cannot come apart.
 
-            That is two levels of nesting, which egui documents as unspecified.
-            It resolves the same way whichever order the two are spliced in;
-            `a_foreground_pad_takes_the_drag_from_the_pan` is what says so.
+            One shared midground, not a layer per item. A layer per item would
+            put a nested surface in its stacking slot — its overlays no longer
+            leaping above a sibling drawn over it — but it costs more than it is
+            worth: egui lifts the pressed layer to the front each frame, so the
+            z-order flickers as the pointer moves, the wheel and a foreground
+            that takes a drag stop both holding at once, and a wire dragged
+            between two items (a connection port) no longer lands. The escape a
+            nested plane's overlays make is the lesser evil, and the real cure is
+            not more layers but zooming a surface without an egui transform layer
+            at all — a change to how a canvas renders, not to how its bands
+            stack.
         */
         let mid_layer = LayerId::new(parent_layer.order, Id::new(("dex_canvas_mid", ctx.node.id)));
         let fg_layer = LayerId::new(parent_layer.order, Id::new(("dex_canvas_fg", ctx.node.id)));
@@ -372,28 +503,19 @@ impl Node for Canvas {
         let local_clip = to_global.inverse() * on_screen;
 
         /*
-            An `Area` over the same layer, claiming the plane's visible span.
-
-            It paints nothing: it is there so that egui counts this layer as an
-            area, which is how egui decides *which layer the pointer is over*.
-            Without one, a scroll area or a tooltip inside an item is told the
-            pointer belongs to the surface underneath and never sees it —
-            `Workspace::draw_root` registers the root painter for the same
-            reason. The claim is the whole viewport, in the plane's own
-            coordinates: the items are what the pointer meets here, and a
-            background is what they are drawn on rather than something to press.
+            An `Area` over the same layer, claiming the plane's visible span, so
+            egui counts this layer as an area — which is how it decides which
+            layer the pointer is over. Without one, a scroll area or a tooltip
+            inside an item is told the pointer belongs to the surface underneath
+            and never sees it (`Workspace::draw_root` registers the root painter
+            for the same reason).
         */
         if !ctx.measuring() {
-            egui::Area::new(mid_layer.id)
-                .order(mid_layer.order)
-                .fixed_pos(local_clip.min)
-                .movable(false)
-                .constrain(false)
-                .sense(egui::Sense::hover())
-                .show(&egui_ctx, |ui| {
-                    ui.set_clip_rect(local_clip);
-                    ui.allocate_rect(local_clip, egui::Sense::hover());
-                });
+            // One area per layer per frame, through the shared claim: a plot
+            // that draws its own readout table onto this same midground then
+            // finds the layer already claimed and does not show a second area
+            // that would clash on egui's `move` widget.
+            dex_core::claim_layer_area(&egui_ctx, mid_layer, local_clip);
         }
 
         let children = &self.children;
@@ -418,13 +540,15 @@ impl Node for Canvas {
             });
         });
 
-        // The foreground is chrome — a legend, a readout, a pad to drag — that
-        // stays put and life-size while the plane moves under it. It is drawn in
-        // this surface's own frame, so its layer carries only the way out of
-        // that frame; and it sits above the items, so it is never lost beneath
-        // them.
+        // The foreground is chrome — a legend, a readout, a title — that stays
+        // put and life-size while the plane moves under it. It is drawn in this
+        // surface's own frame, so its layer carries only the way out of that
+        // frame; and it sits above the items, so it is never lost beneath them.
+        // Clipped to the visible span so a readout pinned bottom-right stops at
+        // the edge of the item holding this surface rather than spilling over
+        // its neighbours.
         egui_ctx.set_transform_layer(fg_layer, outer);
-        ctx.on_layer(fg_layer, Rect::from(region), |ctx| {
+        ctx.on_layer(fg_layer, visible, |ctx| {
             for &member in &self.foreground {
                 ctx.draw_workspace_node(member, band);
             }
@@ -473,15 +597,9 @@ defhandlers! { Canvas {
     actions: [
         AddCanvasItem { child: Arc<dyn Node>, size: Vector } => (this, a, ctx) {
             let child_id = ctx.workspace.insert_node_dyn(a.child.clone());
-            // Center new nodes in the currently visible section of the canvas.
-            // The visible span is the viewport read back into canvas space.
-            let visible_size = this
-                .viewport
-                .val()
-                .map(|r| r.size())
-                .unwrap_or(Vector::splat(0.0))
-                / this.scale();
-            let canvas_pos = this.screen_offset() + visible_size / 2.0 - a.size / 2.0;
+            // Centre new nodes in the currently visible section of the canvas,
+            // which is what the surface is anchored at.
+            let canvas_pos = this.view_centre() - a.size / 2.0;
             let item = build_canvas_item(
                 ctx.workspace,
                 a.child.as_ref(),
@@ -511,13 +629,7 @@ defhandlers! { Canvas {
                 );
                 a.node
             } else {
-                let visible_size = this
-                    .viewport
-                    .val()
-                    .map(|r| r.size())
-                    .unwrap_or(Vector::splat(0.0))
-                    / this.scale();
-                let canvas_pos = this.screen_offset() + visible_size / 2.0 - a.size / 2.0;
+                let canvas_pos = this.view_centre() - a.size / 2.0;
                 // `a.node` is already live here, so it can be fetched to dispatch.
                 match ws.get_node(a.node) {
                     Some(node) => {
@@ -582,8 +694,10 @@ defhandlers! { Canvas {
             this.name = (!s.name.is_empty()).then_some(s.name.clone());
         },
         // Back to the plane's own origin at the top-left, keeping the zoom.
+        // Forgetting where it was looking is exactly that: an unlooked-at
+        // surface shows its origin in the corner, whatever box it is in.
         ResetCanvasView => (this, _a) {
-            this.screen_offset.set(Vector::splat(0.0));
+            *this.screen_offset.val_mut() = None;
         },
     ],
     requests: [
@@ -594,7 +708,7 @@ defhandlers! { Canvas {
             this.layer(s.layer).clone()
         },
         // The canvas-space point at the top-left of what is currently visible.
-        CanvasViewOrigin => (this, _q): Vector { this.screen_offset() },
+        CanvasViewOrigin => (this, _q): Vector { this.view_origin() },
         // What the plane is drawn at in the box it is in: 1.0 life size, >1
         // magnified. A background that tracks the plane scales its own drawing
         // by this, so it shrinks with the plane in a preview.

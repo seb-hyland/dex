@@ -34,24 +34,24 @@ OUTLINE_W = 3.4
 # it is going, which is what the two control points of a cubic are. A tee is
 # mostly straight lines with softened corners, so most of these are small.
 SHIRT_HALF = [
-    (228, 84, (6, 28), (-22, -2)),       # left of the neck
-    (170, 68, (24, 6), (-28, 2)),        # shoulder point
-    (76, 116, (30, -14), (-6, 22)),      # sleeve, where the shoulder seam ends
-    (62, 198, (0, -22), (14, 16)),       # cuff, outer corner
-    (134, 226, (-22, 6), (14, -14)),     # cuff, inner corner
-    (180, 186, (-12, 18), None),         # underarm
-    (172, 422, None, (18, 8)),           # side seam, at the hem
+    (232, 92, None, (-30, 8)),           # neck corner, where the collar meets it
+    (150, 120, (26, -8), (-30, -4)),     # shoulder seam, sloping gently down
+    (74, 152, (16, -12), (-2, 12)),      # sleeve, the shoulder tip
+    (58, 214, (0, -16), (18, 4)),        # cuff, outer corner
+    (152, 204, (-18, 4), (8, -10)),      # cuff, inner corner
+    (172, 196, (-6, 10), None),          # underarm
+    (192, 414, None, (16, 6)),           # side seam, at the hem
 ]
-# The neckline dips between the two neck corners and closes the outline. The
-# hem sags between the two side seams, which is `SHIRT_HALF`'s last out-handle
-# meeting its own mirror.
-NECK_DIP = (280, 138, (46, 0), (-46, 0))
+# The neckline dips between the two neck corners and closes the outline — a
+# shallow crew, not a scoop. The hem sags a touch between the two side seams,
+# which is `SHIRT_HALF`'s last out-handle meeting its own mirror.
+NECK_DIP = (280, 120, (42, 0), (-42, 0))
 
 # The collar band: the same dip again, a little lower and a little narrower.
 COLLAR_LINE = [
-    (239, 94, None, (5, 30)),
-    (280, 157, (-46, 0), (46, 0)),
-    (321, 94, (-5, 30), None),
+    (240, 100, None, (6, 22)),
+    (280, 134, (-40, 0), (40, 0)),
+    (320, 100, (-6, 22), None),
 ]
 
 

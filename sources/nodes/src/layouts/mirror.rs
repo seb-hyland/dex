@@ -20,7 +20,14 @@ pub struct Mirror {
 
 #[utils::dynamic_methods]
 impl Mirror {
-    /// A mirror of `target`. The first copy is taken on the next tick.
+    /**
+        A mirror of `target`. The first copy is taken on the next tick.
+
+        `NodeUid::nil()` is allowed and means "nothing yet": a mirror is often
+        built by something that does not know what it will be showing — an
+        output row exists before the pin it stands for is wired to anything —
+        and [`SetMirrorTarget`] points it once there is something to point at.
+    */
     pub fn new(target: NodeUid) -> Mirror {
         Mirror {
             target,
@@ -61,6 +68,10 @@ impl Node for Mirror {
     }
 
     fn tick(&self, ctx: NodeContext) {
+        // A mirror of nothing is waiting.
+        if self.target == NodeUid::nil() {
+            return;
+        }
         let version = ctx.workspace.version_of(self.target);
         let seen_version = *self.seen_version.val_or_else(|| 0);
 
@@ -82,6 +93,24 @@ impl Node for Mirror {
 
 defhandlers! { Mirror {
     actions: [
+        /*
+            Point this mirror somewhere else.
+
+            The copy is dropped rather than kept until the next one is taken:
+            what it holds is a picture of the *old* target, and showing that
+            under a new name for a frame is worse than showing nothing.
+        */
+        SetMirrorTarget { target: NodeUid } => (this, s, ctx) {
+            if this.target != s.target {
+                if let Some(previous) = this.copy.take() {
+                    ctx.workspace.delete_node(previous);
+                }
+                this.target = s.target;
+                // Zero is what `tick` reads as "never synced", so the next one
+                // takes a copy without needing to be told again.
+                this.seen_version.set(0);
+            }
+        },
         Resync { version: u64 } => (this, a, ctx) {
             let ws = ctx.workspace.action_handle();
             if let Some(previous) = this.copy.take() {

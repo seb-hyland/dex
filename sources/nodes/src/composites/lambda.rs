@@ -4,13 +4,14 @@ use dex_core::theme;
 use egui::{Id, Pos2};
 use utils::Transient;
 
-use crate::argtypes::{ArgSpec, ArgType, TypeFault, arg_type_labels, check_arg_types, describe};
+use crate::argtypes::{
+    ArgSpec, ArgType, TypeFault, arg_type_labels, check_arg_types, check_arg_types_in, describe,
+};
 use crate::layouts::desktops::{Desktops, PythonPrelude};
 use crate::primitives::checkout;
 use crate::primitives::dropdown::{Dropdown, DropdownSelection, SetDropdownSelection};
 use crate::scripting::{
-    DataflowOutput, ScriptArg, ScriptOutput, ValueDelegate, is_valid_ident, resolve_arg,
-    run_script_with,
+    DataflowOutput, ScriptArg, ScriptEnv, ScriptOutput, ValueDelegate, is_valid_ident, resolve_arg,
 };
 
 use crate::{
@@ -926,18 +927,41 @@ impl Lambda {
         let task = ComputeTask::new(ctx.id, move || {
             let (handle, actions) = WorkspaceActionHandle::buffered();
             /*
+                One namespace, prepared once and used twice.
+
                 The arguments are checked before the script is handed them, so a
                 mistyped one is reported as itself rather than as whatever the
                 script made of it four lines in — and the wire carrying it is
-                reddened, which says which *node* is wrong.
+                reddened, which says which *node* is wrong. Both halves want the
+                same globals, and building them is what a run costs, so the
+                check and the script share one: the prelude inside it runs at
+                most once, and not at all when the check settles without it and
+                then refuses.
             */
-            let faults = check_arg_types(&py_prelude, &specs);
-            report_faults(&handle, &specs, &faults);
-            if !faults.is_empty() {
-                handle
-                    .insert_node_at_dyn(output, Arc::new(ErrorLayout::message(describe(&faults))));
-            } else {
-                match run_script_with(&source, &py_prelude, &handle, &args, graph) {
+            pyo3::Python::attach(|py| {
+                let prepared = ScriptEnv::new(py, &py_prelude)
+                    .and_then(|env| env.with_runtime(&handle, graph))
+                    .and_then(|env| env.with_args(&args));
+                let mut env = match prepared {
+                    Ok(env) => env,
+                    Err(e) => {
+                        handle.insert_node_at_dyn(
+                            output,
+                            Arc::new(ErrorLayout::message(e.to_string())),
+                        );
+                        return;
+                    }
+                };
+                let faults = check_arg_types_in(&mut env, &specs);
+                report_faults(&handle, &specs, &faults);
+                if !faults.is_empty() {
+                    handle.insert_node_at_dyn(
+                        output,
+                        Arc::new(ErrorLayout::message(describe(&faults))),
+                    );
+                    return;
+                }
+                match env.run(&source) {
                     Ok(ScriptOutput::Nothing) => {
                         handle.insert_node_at_dyn(output, Arc::new(Nothing))
                     }
@@ -946,7 +970,7 @@ impl Lambda {
                     Err(e) => handle
                         .insert_node_at_dyn(output, Arc::new(ErrorLayout::message(e.to_string()))),
                 }
-            }
+            });
             drop(handle);
             actions.try_iter().collect()
         });
@@ -1225,6 +1249,22 @@ defhandlers! { Lambda {
 // LAMBDA CANVAS
 // ================================================================================
 
+/// Keep `mirror` showing `target`, whatever that is now.
+fn follow_with_mirror(
+    ctx: NodeContext,
+    mirror: NodeUid<crate::layouts::mirror::Mirror>,
+    target: Option<NodeUid>,
+    why: &'static str,
+) {
+    use crate::layouts::mirror::{MirrorTarget, SetMirrorTarget};
+
+    let wanted = target.unwrap_or_else(NodeUid::nil);
+    if ctx.workspace.send_request(mirror, MirrorTarget) != Some(wanted) {
+        ctx.workspace
+            .submit_action(mirror, why, SetMirrorTarget { target: wanted });
+    }
+}
+
 /// The tint that marks a parameter apart from the nodes it feeds. Pale on
 /// both counts: a pin is a label, not a control asking to be pressed.
 const PARAM_FILL: Color = Color::rgb(237, 244, 251);
@@ -1248,12 +1288,19 @@ pub struct ComputeParam {
     /// reference rather than a child.
     #[uid_ref]
     source: Option<NodeUid>,
+    /// A live copy of what that is.
+    mirror: NodeUid<crate::layouts::mirror::Mirror>,
 }
 
 #[utils::dynamic_methods]
 impl ComputeParam {
     pub fn build(ws: WorkspaceActionHandle, name: String) -> NodeUid<ComputeParam> {
-        ws.insert_node(Self { name, source: None })
+        let mirror = ws.insert_node(crate::layouts::mirror::Mirror::new(NodeUid::nil()));
+        ws.insert_node(Self {
+            name,
+            source: None,
+            mirror,
+        })
     }
 }
 
@@ -1264,17 +1311,20 @@ impl Node for ComputeParam {
     }
 
     fn draw(&self, mut ctx: DrawContext) -> DrawResult {
-        let shown = self
-            .source
-            .map(|source| resolve_arg(ctx.node.workspace, source).value.display())
-            .unwrap_or_default();
-        let text = if shown.is_empty() {
-            self.name.clone()
-        } else {
-            format!("{}: {}", self.name, shown)
+        // Unwired, a pin is only its name; wired, the name introduces the thing itself.
+        let child = match self.source {
+            None => LayoutChild::Node(Arc::new(Label::new(self.name.clone()))),
+            Some(_) => LayoutChild::Node(Arc::new(HorizontalLayout {
+                children: vec![
+                    LayoutChild::Node(Arc::new(Label::new(format!("{}:", self.name)))),
+                    LayoutChild::Id(self.mirror.erase()),
+                ],
+                spacing: theme::SPACE_SM,
+                allow_wrap: false,
+            })),
         };
         let pill = Bordered {
-            child: LayoutChild::Node(Arc::new(Label::new(text))),
+            child,
             padding: theme::SPACE_MD,
             corner_radius: theme::RADIUS_MD,
             fill_color: PARAM_FILL,
@@ -1283,6 +1333,14 @@ impl Node for ComputeParam {
         };
         let constraints = ctx.constraints;
         ctx.draw_node(&pill, constraints)
+    }
+
+    fn tick(&self, ctx: NodeContext) {
+        follow_with_mirror(ctx, self.mirror, self.source, "Followed the argument");
+    }
+
+    fn on_delete(&self, ctx: NodeContext) {
+        ctx.workspace.delete_node(self.mirror.erase());
     }
 }
 
@@ -1340,7 +1398,12 @@ fn place_param_item(
     source: Option<NodeUid>,
 ) {
     let handle = ws.action_handle();
-    let pin = handle.insert_node(ComputeParam { name, source });
+    let mirror = handle.insert_node(crate::layouts::mirror::Mirror::new(NodeUid::nil()));
+    let pin = handle.insert_node(ComputeParam {
+        name,
+        source,
+        mirror,
+    });
     CanvasNode::build_at(handle, item, pin.erase(), param_slot(slot), PARAM_SIZE);
     ws.submit_action(
         canvas,
@@ -1628,6 +1691,8 @@ pub struct OutputProxy {
     /// owns both this and the canvas.
     #[uid_ref]
     canvas: NodeUid<ComputeCanvas>,
+    /// A live copy of whatever the output pin is wired to.
+    mirror: NodeUid<crate::layouts::mirror::Mirror>,
     /**
         What is wrong with the lambda's arguments, if anything.
 
@@ -1644,8 +1709,10 @@ impl OutputProxy {
         ws: WorkspaceActionHandle,
         canvas: NodeUid<ComputeCanvas>,
     ) -> NodeUid<OutputProxy> {
+        let mirror = ws.insert_node(crate::layouts::mirror::Mirror::new(NodeUid::nil()));
         ws.insert_node(Self {
             canvas,
+            mirror,
             fault: None,
         })
     }
@@ -1663,12 +1730,30 @@ impl Node for OutputProxy {
             return ctx.draw_node(&ErrorLayout::message(fault.clone()), constraints);
         }
         let ws = ctx.node.workspace;
-        let text = ws
+        if ws
             .send_request(self.canvas, OutputConnected)
             .flatten()
-            .map(|node| resolve_arg(ws, node).value.display())
-            .unwrap_or_else(|| "(no output)".to_owned());
-        ctx.draw_node(&Label::new(text), constraints)
+            .is_none()
+        {
+            return ctx.draw_node(&Label::new("(no output)".to_owned()), constraints);
+        }
+        ctx.draw_workspace_node(self.mirror.erase(), constraints)
+            .unwrap_or(DrawResult::Complete { region: None })
+    }
+
+    fn tick(&self, ctx: NodeContext) {
+        follow_with_mirror(
+            ctx,
+            self.mirror,
+            ctx.workspace
+                .send_request(self.canvas, OutputConnected)
+                .flatten(),
+            "Followed the result",
+        );
+    }
+
+    fn on_delete(&self, ctx: NodeContext) {
+        ctx.workspace.delete_node(self.mirror.erase());
     }
 
     fn build_inspector(&self, ctx: NodeContext) -> Option<NodeUid> {

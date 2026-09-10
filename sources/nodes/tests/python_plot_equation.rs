@@ -4,6 +4,11 @@
 //! is that the runner gets the right numbers out of a real canvas lambda, that
 //! which variable is bound decides what kind of picture comes out, and that
 //! sampling the same ground twice does not run it twice.
+//!
+//! And two things about the picture, both regressions: that it draws at all —
+//! the example shares a namespace with the prelude, so a constant named here
+//! that the prelude also names is a live hazard — and that the curve holds
+//! still while the plane moves under it.
 
 use dex_core::prelude::*;
 use dex_nodes::composites::lambda::{
@@ -181,7 +186,7 @@ def transform():
     return "%d" % len(table["x"])
 "#,
     );
-    assert_eq!(columns, "240", "the curve was sampled across the range");
+    assert_eq!(columns, "480", "the curve was sampled across the range");
 
     // A function of y is the same curve on its side: what it returns is the x.
     let (ws, fy) = squared("y");
@@ -237,25 +242,119 @@ def transform():
     );
 }
 
-/// The whole example: the curve lands on a plane, and re-samples as the plane
-/// moves — so zooming in gets you *more* of the curve, not the same points
-/// further apart.
+/// The whole example, drawn: it paints, and nothing on the plane raises.
+///
+/// The example's own module-level names land in the same namespace as the
+/// prelude's, so one that collides silently replaces the prelude's — which is
+/// how a sample count called `GRID` became the colour the axes are drawn in,
+/// and every gridline a `TypeError`. A draw error is caught and painted as
+/// text rather than raised, so the only way to see it is to look at the frame.
 #[test]
-fn the_curve_is_resampled_for_the_visible_range() {
+fn the_whole_plane_draws_without_error() {
     if !has_pyarrow() {
         eprintln!("no pyarrow in this interpreter; skipping");
         return;
     }
     let (mut ws, f) = squared("x");
-    let source = format!("{EQUATION}\n");
+    place_curve(&mut ws, f);
+    let ctx = egui::Context::default();
+    dex_nodes::fonts::install_fonts(&ctx);
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(900.0, 700.0));
+    let mut drawn = Vec::new();
+    for _ in 0..4 {
+        drawn = frame_text(&ctx, &mut ws, screen, Vec::new());
+    }
+    let complaints: Vec<&String> = drawn
+        .iter()
+        .filter(|s| s.contains("error") || s.contains("Error"))
+        .collect();
+    assert!(
+        complaints.is_empty(),
+        "the plane drew an error: {complaints:?}"
+    );
+    assert!(
+        drawn.iter().any(|s| s == "y = f(x)"),
+        "the curve was titled for the variable it is a function of: {drawn:?}"
+    );
+}
+
+/// The curve holds still while the plane moves under it.
+///
+/// It is sampled once over a fixed range, so the mapping from a value to a
+/// place on the plane is fixed too. Re-deriving that mapping from whatever is
+/// on screen is what made the curve fly apart on its own: the window is read
+/// *through* the axis, so an axis worked out from the last sample and rounded
+/// outward moved the window that decided the next one.
+#[test]
+fn the_curve_does_not_move_when_the_plane_does() {
+    if !has_pyarrow() {
+        eprintln!("no pyarrow in this interpreter; skipping");
+        return;
+    }
+    let (mut ws, f) = squared("x");
+    let plane = place_curve(&mut ws, f);
+    let ctx = egui::Context::default();
+    dex_nodes::fonts::install_fonts(&ctx);
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(900.0, 700.0));
+    for _ in 0..3 {
+        frame_text(&ctx, &mut ws, screen, Vec::new());
+    }
+
+    let plot = ws
+        .send_request(plane, dex_nodes::layouts::canvas::layout::CanvasChildren)
+        .and_then(|items| items.first().copied())
+        .and_then(|item| ws.send_request(item, dex_nodes::layouts::canvas::nodes::CanvasNodeChild))
+        .expect("the curve is on the plane");
+    // How the view maps x onto the plane, as the axis reports it.
+    let mapping = |ws: &Workspace| -> String {
+        let script = "def transform():\n    \
+            a = (dex.snapshot.send_request(target, PlotScale()) or {}).get('x') or {}\n    \
+            return '%.6g %.6g' % (a.get('lo', 0.0), a.get('hi', 0.0))\n";
+        let (handle, _actions) = WorkspaceActionHandle::buffered();
+        let args = [("target".to_owned(), ScriptValue::Node(plot))];
+        let out = run_script(
+            &format!("{EQUATION}\n{script}"),
+            PRELUDE,
+            &handle,
+            &args,
+            GraphSnapshot::capture(ws),
+        )
+        .expect("the question runs");
+        let ScriptOutput::Node(node) = out else {
+            panic!("returns the mapping")
+        };
+        dex_nodes::scripting::node_to_value(&*node)
+            .map(|v| v.display())
+            .expect("a mapping")
+    };
+    let before = mapping(&ws);
+    assert_ne!(before, "0 0", "the view published an x axis");
+
+    let over = egui::pos2(450.0, 350.0);
+    frame_text(&ctx, &mut ws, screen, vec![egui::Event::PointerMoved(over)]);
+    for _ in 0..4 {
+        frame_text(&ctx, &mut ws, screen, vec![egui::Event::Zoom(1.4)]);
+    }
+    for _ in 0..4 {
+        frame_text(&ctx, &mut ws, screen, Vec::new());
+    }
+    assert_eq!(
+        before,
+        mapping(&ws),
+        "magnifying the plane moved the picture, not the mapping"
+    );
+}
+
+/// The example's plane, rooted and settled, ready to be drawn.
+fn place_curve(ws: &mut Workspace, equation: NodeUid) -> NodeUid {
     let (handle, actions) = WorkspaceActionHandle::buffered();
-    let args = [("equation".to_owned(), ScriptValue::Node(f))];
+    let args = [("equation".to_owned(), ScriptValue::Node(equation))];
     let out = run_script(
-        &source,
+        &format!("{EQUATION}\n"),
         PRELUDE,
         &handle,
         &args,
-        GraphSnapshot::capture(&ws),
+        GraphSnapshot::capture(ws),
     )
     .expect("the example runs");
     let plane = match out {
@@ -269,77 +368,40 @@ fn the_curve_is_resampled_for_the_visible_range() {
     ws.process_pending();
     ws.set_root(plane);
     ws.process_pending();
+    plane
+}
 
-    let ctx = egui::Context::default();
-    dex_nodes::fonts::install_fonts(&ctx);
-    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(900.0, 700.0));
-    let frame = |ws: &mut Workspace, events: Vec<egui::Event>| {
-        let out = ctx.clone().run_ui(
-            egui::RawInput {
-                screen_rect: Some(screen),
-                events,
-                ..Default::default()
-            },
-            |c| {
-                egui::CentralPanel::default().show(c, |ui| ws.draw_frame(ui, screen));
-            },
-        );
-        ws.process_pending();
-        fn count(shape: &egui::Shape) -> usize {
-            match shape {
-                egui::Shape::Vec(inner) => inner.iter().map(count).sum(),
-                _ => 1,
-            }
-        }
-        out.shapes.iter().map(|c| count(&c.shape)).sum::<usize>()
-    };
-    for _ in 0..3 {
-        frame(&mut ws, Vec::new());
-    }
-
-    // The view is the item on the plane; ask it what range it is covering.
-    let plot = ws
-        .send_request(plane, dex_nodes::layouts::canvas::layout::CanvasChildren)
-        .and_then(|items| items.first().copied())
-        .and_then(|item| ws.send_request(item, dex_nodes::layouts::canvas::nodes::CanvasNodeChild))
-        .expect("the curve is on the plane");
-    let span = |ws: &Workspace| -> String {
-        let script = "def transform():\n    \
-                          return str(dex.snapshot.send_request(target, Resample(0.0, 0.0)))\n";
-        let (handle, _actions) = WorkspaceActionHandle::buffered();
-        let args = [("target".to_owned(), ScriptValue::Node(plot))];
-        // `Resample(0, 0)` is a degenerate range, which `resample` declines, so
-        // this reads the current span without changing it.
-        let out = run_script(
-            &format!("{EQUATION}\n{script}"),
-            PRELUDE,
-            &handle,
-            &args,
-            GraphSnapshot::capture(ws),
-        )
-        .expect("the question runs");
-        let ScriptOutput::Node(node) = out else {
-            panic!("returns the span")
-        };
-        dex_nodes::scripting::node_to_value(&*node)
-            .map(|v| v.display())
-            .expect("a span")
-    };
-    let before = span(&ws);
-
-    // Magnify: the window now covers a much narrower slice of x, and the curve
-    // should have been asked for that slice.
-    let over = egui::pos2(450.0, 350.0);
-    frame(&mut ws, vec![egui::Event::PointerMoved(over)]);
-    for _ in 0..3 {
-        frame(&mut ws, vec![egui::Event::Zoom(2.0)]);
-    }
-    for _ in 0..3 {
-        frame(&mut ws, Vec::new());
-    }
-    let after = span(&ws);
-    assert_ne!(
-        before, after,
-        "the curve was re-sampled for the range now on screen"
+/// Draw one frame, and hand back every string it painted.
+///
+/// The text, because that is where a failure shows: a dynamic node that raises
+/// while drawing is caught and painted as its message rather than propagated.
+fn frame_text(
+    ctx: &egui::Context,
+    ws: &mut Workspace,
+    screen: egui::Rect,
+    events: Vec<egui::Event>,
+) -> Vec<String> {
+    let out = ctx.clone().run_ui(
+        egui::RawInput {
+            screen_rect: Some(screen),
+            events,
+            ..Default::default()
+        },
+        |c| {
+            egui::CentralPanel::default().show(c, |ui| ws.draw_frame(ui, screen));
+        },
     );
+    ws.process_pending();
+    fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Vec(inner) => inner.iter().for_each(|s| walk(s, out)),
+            egui::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+            _ => {}
+        }
+    }
+    let mut text = Vec::new();
+    for clipped in &out.shapes {
+        walk(&clipped.shape, &mut text);
+    }
+    text
 }

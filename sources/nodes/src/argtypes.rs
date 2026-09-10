@@ -7,12 +7,15 @@
 //! what an argument is for moves that report back to the wire that carries it.
 //!
 //! The checks run on a worker thread, alongside the script rather than in front
-//! of it: two of the eight need the interpreter (and the prelude, so a name the
-//! prelude defines resolves), and the frame must not wait for either.
+//! of it: two of the eight need the interpreter, and the frame must not wait
+//! for either. They run in the namespace the script is about to run in, so a
+//! check reads exactly what the script will be handed — and the prelude in that
+//! namespace is loaded only if a declaration names something it defines, which
+//! is what makes a lambda sitting on a guard that says "stop" cost nothing.
 
 use dex_core::prelude::*;
 
-use crate::scripting::{ScriptArg, ScriptValue, seed_globals};
+use crate::scripting::{ScriptArg, ScriptEnv, ScriptValue};
 
 /// What an argument will accept, in the order the dropdown offers them.
 #[derive(Copy, Debug, Default, PartialEq, Eq)]
@@ -213,12 +216,17 @@ fn fault(spec: &ArgSpec, reason: Option<String>) -> TypeFault {
 /**
     Check every argument in `specs` against what it was asked to be.
 
-    `prelude` is run first when the interpreter is needed at all, so a type or a
-    helper the prelude defines is in scope for the two written kinds. Every
-    argument is seeded, not only the one being checked, so an expression may
-    speak about more than its own value.
+    The two written kinds need the interpreter, and only they. Every argument is
+    seeded, not only the one being checked, so an expression may speak about
+    more than its own value — which is what lets a declaration state a
+    convergence criterion rather than only a fact about one number.
+
+    `env` is the namespace the script is about to run in, so a check reads
+    exactly what the script will be handed. The prelude inside it is loaded on
+    demand: a declaration naming nothing the prelude defines never pays for it,
+    and one that refuses ends the run before a script would have.
 */
-pub fn check_arg_types(prelude: &str, specs: &[ArgSpec]) -> Vec<TypeFault> {
+pub fn check_arg_types_in(env: &mut ScriptEnv, specs: &[ArgSpec]) -> Vec<TypeFault> {
     let mut faults = Vec::new();
     let mut deferred = Vec::new();
     for spec in specs {
@@ -229,60 +237,86 @@ pub fn check_arg_types(prelude: &str, specs: &[ArgSpec]) -> Vec<TypeFault> {
         }
     }
     if !deferred.is_empty() {
-        faults.extend(check_in_python(prelude, specs, &deferred));
+        faults.extend(check_in_python(env, &deferred));
     }
     faults
 }
 
+/// The same, for a caller with no script to run afterwards.
+pub fn check_arg_types(prelude: &str, specs: &[ArgSpec]) -> Vec<TypeFault> {
+    // Nothing written means nothing to ask Python, so the interpreter is not
+    // touched at all — which is most calls.
+    if !specs
+        .iter()
+        .any(|spec| settled_here(spec.kind, &spec.value).is_none())
+    {
+        return check_arg_types_in_nothing(specs);
+    }
+    let args: Vec<ScriptArg> = specs.iter().filter_map(ArgSpec::as_script_arg).collect();
+    pyo3::Python::attach(|py| {
+        match ScriptEnv::new(py, prelude).and_then(|env| env.with_args(&args)) {
+            Ok(mut env) => check_arg_types_in(&mut env, specs),
+            Err(_) => Vec::new(),
+        }
+    })
+}
+
+/// The concrete kinds, settled without an interpreter.
+fn check_arg_types_in_nothing(specs: &[ArgSpec]) -> Vec<TypeFault> {
+    specs
+        .iter()
+        .filter(|spec| settled_here(spec.kind, &spec.value) == Some(false))
+        .map(|spec| fault(spec, None))
+        .collect()
+}
+
 /// The two kinds the interpreter has to settle.
-fn check_in_python(prelude: &str, all: &[ArgSpec], deferred: &[&ArgSpec]) -> Vec<TypeFault> {
+fn check_in_python(env: &mut ScriptEnv, deferred: &[&ArgSpec]) -> Vec<TypeFault> {
     use pyo3::prelude::*;
-    use pyo3::types::PyDict;
     use std::ffi::CString;
 
-    let seeds: Vec<ScriptArg> = all.iter().filter_map(ArgSpec::as_script_arg).collect();
-
-    Python::attach(|py| {
-        let globals = PyDict::new(py);
-        let Ok(dex_mod) = dex_dynamic::build_python_module(py) else {
-            return Vec::new();
-        };
-        if globals.set_item("__name__", "__main__").is_err()
-            || globals.set_item("dex", &dex_mod).is_err()
-            || seed_globals(py, &globals, &seeds).is_err()
-        {
-            return Vec::new();
-        }
-        // A prelude that will not run is the script's problem to report, not
-        // this one's: running the script is what puts that error on screen.
-        if let Ok(code) = CString::new(prelude) {
-            let _ = py.run(code.as_c_str(), Some(&globals), Some(&globals));
-        }
-
-        deferred
-            .iter()
-            .filter_map(|spec| {
-                // Nothing written yet is nothing being asked for: an argument
-                // does not fail its declaration while it is still being made.
-                if spec.detail.trim().is_empty() {
-                    return None;
-                }
-                let source = match spec.kind {
+    let py = env.python();
+    let tests: Vec<(&ArgSpec, String)> = deferred
+        .iter()
+        .filter_map(|spec| {
+            // Nothing written yet is nothing being asked for: an argument does
+            // not fail its declaration while it is still being made.
+            if spec.detail.trim().is_empty() {
+                return None;
+            }
+            Some((
+                *spec,
+                match spec.kind {
                     ArgType::Instance => format!("isinstance({}, {})", spec.name, spec.detail),
                     _ => spec.detail.clone(),
-                };
-                let code = CString::new(source).ok()?;
-                match py.eval(code.as_c_str(), Some(&globals), Some(&globals)) {
-                    Ok(verdict) => match verdict.is_truthy() {
-                        Ok(true) => None,
-                        Ok(false) => Some(fault(spec, None)),
-                        Err(e) => Some(fault(spec, Some(e.to_string()))),
-                    },
-                    // A test that will not run is itself the complaint: the
-                    // argument cannot be shown to be what it was asked for.
+                },
+            ))
+        })
+        .collect();
+
+    // One pass to decide whether the library is needed at all.
+    if tests
+        .iter()
+        .any(|(_, source)| env.expression_needs_prelude(source))
+    {
+        let _ = env.ensure_prelude();
+    }
+
+    let globals = env.globals().clone();
+    tests
+        .iter()
+        .filter_map(|(spec, source)| {
+            let code = CString::new(source.as_str()).ok()?;
+            match py.eval(code.as_c_str(), Some(&globals), Some(&globals)) {
+                Ok(verdict) => match verdict.is_truthy() {
+                    Ok(true) => None,
+                    Ok(false) => Some(fault(spec, None)),
                     Err(e) => Some(fault(spec, Some(e.to_string()))),
-                }
-            })
-            .collect()
-    })
+                },
+                // A test that will not run is itself the complaint: the
+                // argument cannot be shown to be what it was asked for.
+                Err(e) => Some(fault(spec, Some(e.to_string()))),
+            }
+        })
+        .collect()
 }

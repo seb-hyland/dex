@@ -257,6 +257,17 @@ dex_dynamic::__rt::inventory::submit! {
 
 dex_dynamic::__rt::inventory::submit! {
     dex_core::stubs::StubGlobal {
+        name: "prelude",
+        // The workspace's own file, so no stub can know what is in it; a
+        // checker is told the module exists and nothing about its members,
+        // which is the truth and is what `Any` says.
+        ty: "PreludeModule",
+        doc: "The workspace prelude as a module, for reaching a name of its own that something nearer has shadowed.",
+    }
+}
+
+dex_dynamic::__rt::inventory::submit! {
+    dex_core::stubs::StubGlobal {
         name: "args",
         ty: "Args",
         doc: "The node behind each argument, for a transform that means to write back.",
@@ -506,6 +517,237 @@ impl From<NulError> for ScriptError {
     }
 }
 
+// ================================================================================
+// THE SCRIPT ENVIRONMENT
+// ================================================================================
+
+/// Every name the prelude binds at the top level, read from its source.
+///
+/// Used to decide whether an expression needs the prelude run before it can be
+/// evaluated. Reading the source rather than the namespace is the whole point:
+/// the namespace only exists once the prelude has run, which is the cost this
+/// is trying to avoid paying.
+///
+/// It sees `def`, `class`, and plain assignment at column zero, which is how
+/// the prelude defines everything. A name bound some other way — inside a
+/// top-level loop, or through `globals()` — would be missed, and an expression
+/// naming it would be evaluated without the prelude and raise `NameError`.
+fn prelude_top_level_names(prelude: &str) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    for line in prelude.lines() {
+        // Column zero only: anything indented is inside something else.
+        if line.starts_with([' ', '\t']) || line.is_empty() {
+            continue;
+        }
+        let name = if let Some(rest) = line.strip_prefix("def ") {
+            rest.split('(').next()
+        } else if let Some(rest) = line.strip_prefix("class ") {
+            rest.split(['(', ':']).next()
+        } else {
+            // An assignment, but not a comparison or an augmented one: the name
+            // is everything before a lone `=`, and it has to be an identifier.
+            line.split_once('=')
+                .filter(|(before, after)| {
+                    !before.ends_with(['=', '!', '<', '>', '+', '-', '*', '/'])
+                        && !after.starts_with('=')
+                })
+                .map(|(before, _)| before.split(':').next().unwrap_or(before))
+        };
+        if let Some(name) = name.map(str::trim)
+            && is_valid_ident(name)
+        {
+            names.insert(name.to_owned());
+        }
+    }
+    names
+}
+
+/**
+    The Python namespace one run happens in: `dex`, the prelude, the arguments.
+
+    Built once and used more than once. A lambda checks its arguments before it
+    hands them to its script, and both halves want the same namespace — so
+    preparing it twice, which is what running the prelude twice amounts to, was
+    most of what a run cost.
+
+    The prelude is loaded **lazily** and at most once. A declaration that names
+    nothing the prelude defines is settled without it, and a declaration that
+    refuses ends the run before any script needs it — so a lambda sitting on a
+    guard that says "stop" costs no prelude at all.
+
+    Precedence, lowest first: the prelude's exports, then the arguments, then
+    whatever the script itself defines. Each is more local than the last, and
+    the prelude keeps its own module namespace, so shadowing one of its names
+    changes what the *script* sees without reaching inside the prelude's own
+    functions.
+*/
+pub struct ScriptEnv<'py> {
+    py: pyo3::Python<'py>,
+    dex: pyo3::Bound<'py, pyo3::types::PyModule>,
+    globals: pyo3::Bound<'py, pyo3::types::PyDict>,
+    prelude: String,
+    defines: std::collections::HashSet<String>,
+    /// Bound once the prelude has run. Held because the functions exported out
+    /// of it resolve their own globals *there*, not in the script's namespace.
+    loaded: Option<pyo3::Bound<'py, pyo3::types::PyModule>>,
+}
+
+impl<'py> ScriptEnv<'py> {
+    /// A namespace with `dex` in it and nothing else yet.
+    pub fn new(py: pyo3::Python<'py>, prelude: &str) -> pyo3::PyResult<Self> {
+        use pyo3::prelude::*;
+        use pyo3::types::PyDict;
+
+        let dex = dex_dynamic::build_python_module(py)?;
+        let globals = PyDict::new(py);
+        // Present the exec namespace as the `__main__` module.
+        globals.set_item("__name__", "__main__")?;
+        globals.set_item("dex", &dex)?;
+        Ok(Self {
+            py,
+            dex,
+            globals,
+            prelude: prelude.to_owned(),
+            defines: prelude_top_level_names(prelude),
+            loaded: None,
+        })
+    }
+
+    /// Seed `dex.ws` (writes) and `dex.snapshot` (reads).
+    pub fn with_runtime(
+        self,
+        handle: &WorkspaceActionHandle,
+        graph: GraphSnapshot,
+    ) -> pyo3::PyResult<Self> {
+        use pyo3::prelude::*;
+
+        let ws = pyo3::Bound::new(self.py, handle.clone())?;
+        self.dex.add("ws", ws)?;
+        let snapshot = pyo3::Bound::new(self.py, dex_core::snapshot::PySnapshot::new(graph))?;
+        self.dex.add("snapshot", snapshot)?;
+        Ok(self)
+    }
+
+    /// Seed each argument as a global, and `dex.args` with where it came from.
+    pub fn with_args(self, args: &[ScriptArg]) -> pyo3::PyResult<Self> {
+        use pyo3::prelude::*;
+
+        let arg_table = pyo3::Bound::new(self.py, ScriptArgs::new(args))?;
+        self.dex.add("args", arg_table)?;
+        seed_globals(self.py, &self.globals, args)?;
+        Ok(self)
+    }
+
+    /// The namespace a script or an expression runs in.
+    pub fn globals(&self) -> &pyo3::Bound<'py, pyo3::types::PyDict> {
+        &self.globals
+    }
+
+    /// The interpreter this namespace belongs to.
+    pub fn python(&self) -> pyo3::Python<'py> {
+        self.py
+    }
+
+    /// Whether `expr` names anything only the prelude defines.
+    pub fn expression_needs_prelude(&self, expr: &str) -> bool {
+        use pyo3::prelude::*;
+
+        if self.loaded.is_some() || self.defines.is_empty() {
+            return false;
+        }
+        let Ok(ast) = self.py.import("ast") else {
+            return true;
+        };
+        // A parse that fails says nothing about what the expression names, so
+        // the prelude is run and the eval is left to report the syntax error.
+        let Ok(tree) = ast.call_method1("parse", (expr, "<declaration>", "eval")) else {
+            return true;
+        };
+        let (Ok(walk), Ok(name_ty)) = (ast.call_method1("walk", (tree,)), ast.getattr("Name"))
+        else {
+            return true;
+        };
+        let Ok(nodes) = walk.try_iter() else {
+            return true;
+        };
+        for node in nodes.flatten() {
+            let Ok(true) = node.is_instance(&name_ty) else {
+                continue;
+            };
+            let Ok(id) = node.getattr("id").and_then(|id| id.extract::<String>()) else {
+                return true;
+            };
+            let bound = self.globals.contains(&id).unwrap_or(false);
+            if !bound && self.defines.contains(&id) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /**
+        Run the prelude, once, into a module namespace of its own.
+
+        Two things come of the separate namespace. `dex.prelude` is that module,
+        so every name the library defines can be reached unambiguously however
+        the script's own namespace is arranged. And the library's functions
+        resolve each other *there* — so a script, or an argument, named `line`
+        shadows the export without breaking the `card` that calls it.
+
+        The public names are copied out into the script's namespace as well, so
+        `line(...)` keeps working; a name already bound wins, which is what puts
+        the arguments above the prelude.
+    */
+    pub fn ensure_prelude(&mut self) -> pyo3::PyResult<()> {
+        use pyo3::prelude::*;
+        use pyo3::types::PyModule;
+
+        if self.loaded.is_some() {
+            return Ok(());
+        }
+        let module = PyModule::new(self.py, "dex_prelude")?;
+        let namespace = module.dict();
+        namespace.set_item("dex", &self.dex)?;
+        let code = CString::new(self.prelude.as_str())
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("prelude contains a NUL byte"))?;
+        self.py
+            .run(code.as_c_str(), Some(&namespace), Some(&namespace))?;
+
+        // Reachable as a whole, and exported name by name.
+        self.dex.add("prelude", &module)?;
+        for (key, value) in namespace.iter() {
+            let Ok(name) = key.extract::<String>() else {
+                continue;
+            };
+            if name.starts_with('_') || self.globals.contains(&name).unwrap_or(false) {
+                continue;
+            }
+            self.globals.set_item(name, value)?;
+        }
+        self.loaded = Some(module);
+        Ok(())
+    }
+
+    /// Run `source` in this namespace and call the `transform` it defines.
+    pub fn run(&mut self, source: &str) -> Result<ScriptOutput, ScriptError> {
+        use pyo3::prelude::*;
+
+        let map_err = |e: pyo3::PyErr| ScriptError::Python(e.to_string());
+        let code = CString::new(source)?;
+        self.ensure_prelude().map_err(map_err)?;
+        self.py
+            .run(code.as_c_str(), Some(&self.globals), Some(&self.globals))
+            .map_err(map_err)?;
+        let Some(transform) = self.globals.get_item("transform").map_err(map_err)? else {
+            return Err(ScriptError::Python(
+                "script must define a `transform` function".to_owned(),
+            ));
+        };
+        let result = transform.call0().map_err(map_err)?;
+        Ok(extract_python(&result))
+    }
+}
+
 /**
     Run `source` as Python with `handle` as context and `args` seeded as globals.
 
@@ -524,7 +766,7 @@ pub fn run_script(
         .iter()
         .map(|(name, value)| ScriptArg::detached(name.clone(), value.clone()))
         .collect();
-    run_python(source, py_prelude, handle, &args, graph)
+    run_script_with(source, py_prelude, handle, &args, graph)
 }
 
 /// Run `source` with arguments that know where they came from, so `dex.args`
@@ -536,54 +778,13 @@ pub fn run_script_with(
     args: &[ScriptArg],
     graph: GraphSnapshot,
 ) -> Result<ScriptOutput, ScriptError> {
-    run_python(source, py_prelude, handle, args, graph)
-}
-
-fn run_python(
-    source: &str,
-    prelude: &str,
-    handle: &WorkspaceActionHandle,
-    args: &[ScriptArg],
-    graph: GraphSnapshot,
-) -> Result<ScriptOutput, ScriptError> {
-    use pyo3::prelude::*;
-    use pyo3::types::PyDict;
-
-    let code = CString::new(source)?;
-    Python::attach(|py| {
-        let map_err = |e: PyErr| ScriptError::Python(e.to_string());
-        let dex_mod = dex_dynamic::build_python_module(py).map_err(map_err)?;
-
-        // Seed `dex.ws` (writes) and `dex.snapshot` (reads).
-        let ws = Bound::new(py, handle.clone()).map_err(map_err)?;
-        dex_mod.add("ws", ws).map_err(map_err)?;
-        let snapshot =
-            Bound::new(py, dex_core::snapshot::PySnapshot::new(graph)).map_err(map_err)?;
-        dex_mod.add("snapshot", snapshot).map_err(map_err)?;
-        // Where each argument's value was read from, for a script that writes back.
-        let arg_table = Bound::new(py, ScriptArgs::new(args)).map_err(map_err)?;
-        dex_mod.add("args", arg_table).map_err(map_err)?;
-
-        let globals = PyDict::new(py);
-        // Present the exec namespace as the `__main__` module.
-        globals.set_item("__name__", "__main__").map_err(map_err)?;
-        globals.set_item("dex", &dex_mod).map_err(map_err)?;
-
-        seed_globals(py, &globals, args).map_err(map_err)?;
-
-        // Run the prelude into the shared namespace, then the source.
-        let prelude = CString::new(prelude)?;
-        py.run(prelude.as_c_str(), Some(&globals), Some(&globals))
+    pyo3::Python::attach(|py| {
+        let map_err = |e: pyo3::PyErr| ScriptError::Python(e.to_string());
+        let mut env = ScriptEnv::new(py, py_prelude)
+            .and_then(|env| env.with_runtime(handle, graph))
+            .and_then(|env| env.with_args(args))
             .map_err(map_err)?;
-        py.run(code.as_c_str(), Some(&globals), Some(&globals))
-            .map_err(map_err)?;
-        let Some(transform) = globals.get_item("transform").map_err(map_err)? else {
-            return Err(ScriptError::Python(
-                "script must define a `transform` function".to_owned(),
-            ));
-        };
-        let result = transform.call0().map_err(map_err)?;
-        Ok(extract_python(&result))
+        env.run(source)
     })
 }
 

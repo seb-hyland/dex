@@ -38,7 +38,10 @@ pub mod prelude {
             BOLD_FAMILY, BOLD_ITALIC_FAMILY, Color, CursorIcon, Font, ITALIC_FAMILY, Stroke,
             StrokeKind, TextMetrics, TextWrap,
         },
-        workspace::{LoadWorkspace, SaveError, Workspace, WorkspaceActionHandle},
+        workspace::{
+            LoadWorkspace, SaveError, Workspace, WorkspaceActionHandle, claim_layer_area,
+            mark_layer_claimed, reset_layer_areas,
+        },
         *,
     };
     pub use std::sync::Arc;

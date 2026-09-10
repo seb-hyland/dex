@@ -3,7 +3,13 @@
 Bind `equation` to a string like `"a*x**2 + b*x + c"` and `params` to a
 space-separated parameter list like `"x a b c"`. The transform returns a new
 canvas lambda computing that expression — the kind of thing
-`symbolic_derivative.py` is meant to be pointed at.
+`symbolic_derivative.py` is meant to be pointed at, and what `plot_equation.py`
+samples and draws.
+
+With neither wired it builds `DEFAULT_EQUATION` below, so it does something the
+moment it is placed rather than raising at a name nobody has connected yet.
+(`eq.py` is this file with the equation written in as a constant you edit —
+reach for that one when the equation is the thing you are changing.)
 
 The expression is parsed with Python's own `ast` module rather than by hand:
 the grammar is already exactly the one we want, and reusing it means the parser
@@ -11,6 +17,11 @@ cannot disagree with what the string looks like it says.
 """
 
 import ast
+
+#: What it builds with nothing wired in: a function of `x` alone, which is what
+#: `plot_equation.py` can draw as a curve.
+DEFAULT_EQUATION = "4*x**2 + 2*x + 1"
+DEFAULT_PARAMS = "x"
 
 ADD, SUB, MULT, DIV, POW = "add", "sub", "mult", "div", "pow"
 
@@ -219,4 +230,7 @@ def build(ws, equation, params):
 
 
 def transform():
-    return build(dex.ws, equation, params.split())
+    """The canvas lambda for `equation`, or for the one written in above."""
+    written = globals().get("equation") or DEFAULT_EQUATION
+    names = globals().get("params") or DEFAULT_PARAMS
+    return build(dex.ws, written, names.split())

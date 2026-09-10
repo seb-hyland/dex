@@ -13,10 +13,12 @@
 
 use dex_core::prelude::*;
 use dex_nodes::layouts::canvas::layout::{
-    AddCanvasItem, AdoptCanvasNode, Canvas, CanvasChildren, CanvasViewOrigin, Layer,
+    AddCanvasItem, AdoptCanvasNode, Canvas, CanvasChildren, CanvasViewOrigin, CanvasZoom, Layer,
     NodeScreenRect, SwapCanvasItem,
 };
-use dex_nodes::layouts::canvas::nodes::{CanvasItemBounds, CanvasNodeChild, NudgeCanvasItem};
+use dex_nodes::layouts::canvas::nodes::{
+    CanvasItemBounds, CanvasNodeChild, NudgeCanvasItem, StaticCanvasItem,
+};
 use dex_nodes::layouts::{LayoutChild, ScrollLayout};
 use dex_nodes::primitives::interaction::{InteractionBox, WasClicked, WasDragged, WasHovered};
 use dex_nodes::primitives::shapes::Rect;
@@ -286,6 +288,62 @@ fn the_wheel_scrolls_the_item_under_it() {
     assert!(
         after < before - 10.0,
         "the wheel scrolled the item: the block moved up from {before} to {after}"
+    );
+}
+
+/// Zooming with the cursor over a nested surface zooms it, not the one holding
+/// it.
+///
+/// Both surfaces see the same pinch, and the cursor is inside both — the inner
+/// is inside the outer — so without a guard both magnify. The one holding the
+/// cursor's nearest surface takes it; the other stays put.
+#[test]
+fn zooming_a_nested_surface_leaves_the_outer_one_put() {
+    let mut h = Harness::new(Arc::new(dex_nodes::primitives::nothing::Nothing));
+
+    // A nested surface as an item, placed as `on_plane` does (a StaticCanvasItem,
+    // which declines the inspector's lens, so only `surface_at` finds it).
+    let inner = Canvas::build(h.ws.action_handle());
+    let item = StaticCanvasItem::build(h.ws.action_handle(), inner.erase(), PLACE, ITEM_SIZE);
+    h.ws.submit_action(
+        h.canvas,
+        "the nested surface",
+        AdoptCanvasNode {
+            node: item.erase(),
+            layer: Layer::Midground,
+        },
+    );
+    h.ws.process_pending();
+    for _ in 0..3 {
+        h.frame(vec![]);
+    }
+
+    let rect = h
+        .ws
+        .send_request(h.canvas, NodeScreenRect { node: item.erase() })
+        .flatten()
+        .expect("the item is on screen");
+    let over = egui::pos2((rect.min.x + rect.max.x) / 2.0, (rect.min.y + rect.max.y) / 2.0);
+
+    let outer_before = h.ws.send_request(h.canvas, CanvasZoom).expect("outer zoom");
+    let inner_before = h.ws.send_request(inner, CanvasZoom).expect("inner zoom");
+
+    h.move_to(over);
+    for _ in 0..4 {
+        h.frame(vec![egui::Event::Zoom(1.3)]);
+    }
+    h.frame(vec![]);
+
+    let outer_after = h.ws.send_request(h.canvas, CanvasZoom).expect("outer zoom");
+    let inner_after = h.ws.send_request(inner, CanvasZoom).expect("inner zoom");
+
+    assert!(
+        (outer_after - outer_before).abs() < 1e-3,
+        "the outer surface zoomed too: {outer_before} to {outer_after}"
+    );
+    assert!(
+        inner_after > inner_before + 1e-3,
+        "the nested surface under the cursor did zoom: {inner_before} to {inner_after}"
     );
 }
 

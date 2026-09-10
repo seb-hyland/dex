@@ -16,9 +16,14 @@ WHAT IS HERE
   * **The layouts.** Scatter, bars, strip, violin, heatmap, phylogeny
     (hierarchical and circular), circos, and a 3D projection. Each is a node in
     its own right; build one, put it on a plane, wire it to anything.
-  * **The data explorer**, the one thing offered in the sidebar — as a lambda,
-    "Generate data explorer", that you wire a table into. A bar of dropdowns
-    over whichever layout the data calls for, drawn on a plane you pan and zoom.
+  * **The data explorer**, offered in the sidebar as a lambda, "Generate data
+    explorer", that you wire a table into. A bar of dropdowns over whichever
+    layout the data calls for, drawn on a plane you pan and zoom.
+
+The join between two views — a line drawn between the same record in each — is
+the library's, not a view's: `link_views` hangs a `Correspondence` over a pair,
+reaching through a plane to the view on it so two explorers or trees connect as
+readily as two bare plots. `examples/connect_views.py` is the worked example.
 
 WHY THE PROTOCOL
 
@@ -84,6 +89,7 @@ POINT_LABEL = "dex.plot.point_label"
 SELECTION = "dex.plot.selection"
 HOVER_ROW = "dex.plot.hover_row"
 ROW_TABLE = "dex.plot.row_table"
+ROW_GROUP = "dex.plot.row_group"
 PLOT_SCALE = "dex.plot.scale"
 PLOT_NAME = "dex.plot.name"
 KEPT_NODE = "dex.plot.kept_node"
@@ -96,8 +102,8 @@ SET_ENCODING = "dex.plot.set_encoding"
 #: Every tag a view answers, for a surface passing questions down to its plot.
 PROTOCOL = (
     ROW_KEYS, DRAWN_POINTS, DRAWN_POINT, ROW_VALUES, SOURCE_TABLE, ENCODING,
-    POINT_LABEL, SELECTION, HOVER_ROW, ROW_TABLE, PLOT_SCALE, PLOT_NAME,
-    KEPT_NODE, KEEP_NODE, PLOT_STATS, SET_CHROME,
+    POINT_LABEL, SELECTION, HOVER_ROW, ROW_TABLE, ROW_GROUP, PLOT_SCALE,
+    PLOT_NAME, KEPT_NODE, KEEP_NODE, PLOT_STATS, SET_CHROME,
     SET_SELECTION, SET_ENCODING,
 )
 
@@ -197,6 +203,21 @@ class RowTable(dex.Request):
     """
 
     name = ROW_TABLE
+
+    def __init__(self, row_id):
+        self.row_id = row_id
+
+
+class RowGroup(dex.Request):
+    """Every row the mark holding `row_id` stands for, as a list of row ids.
+
+    One id back, from a view with a mark per record. A whole category, from one
+    whose mark *is* a category — a bar, a heatmap cell, a circos sector. What
+    lets a readout drawn somewhere else say how much a click actually picked up
+    without knowing which kind of picture it picked it up from.
+    """
+
+    name = ROW_GROUP
 
     def __init__(self, row_id):
         self.row_id = row_id
@@ -363,6 +384,21 @@ def at(x, y, w=None, h=None):
         x=dex.AxisConstraint.Exactly(w) if w is not None else None,
         y=dex.AxisConstraint.Exactly(h) if h is not None else None,
         wrap=None, should_clip=False,
+    )
+
+
+def box_at(x, y, w, h):
+    """`at`, but clipping whatever is drawn to the box it is given.
+
+    For a node with a mind of its own about how big it is — a `Table` asked for
+    less room than its columns want — so it scrolls inside the box rather than
+    spilling out over whatever the box was drawn on top of.
+    """
+    return dex.DrawConstraints(
+        pos=dex.ScreenPos.new(x, y),
+        x=dex.AxisConstraint.Exactly(w),
+        y=dex.AxisConstraint.Exactly(h),
+        wrap=None, should_clip=True,
     )
 
 
@@ -823,10 +859,25 @@ class Frame:
         return {c: self.data[c][i] for c in self.columns}
 
     def row_slice(self, i):
-        """Row `i` as a one-row Arrow table — what the overlay shows."""
+        """Row `i` as a one-row Arrow table."""
         if not (0 <= i < self.n):
             return None
         return self.table.slice(i, 1)
+
+    def rows_slice(self, rows):
+        """Those rows as an Arrow table — what the click readout shows.
+
+        A `take` rather than a slice, because the rows behind one mark are not
+        generally next to each other: the rows a bar counts, or a heatmap cell
+        crosses, are scattered the length of the table. One row still slices,
+        which is the common case and costs nothing.
+        """
+        rows = [i for i in rows if 0 <= i < self.n]
+        if not rows:
+            return None
+        if len(rows) == 1:
+            return self.table.slice(rows[0], 1)
+        return self.table.take(rows)
 
     def levels(self, column, cap=MAX_CATEGORIES):
         """The distinct categories of `column`, in first-seen order, capped."""
@@ -879,15 +930,76 @@ FOOT = 34.0
 TOP = 26.0
 MARGIN = 14.0
 
-#: How much room the row table gets in the click overlay: a header, a row, and
-#: the scroll bar a wide record needs to reach the rest of its columns.
-ROW_TABLE_H = 76.0
+#: How the readout's `Table` lays itself out, so a card can be built the size of
+#: what it is about to hold. Its header, one of its rows, and the room its
+#: horizontal scroll bar takes to reach the columns that did not fit.
+TABLE_HEADER_H = 24.0
+TABLE_ROW_H = 21.0
+TABLE_CHROME = 12.0
+#: The most rows the readout is drawn tall enough for. Past this the table
+#: scrolls inside the card: a bar standing for four thousand records is a table,
+#: not a card, and a card as tall as the screen shows the picture behind it
+#: none the better.
+ROW_TABLE_MAX_ROWS = 10
 #: How wide the click overlay is, before its readout asks for more. Wide enough
 #: for a few columns of a record; a wider one scrolls inside its own table.
 ROW_CARD_W = 460.0
 #: How many points a violin's density curve is sampled at. Enough to read as a
 #: curve, few enough that a wide table stays cheap.
 VIOLIN_STEPS = 48
+
+
+def selection_lines(row, count, label):
+    """The readout's heading for a selection, and the label under it.
+
+    The count when a mark stands for many, because the number *is* the reading —
+    that is what a bar chart is showing — and the row id when it stands for one,
+    because then the record is the thing itself.
+    """
+    head = "%d rows" % count if count != 1 else "Row %d" % row
+    return [head] + [s for s in (label or "").split(", ") if s]
+
+
+def row_table_height(count):
+    """How tall the readout's table has to be to show `count` rows.
+
+    Sized to what it holds rather than to a constant: a card built for one row
+    and handed one leaves a row-shaped band of nothing under it, which reads as
+    a second, empty record rather than as slack.
+    """
+    rows = max(1, min(count, ROW_TABLE_MAX_ROWS))
+    return TABLE_HEADER_H + rows * TABLE_ROW_H + TABLE_CHROME
+
+
+def paint_selection(ctx, x, y, w, h, lines, table, count):
+    """The click readout, pinned to the bottom-right of `(x, y, w, h)`.
+
+    A few lines saying what was clicked, and under them the records behind it as
+    a real `Table` node. One drawing, used by a view drawing its own readout and
+    by the chrome in a plane's foreground drawing it for one — the two differ in
+    where the table comes from, and in nothing else.
+    """
+    (cw, ch) = card_size(ctx, lines, READOUT_FONT)
+    table_h = 0.0
+    if table is not None:
+        # As tall as the rows it holds, but never taller than the box it is
+        # pinned inside — a card running off the top of the picture is worse
+        # than one whose table scrolls.
+        room = max(h - ch - 24.0, TABLE_HEADER_H + TABLE_ROW_H)
+        table_h = min(row_table_height(count), room)
+    width = max(min(w - 16.0, max(cw, ROW_CARD_W)), 80.0)
+    height = ch + (table_h + 6.0 if table is not None else 0.0)
+    left = x + w - width - 8.0
+    top = max(y + 4.0, y + h - height - 8.0)
+    rect(ctx, left, top, width, height, PANEL, PANEL_EDGE, 5.0, 250)
+    step = READOUT_FONT + 4.0
+    for (k, s) in enumerate(lines):
+        text(ctx, s, left + 9.0, top + 6.0 + k * step, READOUT_FONT, INK,
+             bold=(k == 0))
+    if table is not None:
+        # Clipped: the table would rather be as wide as its columns and as tall
+        # as its rows, and it is being asked to fit in a card.
+        ctx.draw_node(table, box_at(left + 6.0, top + ch, width - 12.0, table_h))
 
 
 class Plot:
@@ -949,9 +1061,14 @@ class Plot:
         self._scale = None
         # The figures this frame worked out. Published by `publish_stats`.
         self._stats = []
-        # The one-row `Table` node the overlay shows, and which row it is for.
+        # The `Table` node the overlay shows, and which rows it is for.
         self._row_table = None
         self._row_table_for = None
+        # What `rows_at` last answered, and for which row. Worked out once per
+        # selection: a bar's group costs a pass over the table, and the readout
+        # asks for it every frame.
+        self._group_for = None
+        self._group = []
         # Whatever was expensive to get, by whatever key got it. See `KeepNode`.
         self._kept = {}
         # A stable sideways jitter per row, so a strip does not shimmer.
@@ -1010,6 +1127,53 @@ class Plot:
                  for (_, col) in self.channels()]
         return ", ".join(parts)
 
+    # -- what a mark stands for ------------------------------------------
+
+    def rows_at(self, row):
+        """Every record the mark holding `row` stands for.
+
+        One, for a layout with a mark per record — a scatter, a strip, a cloud.
+        A layout whose mark is a *category* overrides this and answers the whole
+        group, because that is what the click asked about: a bar is four hundred
+        rows, and showing one arbitrary member of it as though it were the bar
+        is the wrong answer to the question.
+        """
+        return [row] if self.frame.row(row) is not None else []
+
+    def group(self, row):
+        """`rows_at`, worked out once per selection rather than once a frame."""
+        if row != self._group_for:
+            self._group_for = row
+            self._group = self.rows_at(row)
+        return self._group
+
+    def forget_group(self):
+        """Drop what was worked out about the selection.
+
+        Called when the columns change: which rows a mark stands for is a
+        question about the encoding, and the old answer is about the old one.
+        """
+        self._group_for = None
+        self._group = []
+        self._row_table_for = None
+
+    def point_inks(self, rows):
+        """One colour per drawn row: by the `color` column if there is one.
+
+        On the spine rather than on any one layout: a scatter, a cloud and
+        anything else drawing a mark per record all colour them the same way,
+        and a layout that does not read `color` simply never calls this.
+        """
+        column = self.enc.get("color")
+        if not column:
+            return [POINT] * len(rows)
+        levels = self.frame.levels(column)
+        palette = spread_palette(len(levels))
+        rank = {v: j for (j, v) in enumerate(levels)}
+        return [palette[rank[self.frame.value(column, i)]]
+                if self.frame.value(column, i) in rank else POINT
+                for i in rows]
+
     # -- the protocol ----------------------------------------------------
 
     def request(self, req, ctx):
@@ -1040,6 +1204,8 @@ class Plot:
             return self.hovered
         if tag == ROW_TABLE:
             return self.row_table(ctx, req.row_id)
+        if tag == ROW_GROUP:
+            return list(self.group(req.row_id))
         if tag == PLOT_SCALE:
             return self._scale
         if tag == PLOT_NAME:
@@ -1069,6 +1235,7 @@ class Plot:
                     column is None or column in self.frame.columns
                 ):
                     self.enc[channel] = column
+            self.forget_group()
             self.on_encoding_changed()
             return dict(self.enc)
         return NotImplemented
@@ -1102,6 +1269,7 @@ class Plot:
         self.enc.update(default_encoding(self.frame, layout, {
             c: self.enc.get(c) for c in CHANNEL_NAMES if self.enc.get(c)
         }))
+        self.forget_group()
         self.on_encoding_changed()
 
     # -- recording what was drawn ----------------------------------------
@@ -1231,19 +1399,22 @@ class Plot:
         card(ctx, left, top, cw, ch, lines, READOUT_FONT, INK, PANEL_EDGE)
 
     def row_table(self, ctx, row):
-        """The one-row `Table` node for `row`, built the first time it is asked
-        for and kept until another row is selected.
+        """The `Table` node for what the mark holding `row` stands for, built
+        the first time it is asked for and kept until the selection moves.
 
         A real table, not a drawn grid: it is the same node a wired `Table` is,
-        so the row shows with its real column types and formatting.
+        so the records show with their real column types and formatting. For a
+        mark standing for many rows — a bar, a heatmap cell — that is all of
+        them, which is what was clicked. See `rows_at`.
         """
-        if row == self._row_table_for and self._row_table is not None:
+        rows = self.group(row)
+        if rows == self._row_table_for and self._row_table is not None:
             return self._row_table
         ws = workspace_of(ctx)
         if self._row_table is not None:
             ws.delete_node(self._row_table)
             self._row_table = None
-        sliced = self.frame.row_slice(row)
+        sliced = self.frame.rows_slice(rows)
         if sliced is None:
             self._row_table_for = None
             return None
@@ -1251,38 +1422,20 @@ class Plot:
         # No frame of its own: it is seated inside a card that is already one,
         # and two borders a pixel apart read as a mistake rather than a nesting.
         ws.submit_action(self._row_table, dex.SetTableBordered(False),
-                         "Seated the row in the readout")
-        self._row_table_for = row
+                         "Seated the records in the readout")
+        self._row_table_for = list(rows)
         return self._row_table
 
-    def overlay_size(self, ctx, row):
-        """How big the click overlay comes out: the readout over the row."""
-        lines = ["Row %d" % row] + self.point_label(row).split(", ")
-        (cw, ch) = card_size(ctx, lines, READOUT_FONT)
-        return (lines, max(cw, ROW_CARD_W), ch + ROW_TABLE_H + 8.0)
-
     def draw_overlay(self, ctx, x, y, w, h, row):
-        """The whole record, pinned to the bottom-right: the hover readout, and
-        under it the row itself as a table."""
+        """The whole record, pinned to the bottom-right: the readout, and under
+        it the rows behind the mark as a table."""
         mark = self._local_pos.get(row)
         if mark is not None:
             ring(ctx, mark[0], mark[1], POINT_R + 6.0, LINE, 2.0)
-        (lines, width, height) = self.overlay_size(ctx, row)
-        left = x + w - width - 6.0
-        top = y + h - height - 6.0
-        self.paint_overlay(ctx, left, top, width, height, lines, row)
-
-    def paint_overlay(self, ctx, left, top, width, height, lines, row):
-        """The overlay's own drawing, so a plane's chrome can put it elsewhere."""
-        rect(ctx, left, top, width, height, PANEL, PANEL_EDGE, 5.0, 250)
-        step = READOUT_FONT + 4.0
-        for (k, s) in enumerate(lines):
-            text(ctx, s, left + 9.0, top + 6.0 + k * step, READOUT_FONT, INK,
-                 bold=(k == 0))
-        table = self.row_table(ctx, row)
-        if table is not None:
-            ctx.draw_node(table, at(left + 6.0, top + len(lines) * step + 10.0,
-                                     width - 12.0, ROW_TABLE_H - 8.0))
+        rows = self.group(row)
+        paint_selection(ctx, x, y, w, h,
+                        selection_lines(row, len(rows), self.point_label(row)),
+                        self.row_table(ctx, row), len(rows))
 
 
 # ======================================================================
@@ -1401,6 +1554,34 @@ def captions_fit(ctx, labels, slot):
     return True
 
 
+def names_fit(ctx, labels, slot):
+    """Whether every one of these fits a slot that wide *whole*.
+
+    The test for a caption that will not be truncated. `captions_fit` asks only
+    whether a stump would fit, which is right where a stump is what gets drawn —
+    a category axis, where "Torger" is visibly the front of a longer word. It is
+    wrong where the name is written out in full and the reader has no way to
+    tell: "Species 1" is not a shortening of "Species 12", it is a different
+    tip, and drawing one for the other is worse than drawing neither.
+    """
+    room = slot - 4.0
+    if room <= 0.0:
+        return False
+    return all(measure(ctx, str(label), TICK_FONT)[0] <= room for label in labels)
+
+
+def captions_stack(ctx, spacing):
+    """Whether one caption per slot can be read when the slots are `spacing`
+    apart *across* the line each is written on.
+
+    The width test `captions_fit` makes is the wrong one for captions laid down
+    a page or fanned around a ring: those are as wide as there is room for, and
+    what runs out is the gap between one line of text and the next. All or none,
+    for the same reason as `captions_fit`.
+    """
+    return spacing >= TICK_FONT + 2.0
+
+
 def x_caption(ctx, caption, cx, baseline, slot):
     """A category caption under the axis, truncated to the slot it has."""
     caption = str(caption)
@@ -1434,6 +1615,21 @@ class Scatter(Plot):
     KIND = "scatter"
     CHANNELS = ("x", "y", "color")
     WANTS_PLANE = True
+    #: Whether the least-squares line is drawn and reported. A sample of
+    #: measurements has a fit worth showing; something worked out from a formula
+    #: has no residuals, and a regression line through it is a claim about
+    #: scatter where there is none.
+    FIT = True
+    # See `Plot.become`.
+    connect = None
+
+    def __init__(self, frame, sensor, connect=None, **encoding):
+        super().__init__(frame, sensor, **encoding)
+        #: Join the points in order of this channel — `"x"`, `"y"`, or `None`
+        #: for a cloud. A line through measurements invents an order they do not
+        #: have; a line through a sampled function is what the function *is*,
+        #: and the points are only where it was looked at.
+        self.connect = connect if connect in ("x", "y") else None
 
     def paint(self, ctx, x, y, w, h):
         (xc, yc) = (self.enc["x"], self.enc["y"])
@@ -1467,11 +1663,17 @@ class Scatter(Plot):
                  axis.bottom + 18.0, TICK_FONT, INK)
 
         pairs = list(zip(xs, ys))
-        fit = least_squares(pairs)
+        fit = least_squares(pairs) if self.FIT else None
         if fit is not None:
             (a, b) = fit
             line(ctx, [(to_x(xlo), axis.to_y(a * xlo + b)),
                        (to_x(xhi), axis.to_y(a * xhi + b))], LINE, 1.6)
+        if self.connect and len(pairs) > 1:
+            # In order of whichever channel the points were sampled along, so a
+            # curve lying on its side joins up the way it was drawn.
+            ordered = sorted(pairs, key=(lambda p: p[0]) if self.connect == "x"
+                             else (lambda p: p[1]))
+            line(ctx, [(to_x(a), axis.to_y(b)) for (a, b) in ordered], LINE, 1.6)
 
         inks = self.point_inks(rows)
         for (k, i) in enumerate(rows):
@@ -1479,25 +1681,13 @@ class Scatter(Plot):
             dot(ctx, cx, cy, POINT_R, inks[k])
             self.record(ctx, i, cx, cy)
 
-        r = pearson(pairs)
         stats = ["n = %d" % len(rows)]
+        r = pearson(pairs) if self.FIT else None
         if r is not None:
             stats.append("r = %+.3f" % r)
         if fit is not None:
             stats.append("slope = %.3g" % fit[0])
         self.publish_stats(ctx, x, y, w, stats)
-
-    def point_inks(self, rows):
-        """One colour per drawn row: by the `color` column if there is one."""
-        column = self.enc.get("color")
-        if not column:
-            return [POINT] * len(rows)
-        levels = self.frame.levels(column)
-        palette = spread_palette(len(levels))
-        rank = {v: j for (j, v) in enumerate(levels)}
-        return [palette[rank[self.frame.value(column, i)]]
-                if self.frame.value(column, i) in rank else POINT
-                for i in rows]
 
 
 class Bars(Plot):
@@ -1536,6 +1726,19 @@ class Bars(Plot):
             # from another view still lands on it.
             for i in per_row[level]:
                 self.record(ctx, i, cx, top)
+
+    def rows_at(self, row):
+        """The whole category, because that is what a bar is.
+
+        Every row of it sits at the same point, so a click picks up an arbitrary
+        one of them; the bar was what was clicked, and the bar is these rows.
+        """
+        column = self.enc.get("x")
+        value = self.frame.value(column, row) if column else None
+        if value is None:
+            return super().rows_at(row)
+        return [i for i in range(self.frame.n)
+                if self.frame.value(column, i) == value]
 
 
 class Strip(Plot):
@@ -1716,6 +1919,22 @@ class Heatmap(Plot):
         if v is not None:
             stats.append("Cramér's V = %.3f" % v)
         self.publish_stats(ctx, x, y, w, stats)
+
+    def rows_at(self, row):
+        """The whole cell: every row crossing the same pair of levels.
+
+        A cell is a count, and the count is these rows — which is the only thing
+        a heatmap leaves you wanting, because the number in the square says how
+        many and nothing at all about which.
+        """
+        (xc, yc) = (self.enc.get("x"), self.enc.get("y"))
+        if not xc or not yc:
+            return super().rows_at(row)
+        (xv, yv) = (self.frame.value(xc, row), self.frame.value(yc, row))
+        if xv is None or yv is None:
+            return super().rows_at(row)
+        return [i for i in range(self.frame.n)
+                if self.frame.value(xc, i) == xv and self.frame.value(yc, i) == yv]
 
 
 # ======================================================================
@@ -2152,28 +2371,19 @@ class PlotChrome:
         card(ctx, left, top, cw, ch, lines, READOUT_FONT, INK, PANEL_EDGE)
 
     def draw_row(self, ctx, ws, x, y, w, h, row):
-        """The selected record, along the bottom: the readout, then the row.
+        """What was selected, along the bottom: the readout, then the records.
 
         The table is asked of the view rather than built here — the view is what
-        holds the source, and a second copy of the row would be a second thing
-        to keep in step.
+        holds the source, and a second copy of the records would be a second
+        thing to keep in step. So is how many rows the mark stood for: a click
+        on a bar picked up a category, and only the view knows that.
         """
-        label = ws.send_request(self.plot, PointLabel(row)) or ""
-        lines = ["Row %d" % row] + [s for s in label.split(", ") if s]
-        (cw, ch) = card_size(ctx, lines, READOUT_FONT)
-        width = min(w - 16.0, max(cw, ROW_CARD_W))
-        height = ch + ROW_TABLE_H
-        left = x + w - width - 8.0
-        top = y + h - height - 8.0
-        rect(ctx, left, top, width, height, PANEL, PANEL_EDGE, 5.0, 250)
-        step = READOUT_FONT + 4.0
-        for (k, s) in enumerate(lines):
-            text(ctx, s, left + 9.0, top + 6.0 + k * step, READOUT_FONT, INK,
-                 bold=(k == 0))
-        table = ws.send_request(self.plot, RowTable(row))
-        if table is not None:
-            ctx.draw_node(table, at(left + 6.0, top + len(lines) * step + 10.0,
-                                     width - 12.0, ROW_TABLE_H - 8.0))
+        rows = ws.send_request(self.plot, RowGroup(row)) or [row]
+        paint_selection(
+            ctx, x, y, w, h,
+            selection_lines(row, len(rows),
+                            ws.send_request(self.plot, PointLabel(row))),
+            ws.send_request(self.plot, RowTable(row)), len(rows))
 
 
 # ======================================================================
@@ -2460,6 +2670,17 @@ class Phylogeny(Plot):
             return "%s: %s" % (self.enc.get("x"), leaf[0])
         return "%s: %s" % (self.enc.get("x"), " › ".join(str(n) for n in leaf))
 
+    def rows_at(self, row):
+        """Every row ending on the same node of the tree.
+
+        A tree's mark is a *node*, and several records can end on one: the same
+        lineage written twice is one tip, not two, and the tip is both of them.
+        """
+        leaf = self.tree.row_leaf.get(row) if self.tree else None
+        if leaf is None or leaf not in self.tree.nodes:
+            return super().rows_at(row)
+        return list(self.tree.nodes[leaf]["rows"])
+
     def node_ink(self, key):
         """A node's colour: by the clade it falls in, if a colour column says so."""
         column = self.enc.get("color")
@@ -2533,7 +2754,13 @@ class Phylogeny(Plot):
                 for kid in kids:
                     line(ctx, [(bus, kid[1]), kid], BRANCH, BRANCH_W)
 
-        self.paint_nodes(ctx, place, horizontal=down)
+        # All the tips or none of them, as a crowded category axis is captioned —
+        # but on the *whole* name, because a tip's is written out in full and a
+        # trimmed one reads as a different tip rather than as a trimmed one.
+        slot = abs(s1 - s0) / span
+        names = [tree.nodes[leaf]["name"] for leaf in tree.leaves]
+        named = names_fit(ctx, names, slot) if down else captions_stack(ctx, slot)
+        self.paint_nodes(ctx, place, horizontal=down, named=named)
 
     # -- around a circle -------------------------------------------------
 
@@ -2575,13 +2802,21 @@ class Phylogeny(Plot):
                            (cx + kr * math.cos(a), cy + kr * math.sin(a))],
                      BRANCH, BRANCH_W)
 
-        self.paint_nodes(ctx, place, horizontal=False, angle=angle)
+        # Round the ring the tips fan out, so what they have between them is
+        # the arc from one spoke to the next at the outermost radius.
+        self.paint_nodes(ctx, place, horizontal=False, angle=angle,
+                         named=captions_stack(ctx, step * outer))
 
     # -- what both shapes share ------------------------------------------
 
-    def paint_nodes(self, ctx, place, horizontal, angle=None):
+    def paint_nodes(self, ctx, place, horizontal, angle=None, named=True):
         """A dot at every node, a caption on every leaf, and every row recorded
-        at the node its lineage ends on."""
+        at the node its lineage ends on.
+
+        `named` is off when the tips are too close together to write on: a wall
+        of overlapping names is not a denser reading of the tree, it is an
+        unreadable one, and the tip is still named by hovering it.
+        """
         tree = self.tree
         for key in tree.nodes:
             node = tree.nodes[key]
@@ -2590,13 +2825,14 @@ class Phylogeny(Plot):
             dot(ctx, px, py, tree.dot_radius(node["weight"]), ink)
             for row in node["rows"]:
                 self.record(ctx, row, px, py)
-            if node["children"]:
+            if node["children"] or not named:
                 continue
             caption = node["name"]
             (cw, ch) = measure(ctx, caption, TICK_FONT)
             if angle is None:
                 if horizontal:
-                    text(ctx, caption, px - cw / 2.0, py + DOT_MAX + 2.0, TICK_FONT, INK)
+                    text(ctx, caption, px - cw / 2.0, py + DOT_MAX + 2.0,
+                         TICK_FONT, INK)
                 else:
                     # Across the page, so the caption goes beside the dot where
                     # there is room for a long name rather than under it.
@@ -2918,17 +3154,6 @@ class Scatter3D(Plot):
                            (cx + seen[j][0] * scale, cy + seen[j][1] * scale)],
                      GRID, 1.0)
 
-    def point_inks(self, rows):
-        column = self.enc.get("color")
-        if not column:
-            return [POINT] * len(rows)
-        levels = self.frame.levels(column)
-        palette = spread_palette(len(levels))
-        rank = {v: j for (j, v) in enumerate(levels)}
-        return [palette[rank[self.frame.value(column, i)]]
-                if self.frame.value(column, i) in rank else POINT
-                for i in rows]
-
     def interact(self, ctx, x, y, w, h):
         """The shared picking, plus the drag that turns the cloud."""
         super().interact(ctx, x, y, w, h)
@@ -3123,6 +3348,25 @@ def as_number(value):
 # protocol, both of these work on it the day it is written.
 
 
+def view_of(ws, node):
+    """The view that answers the protocol at `node`, through a plane if need be.
+
+    A join is between *views* — things that can say where they drew each row and
+    what is in it. A plane (a `Canvas`) is not one; it carries one. And a plane
+    is exactly what a data explorer or a phylogeny hands back, so connecting two
+    of those means reaching through each to the single view on it. A node that
+    already answers the protocol is its own view, so this is a no-op for a bare
+    plot — which is what makes it safe to fold into every join below.
+    """
+    if ws.send_request(node, Encoding()) is not None:
+        return node
+    for item in (ws.send_request(node, dex.CanvasChildren()) or []):
+        child = ws.send_request(item, dex.CanvasNodeChild())
+        if child is not None and ws.send_request(child, Encoding()) is not None:
+            return child
+    return node
+
+
 def row_correspondence(ws, left, right):
     """`[(left_row, right_row)]` — the records the two views have in common.
 
@@ -3131,6 +3375,7 @@ def row_correspondence(ws, left, right):
     in its `Encoding`: two different tables, joined on a shared accession or
     name rather than on position, which position would get wrong.
     """
+    (left, right) = (view_of(ws, left), view_of(ws, right))
     left_enc = ws.send_request(left, Encoding()) or {}
     right_enc = ws.send_request(right, Encoding()) or {}
     (lk, rk) = (left_enc.get("key"), right_enc.get("key"))
@@ -3183,24 +3428,45 @@ class Correspondence:
         base = ctx.constraints
         w = base.x.provided_value() if base.x is not None else None
         h = base.y.provided_value() if base.y is not None else None
-        ws = ctx.node.workspace
-        here = ws.send_request(self.left, DrawnPoints()) or {}
-        there = ws.send_request(self.right, DrawnPoints()) or {}
-        if here and there:
-            pairs = row_correspondence(ws, self.left, self.right)
-            if self.only_selected:
-                chosen = ws.send_request(self.left, Selection())
-                pairs = [(a, b) for (a, b) in pairs if a == chosen]
-            for (a, b) in pairs:
-                (p, q) = (here.get(a), there.get(b))
-                if p is not None and q is not None:
-                    # Back into this node's own space: the answers are in screen
-                    # coordinates, and this node may itself be on a plane.
-                    line(ctx, [to_local(ctx, p), to_local(ctx, q)], self.ink, self.width)
+        draw_links(ctx, self.left, self.right, self.ink, self.width,
+                   self.only_selected)
         if w is None or h is None or not (math.isfinite(w) and math.isfinite(h)):
             return dex.DrawResult.Complete(region=None)
         return dex.DrawResult.Complete(
             region=dex.ScreenRegion.from_min_size(base.pos, dex.Vector.new(w, h)))
+
+
+def draw_links(ctx, left, right, ink=LINE, width=0.8, only_selected=False):
+    """Draw a line between the same record in two views, wherever each put it.
+
+    The whole of the join, and it is written against the protocol and nothing
+    else: ask both where they drew every row *this frame*, work out which rows
+    they have in common, and connect the pairs. Neither view is told the other
+    exists, which is why a scatter joins to a tree as readily as to another
+    scatter.
+
+    Both views must already have drawn this frame — the answers are a record of
+    where they put things, not a promise about where they will.
+    """
+    ws = ctx.node.workspace
+    # Through a plane to the view on it: what is wired in is often the plane a
+    # data explorer or a phylogeny handed back, and a plane cannot say where it
+    # drew a row. `row_correspondence` reaches through the same way.
+    (left, right) = (view_of(ws, left), view_of(ws, right))
+    here = ws.send_request(left, DrawnPoints()) or {}
+    there = ws.send_request(right, DrawnPoints()) or {}
+    if not here or not there:
+        return
+    pairs = row_correspondence(ws, left, right)
+    if only_selected:
+        chosen = ws.send_request(left, Selection())
+        pairs = [(a, b) for (a, b) in pairs if a == chosen]
+    for (a, b) in pairs:
+        (p, q) = (here.get(a), there.get(b))
+        if p is not None and q is not None:
+            # Back into the drawing node's own space: the answers are in screen
+            # coordinates, and that node may itself be on a plane.
+            line(ctx, [to_local(ctx, p), to_local(ctx, q)], ink, width)
 
 
 def to_local(ctx, point):
@@ -3227,6 +3493,7 @@ def joined_table(ws, left, right, suffix="_2"):
     import pyarrow as pa
 
     pairs = row_correspondence(ws, left, right)
+    (left, right) = (view_of(ws, left), view_of(ws, right))
     left_table = ws.send_request(left, SourceTable())
     right_table = ws.send_request(right, SourceTable())
     if left_table is None or right_table is None or not pairs:
@@ -3261,9 +3528,9 @@ def mirror_selection(ws, source, targets):
 # The data explorer
 # ======================================================================
 #
-# The one thing offered in the sidebar, as a lambda you wire a table into.
-# Deliberately thin: a bar of dropdowns, and the picture is whichever library
-# layout the data calls for.
+# Offered in the sidebar as a lambda you wire a table into. Deliberately thin:
+# a bar of dropdowns, and the picture is whichever library layout the data
+# calls for.
 #
 # The layout is chosen *from the data*, not picked off a list. One column and a
 # mode is all anybody wants to say; which of a scatter, a bar chart, a violin
@@ -3533,9 +3800,11 @@ def build_explorer(ws, source=None, mode=None, x=None, y=None):
 # What this workspace offers
 # ======================================================================
 #
-# A factory, not a node: the prelude is run again before every lambda, and only
-# a sidebar scan actually calls this. A node built here instead would seed a
-# fresh set of dropdowns, sensors and canvases on every run.
+# Two lambdas: one that makes a view of a table, and one that joins two views
+# together. Each is registered as a *factory*, not a node — the prelude is run
+# again before every lambda, and only a sidebar scan actually calls these. A
+# node built here instead would seed a fresh set of dropdowns, sensors and
+# canvases on every run.
 
 #: The script the offered lambda arrives holding. Short on purpose — everything
 #: it needs is already in scope, because the prelude it runs under is this file.
